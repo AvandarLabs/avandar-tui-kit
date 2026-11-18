@@ -14,6 +14,7 @@ crates/
 docs/
 ├── architecture.md     this file
 ├── decisions.md        one section per decision worth remembering
+├── inventory/          every extractable UI element in the source apps
 ├── rules/              how code is written here
 └── skills.md           how the agent skills are installed
 ```
@@ -33,8 +34,10 @@ one crate keeps each part's dependencies, tests, and documentation separate,
 and lets a generally useful part (mouse support for ratatui) carry a name that
 does not tie it to this toolkit.
 
-The crate map is not settled yet. It follows the inventory of UI elements in
-the source apps and is specified in the architecture spec.
+The crate map is not settled yet. It follows the
+[inventory](inventory/README.md) of UI elements in the source apps, which
+proposes a split along the heavy dependencies, and it will be fixed in the
+architecture spec.
 
 ## Shared settings
 
