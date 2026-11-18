@@ -23,8 +23,13 @@ never compiles the terminal-emulation or agent crates. See
 
 - Rust 1.88 or newer (the floor ratatui 0.30 sets).
 - [crossterm](https://crates.io/crates/crossterm) as the terminal backend.
-  ratatui also runs on termion and termwiz, but the toolkit reads crossterm's
-  input events and supports only crossterm for now.
+  It is the only backend the toolkit supports.
+
+## Supported terminals
+
+iTerm2 and xterm.js (the emulator inside Orca and VS Code) are first-class:
+every part is tested in both. Other terminals should work but are not tested.
+See [`docs/terminals.md`](docs/terminals.md).
 
 ## Developing
 

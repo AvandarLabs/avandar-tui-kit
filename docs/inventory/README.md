@@ -101,21 +101,9 @@ These are the reasons several elements need a redesign rather than a copy.
   lines so one implementation runs inline, full screen or inside a panel; the
   others render ratatui widgets. The input spec has to choose.
 
-## Proposed crate map
+## Crate map
 
-The working plan before the inventory had five building-block crates. The
-inventory adds whole families (pickers, trees, forms, dials, viewers, charts)
-that a single `widgets` crate would make heavy. The split below follows the
-heavy dependencies, so an app pays only for what it turns on. **Not yet
-decided**: it is open question 1.
-
-| Crate | Categories | Heavy dependencies |
-| --- | --- | --- |
-| `ratatui-mouse` | `mouse` | vt100, behind a feature |
-| `avandar-tui-term` | `term` | none |
-| `avandar-tui-pty` | `pty` | portable-pty, vt100, tui-term |
-| `avandar-tui-agent` | `agent` | the `pty` crate, behind a feature |
-| `avandar-tui-widgets` | `style`, `layout`, `cmd`, `pick`, `input` | nucleo behind `fuzzy`, tui-tree-widget behind `tree`, clap behind `clap` |
-| `avandar-tui-view` | `view` | pulldown-cmark behind `markdown` |
-| `avandar-tui-charts` | `chart` | none |
-| `avandar-tui-tasks` | `task` | tokio behind a feature |
+The inventory adds whole families (pickers, trees, forms, dials, viewers,
+charts) that a single `widgets` crate would make heavy, so the crate map was
+split along the heavy dependencies. The decided map is in
+[`../architecture.md`](../architecture.md).

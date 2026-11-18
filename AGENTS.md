@@ -12,7 +12,12 @@
   [`docs/architecture.md`](docs/architecture.md) before adding a crate or a
   module.
 - The toolkit is parts an app calls, never a framework: no crate owns the
-  event loop or the app's state. **crossterm** is the only supported backend.
+  event loop or the app's state.
+- **crossterm** is the only supported backend. **iTerm2** and **xterm.js**
+  (the emulator inside Orca and VS Code) are the two first-class target
+  terminals, equally. Any change that writes to or reads from the terminal is
+  tested in both before it lands: see [`docs/terminals.md`](docs/terminals.md).
+  Never rely on a capability one of them lacks for a default behavior.
 - Shared settings (version, edition, minimum Rust version, license, lints,
   dependency versions) live once in the root `Cargo.toml` and every crate
   inherits them with `.workspace = true`.

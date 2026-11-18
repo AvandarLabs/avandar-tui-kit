@@ -93,3 +93,74 @@ rather than just's own interpolation, so the file stays readable as shell.
 
 **Revisit when.** A task needs logic rather than a command line. That is the
 moment `cargo xtask` starts paying for itself.
+
+## crossterm is the only backend
+
+**Decision.** The toolkit supports crossterm and no other ratatui backend.
+Public APIs take crossterm's event types directly, with no abstraction over
+backends.
+
+**Why.** A backend is the library an app uses to switch on raw mode, read
+input and write output. It does not decide which terminals an app works in:
+every backend writes the same escape sequences to every terminal. crossterm
+is ratatui's default, runs on macOS, Linux and Windows, and is what every
+source app uses. termion (Unix only), termwiz and termina would add an
+abstraction layer and a test matrix without making any terminal work better.
+
+**Consequences.** No backend feature flags and no wrapper event types. An app
+built on another backend cannot use the input-handling crates.
+
+**Revisit when.** Never on speculation. Only if an app the toolkit must serve
+is committed to another backend.
+
+## iTerm2 and xterm.js are the first-class target terminals
+
+**Decision.** Two terminals are first-class: iTerm2, and xterm.js (the
+emulator inside Orca and VS Code). Both are tested thoroughly in this
+repository, and neither is a fallback for the other. Other terminals are best
+effort and untested. See `docs/terminals.md`.
+
+**Why.** These are the terminals the toolkit's apps run in. Orca runs on
+xterm.js, and working there is the top priority. iTerm2 has quirks that have
+already broken the source apps (a mouse-mode reset switching reporting off
+entirely), so it needs tests of its own rather than an assumption that "xterm
+compatible" covers it.
+
+**Consequences.** Every crate that touches terminal I/O is tested at four
+layers: exact escape sequences in `cargo test`, a headless xterm.js harness in
+CI, scripted iTerm2 sessions on macOS, and a manual checklist per release.
+Defaults never rely on a capability one of the two lacks: key bindings work
+without the kitty keyboard protocol, and copying works without OSC 52. The
+repository gains a small Node harness for xterm.js and a Python script for
+iTerm2, as test tooling only; no published crate depends on either.
+
+**Revisit when.** The apps this toolkit serves move to another terminal, or one of these two
+stops being used.
+
+## Eight building-block crates, split along heavy dependencies
+
+**Decision.** The umbrella crate re-exports eight building blocks:
+`ratatui-mouse`, `avandar-tui-term`, `avandar-tui-pty`, `avandar-tui-agent`,
+`avandar-tui-widgets`, `avandar-tui-view`, `avandar-tui-charts` and
+`avandar-tui-tasks`. The table in `docs/architecture.md` says what each owns.
+
+**Why.** The inventory found about 175 extractable elements, roughly twice
+the scope of the first plan. The split follows the dependencies that are
+costly to compile or ship (a terminal emulator, a pseudo-terminal library, a
+markdown parser, a fuzzy matcher, a tree widget, an async runtime), so an app
+pays only for what it turns on. Widgets that need nothing beyond ratatui stay
+together in one crate, with the heavier ones behind features.
+
+**Consequences.** A crate is created when its spec is written, not ahead of
+it. `ratatui-mouse` keeps a generic name because it is useful to any ratatui
+app.
+
+## Mouse pass-through follows terminal conventions
+
+**Decision.** In an embedded terminal pane, mouse events go to the program
+inside in the format it asked for. Holding Shift selects text instead of
+passing the event on. When a full-screen program did not ask for mouse input,
+the wheel sends it arrow keys.
+
+**Why.** That is what iTerm2 and xterm.js themselves do, so a pane behaves
+like the terminal people already know.

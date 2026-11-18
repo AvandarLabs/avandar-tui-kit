@@ -15,6 +15,7 @@ docs/
 ├── architecture.md     this file
 ├── decisions.md        one section per decision worth remembering
 ├── inventory/          every extractable UI element in the source apps
+├── terminals.md        the first-class target terminals and how they are tested
 ├── rules/              how code is written here
 └── skills.md           how the agent skills are installed
 ```
@@ -34,10 +35,21 @@ one crate keeps each part's dependencies, tests, and documentation separate,
 and lets a generally useful part (mouse support for ratatui) carry a name that
 does not tie it to this toolkit.
 
-The crate map is not settled yet. It follows the
-[inventory](inventory/README.md) of UI elements in the source apps, which
-proposes a split along the heavy dependencies, and it will be fixed in the
-architecture spec.
+The crate map follows the [inventory](inventory/README.md) of UI elements in
+the source apps and splits along the heavy dependencies:
+
+| Crate | Owns | Heavy dependencies |
+| --- | --- | --- |
+| `ratatui-mouse` | Mouse modes, hit-testing, clicks, selection, wheel routing, pass-through | vt100, behind a feature |
+| `avandar-tui-term` | Borrowing the terminal and giving it back, keyboard flags, clipboard | none |
+| `avandar-tui-pty` | Embedded terminal panes, key encoding, child supervision | portable-pty, vt100, tui-term |
+| `avandar-tui-agent` | Coding-agent frontends: launch, resume, typing and submitting prompts | the `pty` crate, behind a feature |
+| `avandar-tui-widgets` | Style, layout, command palette and shortcuts, pickers, input and forms | nucleo behind `fuzzy`, tui-tree-widget behind `tree`, clap behind `clap` |
+| `avandar-tui-view` | Read-only viewers: markdown, documents with a cursor, logs | pulldown-cmark behind `markdown` |
+| `avandar-tui-charts` | Text charts and tables | none |
+| `avandar-tui-tasks` | Background work a UI needs | tokio behind a feature |
+
+The crates are created as their specs are written, not ahead of them.
 
 ## Shared settings
 
@@ -54,12 +66,18 @@ it needs. Two crates disagreeing on a ratatui version would make an app
 compile two copies and fail to pass types between them, which is why versions
 are never written in a member crate.
 
-## Backend
+## Backend and target terminals
 
-crossterm is the only supported backend for now. ratatui can also draw through
-termion or termwiz, but every source app uses crossterm and the input-handling
-parts read crossterm's event types. Supporting another backend later means
-putting input types behind a feature, not rewriting the parts.
+crossterm is the only supported backend. ratatui can also draw through
+termion, termwiz or termina, but a backend is only the library that talks to
+the terminal: it decides nothing about which terminals an app works in. Public
+APIs use crossterm's event types directly, with no abstraction over backends.
+
+What an app works in is decided by which escape-sequence features each
+terminal implements. Two terminals are first-class targets: **iTerm2** and
+**xterm.js** (the emulator inside Orca and VS Code). Every crate that writes
+to or reads from the terminal is tested in both. See
+[`terminals.md`](terminals.md).
 
 ## Dependencies
 
