@@ -1,0 +1,25 @@
+[package]
+name = "avandar-tui-kit"
+description = "Reusable building blocks for terminal apps built with ratatui."
+readme = "../../README.md"
+keywords = ["ratatui", "tui", "terminal", "widgets"]
+categories = ["command-line-interface"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+# The umbrella crate. It owns no code of its own: each building block lives in
+# its own crate under crates/ and is re-exported here behind a feature of the
+# same name, so an app compiles only the parts it turns on. No feature is on
+# by default.
+[features]
+default = []
+
+[dependencies]
+
+[lints]
+workspace = true

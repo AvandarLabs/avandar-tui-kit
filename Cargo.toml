@@ -1,58 +1,40 @@
-[package]
-name = "avandar-tui-kit"
+# The avandar-tui-kit workspace: one repository, several crates, and one
+# umbrella crate that re-exports them behind features. See
+# docs/architecture.md for the crate map and why it is split this way.
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+# Every crate inherits these with `<key>.workspace = true`, so a release bumps
+# one version and every crate states the same edition, license and floor.
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
-description = "avandar-tui-kit: a command-line tool."
+# The floor ratatui 0.30 sets. Raising it is a decision: see
+# docs/decisions.md.
+rust-version = "1.88"
 license = "MIT"
+repository = "https://github.com/AvandarLabs/avandar-tui-kit"
+homepage = "https://github.com/AvandarLabs/avandar-tui-kit"
+authors = ["Avandar Labs, Inc."]
 
-# The library half holds everything worth testing; the binary is a thin shell
-# around it. Its name is fixed (the package name is not a valid identifier when
-# it is hyphenated), so tests and the binary both say `use app::...`.
-[lib]
-name = "app"
-path = "src/lib.rs"
-
-[[bin]]
-name = "avandar-tui-kit"
-path = "src/main.rs"
-
-[dependencies]
-# Error context a human can read: every failure carries the `.context(...)` of
-# what the tool was trying to do.
-anyhow = "1"
-# The command-line surface. `derive` keeps the flags next to the types they
-# fill; `env` lets any flag also come from the environment.
-clap = { version = "4", features = ["derive", "env"] }
-# The configuration struct is (de)serialized rather than parsed by hand, so a
-# new setting is one more field. `derive` is the whole reason it is here.
-serde = { version = "1", features = ["derive"] }
-# The configuration file format: a config a person edits by hand should look
-# like one. `preserve_order` keeps a table in the order it was read instead of
-# sorting it, so rewriting the file does not reshuffle what the user wrote.
-toml = { version = "1", features = ["preserve_order"] }
-# Terminal control: raw mode, the alternate screen, and the key events the
-# keymap classifies. Pinned to the version ratatui builds against, so the
-# `KeyEvent` this crate matches on is the one ratatui hands it.
+# One version of each shared dependency for the whole workspace. A crate opts
+# in with `<name>.workspace = true` and adds only the features it needs, so an
+# app never compiles two copies of ratatui because two of our crates disagreed.
+[workspace.dependencies]
+# The rendering library every crate here builds on.
+ratatui = { version = "0.30", default-features = false }
+# The only terminal backend the toolkit supports for now: every source app
+# reads crossterm's event types. Pinned to the version ratatui 0.30 builds
+# against, so a `KeyEvent` from one is a `KeyEvent` to the other.
 crossterm = "0.29"
-# The terminal UI. Immediate-mode rendering keeps drawing a pure function of
-# the state it is handed, which is why `tui/render.rs` decides nothing.
-ratatui = "0.30"
 
-[lints.rust]
+[workspace.lints.rust]
 unsafe_code = "forbid"
+missing_docs = "warn"
 
-[lints.clippy]
+[workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
-# Help and about strings would render literal backticks in a terminal.
+# Doc comments name types and crates in prose; backticking every one is noise.
 doc_markdown = "allow"
-# A tool binary, not a published library surface: the error and panic sections
-# would be ceremony no reader asked for.
-missing_errors_doc = "allow"
-missing_panics_doc = "allow"
-
-[profile.release]
-lto = "thin"
-codegen-units = 1
-strip = true

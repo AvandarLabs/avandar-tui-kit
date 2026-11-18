@@ -2,19 +2,23 @@
 
 ## Stack
 
-- This project is a command-line tool written in Rust (edition 2024) and built
-  with cargo. There is no web server and no browser: the interface is the
-  terminal.
-- The command-line surface is **clap** (derive), the settings are a **serde**
-  struct stored as **TOML**, and failures travel as **anyhow** errors carrying
-  the context that produced them.
-- `src/main.rs` is deliberately thin. It parses arguments and hands them to the
-  library in `src/`, so every decision is reachable from a test without
-  spawning a process. Read [`docs/architecture.md`](docs/architecture.md)
-  before adding a module.
-- Every action is reachable with flags alone. A value left out on a terminal is
-  asked for through `src/prompt.rs`, never demanded through a prompt an agent
-  cannot answer.
+- This project is a public, MIT-licensed toolkit of library crates for
+  terminal apps built with **ratatui**, written in Rust (edition 2024) and
+  organized as a cargo workspace. There is no binary, no web server and no
+  browser.
+- Each building block is its own crate under `crates/`. The
+  `avandar-tui-kit` umbrella crate re-exports them behind cargo features, so
+  an app compiles only what it turns on. Read
+  [`docs/architecture.md`](docs/architecture.md) before adding a crate or a
+  module.
+- The toolkit is parts an app calls, never a framework: no crate owns the
+  event loop or the app's state. **crossterm** is the only supported backend.
+- Shared settings (version, edition, minimum Rust version, license, lints,
+  dependency versions) live once in the root `Cargo.toml` and every crate
+  inherits them with `.workspace = true`.
+- **This repository is public.** Never commit local file paths, personal
+  data, or private notes. Refer to the apps the toolkit is extracted from by
+  GitHub repository and repo-relative path.
 - Tasks live in the `justfile` (`just --list`). Every recipe is a single
   command you could type by hand, so `just` is a convenience and never a
   dependency.
@@ -89,25 +93,23 @@ A Rust toolchain is the only prerequisite ([rustup.rs](https://rustup.rs)).
 also type by hand.
 
 ```sh
-# run it (with no subcommand it prints its help)
-cargo run -- --help
-cargo run -- greet --name Ada                 # just run greet --name Ada
-cargo run -- config show                      # just run config show
+# the full test suite, every crate, every feature
+cargo test --workspace --all-features                              # just test
 
-# the full test suite: the inline unit tests plus tests/
-cargo test                                    # just test
+# one crate only
+cargo test -p avandar-tui-kit
 
 # lint clean (clippy pedantic + nursery are on, warnings are errors)
-cargo clippy --all-targets -- -D warnings     # just lint
+cargo clippy --workspace --all-targets --all-features -- -D warnings  # just lint
 
 # format
-cargo fmt                                     # just fmt
+cargo fmt --all                                                    # just fmt
+
+# API docs, failing on broken links
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps  # just doc
 
 # everything that has to pass before a change lands
 just check
-
-# install the binary at $BIN_DIR/<name> (default ~/.local/bin)
-./install.sh                                  # just install
 ```
 
 ## General Code Style & Formatting
@@ -151,16 +153,10 @@ The rules for this project's language and frameworks live in `docs/rules/`:
 
 - [`docs/rules/rust.md`](docs/rules/rust.md): how Rust is written here. No
   `unsafe`, clippy clean with pedantic and nursery on, decisions in pure
-  functions, one module per file.
-- [`docs/rules/cli-ux.md`](docs/rules/cli-ux.md): how the tool talks, whatever
-  it is written in. Stdout is data and stderr is the conversation, every action
-  is scriptable, every value a person omits is asked for, every color is
-  semantic.
-- [`docs/rules/cli-rust.md`](docs/rules/cli-rust.md): where those rules live in
-  this Rust code: `src/prompt.rs` for questions, `src/theme.rs` for color.
-- [`docs/rules/tui.md`](docs/rules/tui.md): how the terminal UI is built. The
-  command palette is the parent set of every command, rendering is a pure
-  function of the state, and the terminal is restored even on a panic.
+  functions, one module per file, typed errors in library APIs.
+- [`docs/rules/tui.md`](docs/rules/tui.md): what every toolkit crate promises
+  the apps that use it. Parts, not a framework; drawing is a pure function of
+  state; the terminal is always given back; color is semantic.
 
 ## Agent skills
 

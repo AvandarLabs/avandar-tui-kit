@@ -4,104 +4,92 @@ One section per decision worth remembering: what was chosen, what it rules
 out, and what would make it worth revisiting. Add to the bottom; do not rewrite
 history.
 
-## The dependency set stays at four crates
+## The repository is a workspace of crates behind one umbrella
 
-**Decision.** The project starts with `anyhow`, `clap`, `serde` and `toml`, and
-nothing else.
+**Decision.** avandar-tui-kit is a cargo workspace. Each building block is its
+own crate under `crates/`, and the `avandar-tui-kit` crate re-exports them
+behind features, with none on by default.
 
-**Why.** Each of the four answers a question this tool cannot avoid: how errors
-travel, how arguments are declared, how the settings become a struct, and what
-the settings file looks like on disk. Everything else a starter usually reaches
-for (a logging framework, an async runtime, an HTTP client, a color crate, a
-crate that finds the config directory) answers a question this tool has not
-been asked yet. A dependency is cheap to add later and expensive to remove, so
-the default answer is no until a real need names it.
+**Why.** The apps the toolkit serves need very different subsets. A
+menu-driven app with no embedded terminal must not compile a terminal emulator
+or the agent layer, and a crate boundary enforces that better than feature
+gates inside one crate: each part's dependencies, tests and docs stay its own.
+The umbrella keeps the common case to one dependency line.
 
-**Consequences.** Color is our own nine semantic tokens in `src/theme.rs`
-rather than a color crate, progress lines are `eprintln!` rather than a logger,
-the prompts are a few lines of `read_line` in `src/prompt.rs` rather than a
-prompting library, and the configuration directory is resolved from
-`XDG_CONFIG_HOME` and `HOME` in `src/config.rs` rather than by a crate that
-knows every platform's conventions. That last one is the trade most likely to
-be revisited: a tool that has to feel native on Windows wants `directories`.
+**Consequences.** Shared settings (version, edition, minimum Rust version,
+lints, dependency versions) live once in the root `Cargo.toml`. Releases
+publish several crates in dependency order. The name `avandar-tui` stays
+unused: it reads as a terminal app for the Avandar product.
 
-**Revisit when.** A need arrives that the standard library and these four
-cannot meet without an awkward hand-rolled substitute. Add the crate, say in
-`docs/architecture.md` what it is for, and record the trade here.
+**Revisit when.** Two crates are always used together and their separation
+costs more than it saves.
 
-## The settings are one typed struct in one TOML file
+## The toolkit started from quickstarter, and the app scaffold was removed
 
-**Decision.** Everything the tool remembers is one `serde` struct (`Config` in
-`src/config.rs`), serialized as TOML to
-`$XDG_CONFIG_HOME/<package>/config.toml` (or `~/.config/<package>/config.toml`),
-and `--config <PATH>` points at a different file.
+**Decision.** The repository was generated with quickstarter's `rust:cli`
+template plus its `rust-tui` capability, for the agent rules, the
+`docs/rules/` files and the agent skills setup. The single command-line app it
+generated (clap commands, a TOML config, prompts, a theme and a small TUI) was
+then removed.
 
-**Why.** A typed struct with `#[serde(default)]` makes a partial file valid, a
-missing file mean "nothing configured yet", and a new setting one more field.
-`deny_unknown_fields` turns a typo in a hand-edited file into an error that
-names the settings that do exist, which is worth more than tolerating a line
-that silently does nothing. TOML is the format the reader already meets in
-`Cargo.toml`, and it survives hand editing better than JSON, which has no
-comments and objects to a trailing comma. The XDG location is where other
-command-line tools keep their settings, and `--config` exists so a test, a
-script, or a second profile never has to touch the real file.
+**Why.** The toolkit is a set of library crates, not an app. The scaffold's
+TUI modules are still a source for the inventory, and they remain readable in
+quickstarter's `templates/capabilities/rust-tui/` and in this repository's
+first commit.
 
-**Consequences.** Saving rewrites the file from the struct, so comments a
-person wrote in it are lost: `config set` says so under `--verbose`. Settings
-are flat, one level deep, which is all this shape supports without nesting
-tables. `toml`'s `preserve_order` keeps a table in the order it was read rather
-than sorting it, so a file this tool rewrites keeps the shape its author
-recognizes.
+**Consequences.** The command-line rules (`docs/rules/cli-ux.md` and
+`docs/rules/cli-rust.md`) went with the app. `docs/rules/tui.md` now states
+what every crate promises an app instead of how one app is built.
 
-**Revisit when.** The settings grow a nested section, a profile per
-environment, or a value that must not be written in plain text. The first two
-are more TOML; the third is a different mechanism entirely.
+## Library APIs return typed errors
 
-## Asking for a missing value happens in exactly one module
+**Decision.** Public functions return an error type the caller can match on,
+not `anyhow::Error`. Every fallible public function documents `# Errors`.
 
-**Decision.** `src/prompt.rs` owns every question: whether there is anybody to
-ask, how the question is drawn, what a typed answer means, and what the failure
-says when stdin is not a terminal. Commands describe the value they are missing
-and call `prompt::ask`.
+**Why.** An app that gets an `anyhow::Error` back can only tell failures apart
+by their message. The scaffold allowed `missing_errors_doc` and
+`missing_panics_doc` because it was a binary; a published library owes its
+callers those sections, so the allowances were dropped.
 
-**Why.** The two-audiences rule in `docs/rules/cli-ux.md` (an agent drives
-everything with flags, a person who omits a value is asked rather than
-rejected) is easy to state and easy to break one command at a time. Keeping it
-in one module means a new command inherits the behavior instead of
-reimplementing it, and the tricky parts (an empty answer taking the default, a
-choice picked by number, the message that names the flag) are pure functions
-with tests rather than something only reachable by typing at a terminal.
+**Revisit when.** Never for public APIs. Tests and examples may use `anyhow`.
 
-**Consequences.** A question is data (`Question`), so a command cannot ask
-without also naming the flag that would have answered, which is what keeps the
-non-interactive path honest. The terminal half stays untested on purpose: it
-reads a line and writes a line, and everything it decides lives next to it in a
-pure function.
+## The minimum Rust version is the one ratatui sets
 
-**Revisit when.** The tool needs a question this shape cannot express: a
-password with no echo, a multi-select, or a full-screen picker. That is the
-moment to weigh a prompting crate against the four dependencies above.
+**Decision.** `rust-version` is 1.88, the floor ratatui 0.30 requires.
+
+**Why.** The scaffold declared 1.85, which ratatui 0.30.2 already rejects. No
+crate here needs anything newer yet, and a lower floor serves more apps.
+
+**Revisit when.** A crate needs a newer language or library feature, or the
+apps that consume the toolkit settle on a newer toolchain. Raising it is a
+breaking change for anyone on an older compiler, so it waits for a release
+that is breaking anyway.
+
+## `Cargo.lock` is committed
+
+**Decision.** The lockfile is tracked in git.
+
+**Why.** It makes every contributor and every CI run build the same
+dependency graph, which is cargo's current recommendation for libraries too.
+Apps that depend on these crates ignore it and resolve their own.
 
 ## `just` is the task runner, and it is optional
 
 **Decision.** Tasks live in a `justfile`, and every recipe is a single command
 a person could also type by hand.
 
-**Why.** Cargo has no place to hang project tasks (install, lint with the flags
-we mean, update the agent skills), so a Rust project either invents a script
-directory, a `cargo xtask` crate, or uses a task runner. `just` is itself a
-Rust tool (`cargo install just`), a recipe costs one line, and `just --list`
-makes the tasks discoverable the way a `package.json` scripts block is. A
-`cargo xtask` crate earns its keep when a task needs real Rust code (codegen,
-packaging, a release pipeline); a whole crate that shells out to `cargo clippy`
-does not. A `Makefile` needs nothing installed, but its tab rules are a trap
-for a one-line recipe and it is not what a Rust project reaches for.
+**Why.** Cargo has no place to hang project tasks (lint with the flags we
+mean, build the docs strictly, update the agent skills), so a Rust project
+either invents a script directory, a `cargo xtask` crate, or uses a task
+runner. `just` is itself a Rust tool (`cargo install just`), a recipe costs one
+line, and `just --list` makes the tasks discoverable. A `cargo xtask` crate
+earns its keep when a task needs real Rust code (codegen, packaging, a release
+pipeline); a whole crate that shells out to `cargo clippy` does not.
 
 **Consequences.** Nobody is blocked by not having `just`: `just lint` is
-`cargo clippy --all-targets -- -D warnings` and `just install` is
-`./install.sh`. Recipes take their arguments through
-`set positional-arguments` and `"$@"` rather than just's own interpolation, so
-the file stays readable as shell.
+`cargo clippy --workspace --all-targets --all-features -- -D warnings`.
+Recipes take their arguments through `set positional-arguments` and `"$@"`
+rather than just's own interpolation, so the file stays readable as shell.
 
 **Revisit when.** A task needs logic rather than a command line. That is the
 moment `cargo xtask` starts paying for itself.

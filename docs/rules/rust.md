@@ -1,7 +1,7 @@
 # Rust rules
 
 How Rust is written in this repository. The lint configuration in
-`Cargo.toml` enforces the first two mechanically; the rest is on you and on
+the root `Cargo.toml` enforces the first two mechanically; the rest is on you and on
 review.
 
 ## No `unsafe`
@@ -12,12 +12,14 @@ design. Raise it before reaching for the escape hatch.
 
 ## Keep clippy clean
 
-`pedantic` and `nursery` are on at `warn`, and `just lint`
-(`cargo clippy --all-targets -- -D warnings`) turns every warning into a
-failure. Do not land new warnings, and do not silence one with a bare
-`#[allow(...)]`. When a lint is genuinely wrong for this codebase, allow it in
-`Cargo.toml` with a comment saying why, so the exception is visible in one
-place instead of scattered through the source.
+`pedantic` and `nursery` are on at `warn` in `[workspace.lints]`, every crate
+opts in with `[lints] workspace = true`, and `just lint`
+(`cargo clippy --workspace --all-targets --all-features -- -D warnings`) turns
+every warning into a failure. Do not land new warnings, and do not silence one
+with a bare `#[allow(...)]`. When a lint is genuinely wrong for this codebase,
+allow it in `[workspace.lints]` in the root `Cargo.toml` with a comment saying
+why, so the exception is visible in one place instead of scattered through the
+source.
 
 ## Split the pure from the impure
 
@@ -31,12 +33,16 @@ matters, that `if` belongs in a pure function next to it.
 Write tests red first: a failing test that names the behavior, then the
 smallest code that turns it green, then the cleanup with the bar green.
 
-## Errors carry context
+## Errors are typed in libraries
 
-Return `anyhow::Result` from anything a person can trigger, and attach
-`.context("what was being attempted")` at every layer that knows something the
-message would otherwise lose. The binary prints the whole chain, so each
-context line is one step of the story: what failed, while doing what.
+Every crate here is a library, so a fallible public function returns a
+concrete error type the caller can match on: an enum per crate, or per module
+when a crate has unrelated failure families, with a `Display` that reads as one
+sentence and a `source()` that keeps the cause. Do not return `anyhow::Error`
+from a public API: it forces the app to string-match to tell failures apart.
+Examples and tests may use `anyhow` freely. Document every fallible public
+function with an `# Errors` section and every function that can panic with a
+`# Panics` section.
 
 ## One module per file, and keep files small
 
@@ -60,11 +66,14 @@ every exported item with `///`.
 
 ## Do not add dependencies casually
 
-The dependency set is small on purpose, and every crate in it is one more
-thing to audit, update, and explain. Before adding one, check whether the
-standard library or a crate already present does the job. When it is genuinely
-worth it, add it with a comment in `Cargo.toml` saying what it is for, and
-justify it in `docs/architecture.md`.
+Every dependency a crate takes is one an app compiles and audits, and the
+toolkit promises that an app pays only for what it turns on. Before adding
+one, check whether the standard library, ratatui, crossterm, or a crate
+already in the workspace does the job. When it is worth it, declare its
+version once in `[workspace.dependencies]` with a comment saying what it is
+for, take it in the crate with `.workspace = true`, and put it behind a cargo
+feature when only part of the crate needs it. Record it in the crate's section
+of `docs/architecture.md`.
 
 ## `docs/` is the durable record
 
@@ -73,9 +82,11 @@ why. Update the affected document in the same change that changes behavior.
 Design rationale belongs in `docs/decisions.md`: one section per decision, what
 was chosen, what it rules out, and what would make it worth revisiting.
 
-## Bump the crate version for every committed change
+## Versions move with releases
 
-`Cargo.toml` is the single source of the version and `Cargo.lock` moves with
-it. Before 1.0, a user-visible addition bumps the minor version and a fix or an
-internal change bumps the patch version. Pick the bump yourself rather than
-asking.
+The version lives once, in `[workspace.package]` in the root `Cargo.toml`, and
+every crate inherits it. Ordinary changes do not bump it: a release does, with
+the bump chosen by the semver rules below. Before
+1.0, a breaking change to a public API bumps the minor version and anything
+else bumps the patch version. `Cargo.lock` is committed so every contributor
+and CI run builds the same dependency graph.
