@@ -15,6 +15,7 @@ docs/
 ├── architecture.md     this file
 ├── decisions.md        one section per decision worth remembering
 ├── inventory/          every extractable UI element in the source apps
+├── milestones.md       the order the crates are built in, and what ends each
 ├── specs/              the designs the crates are built from
 ├── terminals.md        the first-class terminals and platforms, and what each does
 ├── testing.md          the test layers, where each runs, and the rules for them
