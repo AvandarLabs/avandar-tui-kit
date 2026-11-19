@@ -19,8 +19,8 @@ An app talks to whatever is directly in front of it. Without tmux, that is the
 terminal. With tmux, it is tmux: tmux is a terminal emulator of its own, which
 then redraws onto the real terminal. So tmux inside iTerm2 and tmux inside
 xterm.js behave mostly alike for the app, and differ only in the features
-tmux hands through to the outer terminal (the clipboard is the main one). Both
-are tested anyway.
+tmux hands through to the outer terminal (colors and the clipboard). Both are
+tested anyway.
 
 | Configuration | macOS | Linux | Windows |
 | --- | --- | --- | --- |
@@ -29,8 +29,8 @@ are tested anyway.
 | tmux in iTerm2 | Yes | | |
 | tmux in xterm.js | Yes | Yes | tmux does not run natively on Windows. Under WSL the app is a Linux build, which the Linux column covers. |
 
-xterm.js tests are pinned to the version Orca ships. Orca 1.4.258 bundles
-xterm.js 6.0.0.
+On Windows, Windows Terminal is best effort, like every terminal not named
+here.
 
 ## What first-class means
 
@@ -40,8 +40,8 @@ xterm.js 6.0.0.
   tmux is not forwarding the mouse) and the crate's docs say what the user
   sees.
 - **No crate is done until it is tested in all of them.** A crate that writes
-  to or reads from the terminal carries tests for each configuration, at the
-  layers below, on all three platforms.
+  to or reads from the terminal carries tests for each configuration, on all
+  three platforms. [`testing.md`](testing.md) says how.
 - **A regression in any of them blocks a release.**
 - **Defaults never depend on an optional capability.** Key bindings work
   without the kitty keyboard protocol, copying works without OSC 52, and every
@@ -55,25 +55,69 @@ Other terminals (Terminal.app, Windows Terminal, kitty, WezTerm, Ghostty,
 Alacritty) are best effort: nothing is done to break them, and nothing is
 tested in them.
 
-## What each one is known to do
+## What each one does
 
-"Verify" means the toolkit must confirm the behavior with the capability
-probe before relying on it.
+Measured on 2026-11-18 by running a probe program and injecting real mouse
+and key events, in these versions:
+
+- **iTerm2 3.7.7** on macOS 15.7, with its default settings.
+- **xterm.js 6.0.0**, the version Orca 1.4.258 ships: in a live Orca terminal,
+  and on its own in a headless browser.
+- **tmux 3.8**, inside each of the two, with tmux's stock configuration and
+  with a full one (below).
+
+"Verify" marks what has not been measured yet. Each entry becomes a test when
+the part that depends on it is built, so this table cannot drift from the
+code.
+
+### Rules that hold everywhere
+
+These held in iTerm2, xterm.js and tmux alike, so the toolkit treats them as
+rules, not as quirks of one terminal.
+
+- **Mouse reporting is one slot, not three switches.** Modes 1000, 1002 and
+  1003 are one setting with three values: turning one on replaces the others,
+  and turning any of them off, even one that was never on, **switches mouse
+  reporting off entirely**. So the toolkit turns on exactly the modes it
+  wants, in order, and never resets a mouse mode until teardown.
+- **crossterm's `EnableMouseCapture` is the wrong sequence.** It ends by
+  turning on mode 1003, so hover reporting becomes the active setting and
+  every pointer move floods the app. The toolkit writes its own sequence
+  (1000, 1002, 1006) and never calls it.
+- **Asking whether mode 1000 is on is not asking whether the mouse is on.**
+  After the toolkit's sequence, the terminal reports 1002 as set and 1000 as
+  reset. A check has to look at all of them.
+- **The kitty keyboard protocol cannot be assumed.** Both terminals have it,
+  tmux does not offer it. Shift+Enter and Ctrl+Enter arrive as plain Enter
+  without it.
+- **The background color can be asked for.** Both terminals answer the color
+  query, and tmux passes it through, so a theme can tell light from dark. It
+  has to: a fresh iTerm2 has a light background.
 
 ### Terminals
 
-| Capability | iTerm2 | xterm.js |
+| Capability | iTerm2 3.7.7 | xterm.js 6.0.0 |
 | --- | --- | --- |
+| Identifies itself | `iTerm2 3.7.7` | `xterm.js(6.0.0)`; Orca also sets `TERM_PROGRAM=Orca` |
 | Mouse modes 1000, 1002, 1006 | Yes | Yes |
-| Resetting a mouse mode mid-session | **Turns reporting off entirely**: 1000, 1002 and 1003 share one slot | Verify |
-| Hover reporting (mode 1003) | Breaks Cmd-hover and Cmd-click on links, so it is never turned on | Never turned on, for parity |
-| Native selection while the app has the mouse | Option-drag | Depends on the embedding app; verify in Orca |
-| Option or Alt key | Sends glyphs such as `¡` or `£` unless set to send Escape, so chord decoders accept both | Depends on the embedding app's "Option is Meta" setting; verify in Orca |
-| Kitty keyboard protocol | Verify | Recent, and off by default in VS Code; verify in Orca |
-| Clipboard over OSC 52 | Only with "Applications in terminal may access clipboard" on | Only when the embedding app loads xterm.js's clipboard add-on; one add-on version garbled non-ASCII text. Verify in Orca. |
-| Bracketed paste (mode 2004) | Yes | Yes |
-| Synchronized output (mode 2026) | Verify | Listed in xterm.js 6.0; verify in Orca |
+| Click, drag, wheel | Reported at the exact cell | Reported at the exact cell |
+| Wheel direction | Verify: an injected wheel-down arrived as wheel-up, so the direction depends on a system setting or on how the event was injected | Wheel-down arrives as wheel-down. Verify against Orca's own setting. |
+| Shift+click, Option+click | Reported to the app with the modifier | macOS: reported to the app with the modifier. Linux and Windows: xterm.js keeps Shift for its own selection, so the app never sees it. Verify there. |
+| Right click, Ctrl+click | Not reported with the default settings | Reported |
+| Hover without a button | Not reported, because mode 1003 stays off | Not reported, because mode 1003 stays off |
+| Native selection while the app has the mouse | Verify which modifier | macOS: none by default: Shift+drag selected nothing. xterm.js has an Option setting the embedding app may turn on. Linux and Windows: Shift. |
+| Option or Alt with a letter | Verify. The glyph decoders accept both forms. | Sends nothing as Escape+letter by default: the keyboard layout's glyph arrives instead, unless the embedding app sets "Option is Meta" |
+| Alt+Enter | Verify | Escape then Enter |
+| Shift+Enter, Ctrl+Enter | Verify | Same bytes as Enter |
+| Kitty keyboard protocol | Yes: answers the query, flags push and pop | Yes in Orca: answers the query, flags push and pop |
+| Bracketed paste | Yes | Yes. A paste arrives wrapped, with newlines as carriage returns. |
+| Focus events | Yes | Yes |
+| Synchronized output (mode 2026) | Yes | Yes |
+| Background color query | Answered. Light on a fresh install. | Answered. Dark in Orca. |
+| Clipboard over OSC 52 | Advertised. Writing needs "Applications in terminal may access clipboard". Verify. | Not advertised. Depends on the embedding app's clipboard add-on. Verify in Orca. |
+| Cell size in pixels | Answered | Not answered |
 | Links | Cmd-click on detected URLs | The embedding app's link handler |
+| Its own alerts | A modal alert stalls the session until it is dismissed | Not applicable |
 
 ### tmux
 
@@ -83,18 +127,43 @@ this off: the **stock** configuration, and a **full** one that sets `mouse on`,
 `focus-events on`. The toolkit works in both. In the stock configuration it
 degrades as the table says.
 
-| Capability | Stock tmux | Full configuration |
+| Capability | Stock tmux 3.8 | Full configuration |
 | --- | --- | --- |
-| Mouse | The app receives no mouse events at all, so the keyboard must reach everything | Forwarded to the app when it asks for the mouse |
-| Clipboard over OSC 52 | Verify | tmux takes the sequence and sets the outer terminal's clipboard. A second form wrapped in a passthrough sequence covers setups that allow passthrough instead. The toolkit sends both. |
-| Kitty keyboard protocol | Not offered to the app; verify what `extended-keys` reports instead | Verify |
-| Bracketed paste | Yes | Yes |
-| Synchronized output | Verify | Verify |
-| `TERM` | `tmux-256color` or `screen-256color`, never the outer terminal's | Same |
+| Identifies itself | `tmux 3.8`, `TERM=tmux-256color` | Same |
+| Mouse | The app receives no mouse events, so the keyboard must reach everything. Verify with injected events. | Forwarded to the app when it asks for the mouse. Verify with injected events. |
+| Mouse modes | Accepted, with the one-slot rule above | Same |
+| Kitty keyboard protocol | Not offered: the query goes unanswered | Not offered, even with `extended-keys on` |
+| Bracketed paste, focus events | Accepted | Accepted |
+| Synchronized output | Accepted | Accepted |
+| Background color query | Passed to the outer terminal and answered inside xterm.js. Inside iTerm2 no answer came before tmux's own replies: verify whether it is late or missing. Either way the app waits with a timeout and never assumes an order. | Same |
+| Clipboard over OSC 52 | Verify | tmux takes the sequence and sets the outer terminal's clipboard. A second form wrapped in a passthrough sequence covers setups that allow passthrough instead. The toolkit sends both. Verify. |
 | iTerm2's own tmux integration (`tmux -CC`) | Verify | Verify |
 
 The minimum supported tmux is 3.3, the first release with
 `allow-passthrough`.
+
+### How wide a character is
+
+The number of cells a string takes is decided by the terminal, and the three
+do not agree. Measured by printing each string and asking where the cursor
+ended up:
+
+| Text | iTerm2 3.7.7 | xterm.js 6.0.0 in Orca | tmux 3.8 |
+| --- | --- | --- | --- |
+| ASCII, accented letters, combining accents | 1 | 1 | 1 |
+| CJK, Hangul, fullwidth forms | 2 | 2 | 2 |
+| Box drawing, block eighths, braille, private-use icons | 1 | 1 | 1 |
+| A plain emoji, a family joined with ZWJ, a flag | 2 | 2 | 2 |
+| An emoji with a variation selector (a red heart) | 1 | 1 | 2 |
+| An emoji with a skin tone | 2 | 4 | 2 |
+| A flag built with ZWJ (the rainbow flag) | 1 | 1 | 2 |
+
+Everything the toolkit draws itself (borders, bars, markers, sparklines) is in
+the rows where all three agree. Emoji sequences are where they split, so the
+toolkit never uses one in its own drawing, and measures text an app hands it
+with one width function for the whole workspace. Orca's terminal counts a
+plain emoji as two cells, which xterm.js does only with its Unicode 11 add-on
+loaded, so the test harness loads that add-on too.
 
 ### Windows
 
@@ -105,7 +174,7 @@ own right, not only a build target.
 
 | Area | What differs on Windows |
 | --- | --- |
-| Escape sequences | ConPTY may rewrite or drop sequences it does not know. Verify each "verify" row above on Windows separately. |
+| Escape sequences | ConPTY may rewrite or drop sequences it does not know. Every row above is measured again on Windows. |
 | Key events | crossterm reports both press and release. Every key handler acts on presses only. |
 | The controlling terminal | There is no `/dev/tty`. Parts that draw outside stdout use the console handles instead. |
 | Embedded terminals | Children run under ConPTY, not a Unix pseudo-terminal. There is no login shell to resolve aliases through. |
@@ -113,42 +182,12 @@ own right, not only a build target.
 | Clipboard | `clip.exe` instead of `pbcopy`, `wl-copy` or `xclip` |
 | Opening files and links | `start` instead of `open` or `xdg-open` |
 
-## How it is tested
-
-Testing runs at five layers. The first three run in CI on every pull request.
-
-1. **Escape-sequence tests, in every crate, on all three platforms.** What a
-   part writes and how it reads input are pure functions, so tests assert the
-   exact bytes: that the mouse setup never contains mode 1003, that no mouse
-   mode is reset before teardown, that a paste is bracketed. These run with
-   `cargo test` on macOS, Linux and Windows.
-2. **xterm.js, headless, on all three platforms.** `@xterm/headless` is
-   xterm.js without a browser. A small Node harness runs the toolkit's example
-   programs in a pseudo-terminal wired to a headless xterm.js, sends input the
-   way xterm.js encodes it (keys, SGR mouse reports, bracketed paste), and
-   asserts the screen contents and terminal modes that result. On Windows the
-   pseudo-terminal is ConPTY, so this layer is also the Windows terminal test.
-3. **tmux in xterm.js, headless, on macOS and Linux.** The same harness runs
-   the example programs inside a private tmux server, once with the stock
-   configuration and once with the full one.
-4. **iTerm2, scripted, on a Mac with iTerm2.** iTerm2's Python API opens a
-   session, runs the same example programs (directly and inside tmux), sends
-   input and reads the screen back. iTerm2 is a desktop app, so this layer runs
-   locally through its own `just` recipe and not in CI. It must pass before a
-   release.
-5. **A manual checklist per release** for what no script can see: Cmd-hover and
-   Cmd-click on links, native selection while the app holds the mouse, the
-   clipboard permission prompt, and how the wheel feels. Each item is checked
-   in iTerm2 and in Orca, with and without tmux, and in Orca on Windows.
-
-The Node harness and the iTerm2 script are test tooling only. No published
-crate depends on either.
-
 ## The capability probe
 
 A small example program in this repository, run inside a terminal, reports
-which of the "verify" capabilities above that configuration actually has: the
-mouse modes it accepts, whether resetting one switches reporting off, the kitty
-keyboard protocol, synchronized output, the clipboard routes, and how Option
-and Alt arrive. It is the first thing built, because its results replace every
-"verify" on this page with a fact, and it stays as a diagnostic users can run.
+what that configuration does: the mouse modes it accepts and how they
+interact, the kitty keyboard protocol, synchronized output, the colors, the
+clipboard routes, how wide each kind of character is, and how Option and Alt
+arrive. It is the first thing built. Its output is what the tables above are
+checked against, and it stays as a diagnostic anyone can run when an app
+misbehaves in their terminal.

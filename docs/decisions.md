@@ -290,3 +290,65 @@ as a derivative when it is meant to be the reference.
 **Consequences.** This does not extend to other people's projects: ideas
 taken from them are reimplemented, never copied, and their licenses are
 respected.
+
+## An agent can run every test layer
+
+**Decision.** Every test layer can be started, driven and read by an agent,
+with no person in the loop. Whoever makes a change runs the layers it touches
+before calling it done. Layers that cannot run in CI are still automated and
+still run, locally. What is left for a person is a short checklist of
+judgments before a release. See `docs/testing.md`.
+
+**Why.** A test that needs a person is a test that gets skipped under
+pressure, and a toolkit with five first-class configurations on three
+platforms has too many of them to check by hand. Automating a layer that only
+runs locally still removes the manual step from every phase of work.
+
+**Consequences.** Test environments are part of the project: a Linux
+container, a macOS virtual machine for iTerm2, a browser harness for
+xterm.js, and a Windows virtual machine. Reliability comes before coverage: a
+test that cannot be made reliable is not automated.
+
+## xterm.js is tested in a real browser
+
+**Decision.** The xterm.js harness runs the browser build of xterm.js in a
+headless browser and sends it real mouse and keyboard events. It does not use
+the headless build of xterm.js.
+
+**Why.** The code that turns a click or a key press into bytes exists only
+in the browser build, and that encoding is exactly what a mouse and keyboard
+toolkit has to be tested against. A throwaway version of the harness gave
+thirty identical runs in a row, at about four seconds each, once two mistakes
+in the harness itself were fixed. It runs on all three platforms, so it is
+also how the Windows pseudo-console is exercised.
+
+**Consequences.** The repository carries a small Node project for the
+harness, pinned to the xterm.js version Orca ships. A live Orca terminal is
+checked separately through Orca's command line, so a change in Orca's
+version or settings is noticed.
+
+**Revisit when.** The browser build and Orca's behavior are found to differ
+in a way the probe cannot detect.
+
+## iTerm2 is driven in a virtual machine, over VNC
+
+**Decision.** iTerm2 tests run in a macOS virtual machine. Input reaches
+iTerm2 as real pointer and keyboard events sent through the virtual machine's
+VNC server, and results come back through a shared folder. This replaces the
+earlier idea of scripting iTerm2 through its Python API on a Mac's own
+desktop.
+
+**Why.** On a real desktop, macOS asks a person to approve an app the first
+time it opens and again before one program may control another, and nothing
+run over SSH can see or answer those prompts. That was tried and it stalled
+on the first prompt. iTerm2's Python API also cannot produce a mouse event at
+all. A virtual machine gives an agent the whole screen and real input, with
+nothing to approve, and keeps test windows off anyone's desktop.
+
+**Consequences.** The virtual machine is prepared once and reused. It needs
+an Apple Silicon Mac, so this layer stays local (see "iTerm2 tests run
+locally, not in CI"). It runs on Tart, which is source-available and not open
+source; it is a development tool and no crate depends on it.
+
+**Revisit when.** A fully open source tool offers the same thing: a macOS
+guest with input and screen exposed from outside the guest.

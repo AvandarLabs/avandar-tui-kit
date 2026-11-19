@@ -97,6 +97,20 @@ it. You may skip TDD only when writing a test adds no real value, for example:
 
 When in doubt, write the test.
 
+**Run the tests yourself, in every layer the change touches.**
+[`docs/testing.md`](docs/testing.md) lists the layers and where each runs.
+
+- Never finish a piece of work by handing someone a test command to run. If
+  a layer cannot run where you are, set up what it needs (a container, a
+  virtual machine, a harness). If that is truly impossible, say exactly what
+  blocked you and what you did not verify.
+- No flaky tests. A test that fails for a reason other than the code is fixed
+  or deleted, never retried until it passes.
+- Wait on a condition the program or the terminal reports, never on a fixed
+  sleep.
+- Real desktop terminals are driven in a virtual machine, never on the
+  development machine's own desktop.
+
 ## Build, test, lint
 
 A Rust toolchain is the only prerequisite ([rustup.rs](https://rustup.rs)).
