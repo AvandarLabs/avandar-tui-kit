@@ -15,6 +15,7 @@ docs/
 ├── architecture.md     this file
 ├── decisions.md        one section per decision worth remembering
 ├── inventory/          every extractable UI element in the source apps
+├── specs/              the designs the crates are built from
 ├── terminals.md        the first-class terminals and platforms, and what each does
 ├── testing.md          the test layers, where each runs, and the rules for them
 ├── rules/              how code is written here
@@ -25,7 +26,8 @@ docs/
 
 Each building block is its own crate under `crates/`. The `avandar-tui-kit`
 crate owns no code: it re-exports each building block behind a cargo feature
-of the same name, with nothing on by default. An app depends on the umbrella
+named for the block (`mouse`, `term`, `pty`, `agent`, `widgets`, `view`,
+`charts`, `tasks`), with nothing on by default. An app depends on the umbrella
 and turns on the features it wants, or depends on a single building block
 directly.
 
@@ -45,12 +47,29 @@ the source apps and splits along the heavy dependencies:
 | `avandar-tui-term` | Borrowing the terminal and giving it back, keyboard flags, clipboard | none |
 | `avandar-tui-pty` | Embedded terminal panes, key encoding, child supervision | portable-pty, vt100, tui-term |
 | `avandar-tui-agent` | Coding-agent frontends: launch, resume, typing and submitting prompts | the `pty` crate, behind a feature |
-| `avandar-tui-widgets` | Style, layout, command palette and shortcuts, pickers, input and forms | nucleo behind `fuzzy`, tui-tree-widget behind `tree`, clap behind `clap` |
+| `avandar-tui-widgets` | Style, layout, command palette and shortcuts, pickers, input and forms | nucleo behind `fuzzy`, tui-tree-widget behind `tree`, walkdir behind `tree-walk`, clap behind `clap`, jiff behind `jiff` |
 | `avandar-tui-view` | Read-only viewers: markdown, documents with a cursor, logs | pulldown-cmark behind `markdown` |
 | `avandar-tui-charts` | Text charts and tables | none |
-| `avandar-tui-tasks` | Background work a UI needs | tokio behind a feature |
+| `avandar-tui-tasks` | Background work a UI needs | process-wrap behind `process`, tokio behind `tokio` |
 
 The crates are created as their specs are written, not ahead of them.
+[`specs/architecture.md`](specs/architecture.md) is the design they are built
+from: each crate's modules and features, which inventory element lands where
+and which are left out, the conventions every public API follows, and the
+platform, release and testing policies. The first per-crate spec is
+[`specs/ratatui-mouse.md`](specs/ratatui-mouse.md).
+
+Three things are shared across crates, and each has one home:
+
+| Shared | Home |
+| --- | --- |
+| Theme roles, the cell-width function, wrapping and truncation | The `style` module of `avandar-tui-widgets`. The view, charts and pty crates depend on widgets for it, and with no feature on widgets pulls in nothing heavy. |
+| Hit areas for the mouse | `ratatui-mouse`. A widget records plain rectangles, and registers them when its `mouse` feature is on. |
+| Events, rectangles, colors and styles | crossterm's and ratatui's own types. `ratatui-mouse` needs no other crate of the workspace, and it and `avandar-tui-term` speak only in those types. |
+
+Where two blocks only meet in some apps (mouse support in the terminal guard,
+the pane as an agent's transport, selection inside a pane), the link is a
+feature, and the umbrella turns it on by itself when both blocks are on.
 
 ## Shared settings
 

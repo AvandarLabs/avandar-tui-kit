@@ -371,3 +371,131 @@ working on Windows behavior needs permission to push its branch.
 
 **Revisit when.** A licensed Windows machine or image becomes available, or
 the slow loop starts costing more than a license would.
+
+## The theme asks for the background color and has a palette for no answer
+
+**Decision.** A theme never assumes a dark terminal. The app asks the
+terminal for its background color once at startup, and the theme picks a dark
+or a light palette from the answer. The wait is bounded (200 ms), and when
+nothing answers the theme uses a third palette that reads on both: the
+default foreground, bold, dim and reversed, and the few colors legible on
+either background. `NO_COLOR` selects a palette with no color at all. The
+rules are in the theme section of `docs/specs/architecture.md`.
+
+**Why.** The earlier rule assumed dark because terminals were thought not to
+say. Measured, every first-class terminal answers the query, and a fresh
+iTerm2 is light, so the assumption was wrong on a default install. The answer
+can still be late or missing (tmux inside iTerm2, the Windows pseudo-console),
+and a palette that is readable either way is better than a guess that is
+unreadable half the time.
+
+**Consequences.** The query lives in `avandar-tui-term` and the palettes in
+the widgets crate's `style` module, joined by the app through a ratatui
+color. The reply is parsed from crossterm's events, which is the only way to
+read it on Windows, and a late reply is swallowed so it is never typed into
+the app. `docs/rules/tui.md` was changed to match.
+
+**Revisit when.** A first-class terminal stops answering the query.
+
+## One width function, and app text is made portable before it is drawn
+
+**Decision.** The workspace measures text with one function: ratatui's own
+cell width, summed over grapheme clusters. Text an app hands to a part is
+rewritten before it is drawn so that iTerm2, xterm.js and tmux agree on its
+width: a variation selector and a skin tone are dropped, a ZWJ sequence that
+starts with a one-cell character is cut to that character, and a zero-width
+cluster is removed. What is stored or copied is never rewritten. The policy
+is in the text width section of `docs/specs/architecture.md`.
+
+**Why.** The three terminals disagree on exactly those sequences, and no
+measuring function can agree with all of them. Measuring the way ratatui
+places text keeps layout and drawing from ever differing, and drawing only
+what all three measure the same keeps columns aligned and cells from going
+stale. A width table per terminal was set aside: tmux in front changes the
+answer, an SSH hop hides the terminal, and the table goes stale.
+
+**Consequences.** A few emoji look plainer than their source. Nothing in the
+workspace calls `unicode-width`, `Span::width` or `Line::width`, or counts
+characters, for layout.
+
+**Revisit when.** The three terminals converge, or an app needs the original
+sequences drawn and accepts the misalignment.
+
+## Shared primitives live in the widgets crate's style module
+
+**Decision.** Theme roles, the width function, wrapping, truncation and
+column fitting live in `avandar_tui_widgets::style`. The view, charts and pty
+crates depend on the widgets crate for them. `ratatui-mouse` and
+`avandar-tui-term` take and return ratatui's own types instead, and depend on
+neither. Hit areas live in `ratatui-mouse`.
+
+**Why.** It keeps the eight crates decided earlier. With no feature on, the
+widgets crate is plain Rust over ratatui, so depending on it costs compile
+time and no dependency.
+
+**Consequences.** `style` imports nothing from its sibling modules, and a
+test holds it to that, so it can become a crate of its own by moving a
+directory and re-exporting it from the same path.
+
+**Revisit when.** The widgets crate with no features gains a dependency, a
+crate outside those three needs a role or a width, or a charts-only app's
+build is measurably slowed. Then `style` becomes a ninth crate.
+
+## Mouse reporting on Windows goes through the console
+
+**Decision.** On macOS and Linux `ratatui-mouse` writes its own mode sequence
+(1000, 1002, 1006). On Windows it writes no sequence and turns mouse input on
+in the console's input mode through crossterm.
+
+**Why.** crossterm on Windows reads the console's input records, not bytes,
+and mouse events arrive only when the console's input mode includes them.
+crossterm is the maintained, safe way to set that mode, and `unsafe` is
+forbidden here. Which reports the pseudo-console then asks the terminal for
+is its own choice.
+
+**Consequences.** The rule against crossterm's `EnableMouseCapture` is about
+the sequence it writes on Unix. If the pseudo-console asks the terminal for
+every pointer move, hover reaches the app on Windows, the crate ignores it,
+and the docs say so.
+
+**Revisit when.** crossterm reads terminal input as bytes on Windows, which
+would let the same sequence be used everywhere.
+
+## Select mode makes selection reachable without a modifier or a mouse
+
+**Decision.** `ratatui-mouse` has a select mode: selection driven from the
+keyboard on one pane or view, during which the mouse there always selects and
+is never passed through. An app that embeds a pane must offer a command that
+starts it.
+
+**Why.** Shift selects instead of passing through, but xterm.js on Linux and
+Windows keeps Shift for its own selection, so the app never sees it there.
+Stock tmux forwards no mouse events at all. Select mode is the one route to
+selection that works in every first-class configuration, and it is the
+keyboard equivalent the "keyboard first" rule already requires.
+
+**Revisit when.** Never for the keyboard path. A second modifier for the
+mouse is an open question in the mouse spec.
+
+## One version and one tag for every crate
+
+**Decision.** Every crate, `ratatui-mouse` included, carries the workspace's
+one version, and a release is one `vMAJOR.MINOR.PATCH` tag that covers all of
+them. A breaking change in any crate bumps the minor version of all.
+
+**Why.** An app has to take every toolkit crate from the same tag, or it
+compiles two copies whose types do not pass between each other. One version
+makes that the only thing an app can do.
+
+**Revisit when.** Publishing to crates.io starts and a crate has users
+outside the toolkit. `release-plz` can version crates apart.
+
+## Error types are written by hand
+
+**Decision.** Each crate's error enum implements `Display` and
+`std::error::Error` itself. No error-derive crate is a dependency.
+
+**Why.** The enums are small, and a derive macro is a dependency every app
+would compile for a dozen lines per crate.
+
+**Revisit when.** An error enum grows past what is pleasant to write by hand.

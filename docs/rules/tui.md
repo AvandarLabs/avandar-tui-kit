@@ -55,10 +55,18 @@ keep several mouse modes in one slot and switch reporting off entirely.
 
 ## Color is semantic
 
-Parts never name a color. They ask for a role (heading, accent, value, muted,
-success, warning, error, info, prompt) and the app's theme maps roles to
-colors. `NO_COLOR` turns color off. The default palette assumes a dark
-terminal, because terminals do not reliably say which they are.
+Parts never name a color. They ask for a role (heading, accent, value,
+selected, muted, faint, success, warning, error, info, prompt) and the app's
+theme maps roles to colors. `NO_COLOR` turns color off, and color never
+carries meaning alone.
+
+A theme never assumes a dark terminal. The app asks the terminal for its
+background color at startup, which every first-class terminal answers, and
+the theme picks a dark or a light palette from the answer. When no answer
+comes within a short, bounded wait, the theme uses a third palette that reads
+on both. A fresh iTerm2 has a light background, so a guess of dark is wrong
+on a default install. See the theme section of
+[`../specs/architecture.md`](../specs/architecture.md).
 
 ## Every first-class target, every time
 

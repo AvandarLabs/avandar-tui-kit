@@ -83,7 +83,9 @@ rules, not as quirks of one terminal.
 - **crossterm's `EnableMouseCapture` is the wrong sequence.** It ends by
   turning on mode 1003, so hover reporting becomes the active setting and
   every pointer move floods the app. The toolkit writes its own sequence
-  (1000, 1002, 1006) and never calls it.
+  (1000, 1002, 1006) and never uses that one. Windows is the exception in
+  form only: there the same crossterm command writes no sequence at all and
+  is how mouse input is turned on (see [Windows](#windows)).
 - **Asking whether mode 1000 is on is not asking whether the mouse is on.**
   After the toolkit's sequence, the terminal reports 1002 as set and 1000 as
   reset. A check has to look at all of them.
@@ -92,7 +94,10 @@ rules, not as quirks of one terminal.
   without it.
 - **The background color can be asked for.** Both terminals answer the color
   query, and tmux passes it through, so a theme can tell light from dark. It
-  has to: a fresh iTerm2 has a light background.
+  has to: a fresh iTerm2 has a light background. The answer can be late or
+  missing (see the tmux table), so the theme waits a short, bounded time and
+  otherwise uses a palette that reads on both. The theme section of
+  [`specs/architecture.md`](specs/architecture.md) has the rules.
 
 ### Terminals
 
@@ -157,13 +162,20 @@ ended up:
 | An emoji with a variation selector (a red heart) | 1 | 1 | 2 |
 | An emoji with a skin tone | 2 | 4 | 2 |
 | A flag built with ZWJ (the rainbow flag) | 1 | 1 | 2 |
+| A zero-width space | 1 | 1 | 0 |
 
 Everything the toolkit draws itself (borders, bars, markers, sparklines) is in
 the rows where all three agree. Emoji sequences are where they split, so the
 toolkit never uses one in its own drawing, and measures text an app hands it
-with one width function for the whole workspace. Orca's terminal counts a
-plain emoji as two cells, which xterm.js does only with its Unicode 11 add-on
-loaded, so the test harness loads that add-on too.
+with one width function for the whole workspace. Before it draws such text it
+rewrites the rows that split into forms all three agree on: the variation
+selector and the skin tone are dropped, a ZWJ sequence that starts with a
+one-cell character is cut to that character, and a zero-width cluster is
+removed. The text width section of
+[`specs/architecture.md`](specs/architecture.md) has the policy.
+
+Orca's terminal counts a plain emoji as two cells, which xterm.js does only
+with its Unicode 11 add-on loaded, so the test harness loads that add-on too.
 
 ### Windows
 
@@ -176,6 +188,8 @@ own right, not only a build target.
 | --- | --- |
 | Escape sequences | ConPTY may rewrite or drop sequences it does not know. Every row above is measured again on Windows. |
 | Key events | crossterm reports both press and release. Every key handler acts on presses only. |
+| Input | crossterm reads the console's input records, not bytes. Anything a terminal answers (the background color) has to arrive as key events, and the kitty keyboard protocol and paste events are not available. |
+| Mouse reporting | Turned on in the console's input mode through crossterm, not with the mode sequence. The pseudo-console then asks the terminal for mouse reports itself. Verify which tracking mode it asks for. |
 | The controlling terminal | There is no `/dev/tty`. Parts that draw outside stdout use the console handles instead. |
 | Embedded terminals | Children run under ConPTY, not a Unix pseudo-terminal. There is no login shell to resolve aliases through. |
 | Stopping a child and its descendants | Unix process groups do not exist. A job object does the same work. |
