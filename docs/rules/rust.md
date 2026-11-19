@@ -1,7 +1,7 @@
 # Rust rules
 
-How Rust is written in this repository. The lint configuration in
-the root `Cargo.toml` enforces the first two mechanically; the rest is on you and on
+How Rust is written in this repository. The lint configuration in the root
+`Cargo.toml` enforces the first two mechanically; the rest is on you and on
 review.
 
 ## No `unsafe`
@@ -32,6 +32,17 @@ matters, that `if` belongs in a pure function next to it.
 
 Write tests red first: a failing test that names the behavior, then the
 smallest code that turns it green, then the cleanup with the bar green.
+
+## Write for three platforms
+
+macOS, Linux and Windows are all first-class. Do not reach for a Unix-only
+API (`/dev/tty`, `std::os::unix`, process groups, signals, a shell) without
+giving Windows the same behavior behind the same public API. Keep the
+platform split in one small module per concern, chosen with `#[cfg(...)]`, so
+the rest of the crate has no platform branches. Never shell out to a tool
+that exists on one platform only without a counterpart for the others. A test
+that can only run on one platform says so with `#[cfg(...)]` and has a sibling
+for the others where the behavior exists there.
 
 ## Errors are typed in libraries
 

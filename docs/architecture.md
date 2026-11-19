@@ -15,7 +15,7 @@ docs/
 ├── architecture.md     this file
 ├── decisions.md        one section per decision worth remembering
 ├── inventory/          every extractable UI element in the source apps
-├── terminals.md        the first-class target terminals and how they are tested
+├── terminals.md        the first-class terminals and platforms, and how they are tested
 ├── rules/              how code is written here
 └── skills.md           how the agent skills are installed
 ```
@@ -73,11 +73,11 @@ termion, termwiz or termina, but a backend is only the library that talks to
 the terminal: it decides nothing about which terminals an app works in. Public
 APIs use crossterm's event types directly, with no abstraction over backends.
 
-What an app works in is decided by which escape-sequence features each
-terminal implements. Two terminals are first-class targets: **iTerm2** and
-**xterm.js** (the emulator inside Orca and VS Code). Every crate that writes
-to or reads from the terminal is tested in both. See
-[`terminals.md`](terminals.md).
+What an app works in is decided by which escape-sequence features the
+terminal in front of it implements. The first-class targets are **iTerm2** and
+**xterm.js** (the emulator inside Orca and VS Code), **tmux** inside either,
+and **macOS, Linux and Windows**. Every crate that writes to or reads from the
+terminal is tested in all of them. See [`terminals.md`](terminals.md).
 
 ## Dependencies
 

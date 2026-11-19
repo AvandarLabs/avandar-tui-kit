@@ -126,16 +126,17 @@ already broken the source apps (a mouse-mode reset switching reporting off
 entirely), so it needs tests of its own rather than an assumption that "xterm
 compatible" covers it.
 
-**Consequences.** Every crate that touches terminal I/O is tested at four
-layers: exact escape sequences in `cargo test`, a headless xterm.js harness in
-CI, scripted iTerm2 sessions on macOS, and a manual checklist per release.
-Defaults never rely on a capability one of the two lacks: key bindings work
-without the kitty keyboard protocol, and copying works without OSC 52. The
-repository gains a small Node harness for xterm.js and a Python script for
-iTerm2, as test tooling only; no published crate depends on either.
+**Consequences.** Every crate that touches terminal I/O is tested in both, at
+the layers `docs/terminals.md` describes: exact escape sequences in
+`cargo test`, a headless xterm.js harness in CI, scripted iTerm2 sessions, and
+a manual checklist per release. Defaults never rely on a capability one of the
+two lacks: key bindings work without the kitty keyboard protocol, and copying
+works without OSC 52. The repository gains a small Node harness for xterm.js
+and a Python script for iTerm2, as test tooling only; no published crate
+depends on either.
 
-**Revisit when.** The apps this toolkit serves move to another terminal, or one of these two
-stops being used.
+**Revisit when.** The apps this toolkit serves move to another terminal, or
+one of these two stops being used.
 
 ## Eight building-block crates, split along heavy dependencies
 
@@ -164,3 +165,128 @@ the wheel sends it arrow keys.
 
 **Why.** That is what iTerm2 and xterm.js themselves do, so a pane behaves
 like the terminal people already know.
+
+## tmux is first-class
+
+**Decision.** tmux is a first-class target inside both first-class terminals:
+tmux in iTerm2 and tmux in xterm.js are each tested. The minimum supported
+tmux is 3.3.
+
+**Why.** The toolkit's apps are often run over SSH inside tmux. tmux is a
+terminal emulator of its own between the app and the real terminal, and its
+defaults turn off most of what a mouse-driven app relies on: with the stock
+configuration the app receives no mouse events at all, and the clipboard and
+extended keys depend on options the user may not have set. An app that is
+only tested outside tmux breaks there in ways nobody sees until they are on a
+remote machine.
+
+**Consequences.** tmux is tested with its stock configuration and with a full
+one (mouse, clipboard, passthrough, extended keys and focus events on). The
+toolkit must be fully usable from the keyboard in the stock configuration.
+The clipboard sends both the plain OSC 52 form and the passthrough-wrapped
+form. tmux does not run natively on Windows, so this applies on macOS and
+Linux; under WSL the app is a Linux build.
+
+**Revisit when.** A tmux older than 3.3 has to be supported, which would mean
+dropping the passthrough route.
+
+## macOS, Linux and Windows are all first-class
+
+**Decision.** The toolkit is cross-platform in fact, not in principle: every
+crate builds, passes its tests and behaves the same on macOS, Linux and
+Windows, and CI runs on all three.
+
+**Why.** The source apps were written on macOS and assume it throughout:
+`pbcopy`, `open`, AppleScript, `/dev/tty`, Unix process groups, a login shell.
+A toolkit that carries those assumptions forward is a macOS toolkit. Fixing
+them once here is the point of extracting the parts.
+
+**Consequences.** No crate assumes Unix. Anything Unix-only gets a Windows
+path with the same behavior behind the same API: console handles for
+`/dev/tty`, a job object for a process group, ConPTY for a pseudo-terminal,
+`clip.exe` and `start` for the clipboard and opener. Because `unsafe` is
+forbidden, platform calls go through a maintained crate, never through
+hand-written bindings. Windows puts its pseudo-console between a program and
+the terminal, so terminal behavior is verified on Windows separately. iTerm2
+exists only on macOS, so on Linux and Windows the first-class terminal is
+xterm.js.
+
+**Revisit when.** A part cannot be given equivalent behavior on one platform.
+Then the gap is documented in that crate, not silently left out.
+
+## iTerm2 tests run locally, not in CI
+
+**Decision.** The scripted iTerm2 tests run on a Mac with iTerm2 installed,
+through their own `just` recipe, and must pass before a release. They are not
+part of CI.
+
+**Why.** iTerm2 is a desktop app that needs a logged-in graphical session.
+Driving it on a hosted CI runner is fragile, and a flaky required check
+teaches everyone to ignore red. Everything that can be checked without the
+app (the exact escape sequences iTerm2's rules require) is in `cargo test`
+and does run in CI.
+
+**Revisit when.** A reliable way to run iTerm2 on a CI runner exists.
+
+## Prompts and inputs are native ratatui widgets
+
+**Decision.** Text fields, selection prompts, dials and forms render as
+ratatui widgets from pure state. Where a prompt has to work with no
+full-screen UI, it has a plain-text fallback, and with no terminal at all it
+fails naming the flag that would have answered it.
+
+**Why.** One source app renders prompts as lines of text with ANSI codes and
+converts them back to styled spans inside its full-screen shell. That gives
+one implementation everywhere, but the conversion loses information when two
+roles share a color, widths have to be measured around escape codes, and
+hints end up patched with string replacement. Widgets over pure state keep
+the single implementation without the round trip.
+
+## Background helpers use threads; async is opt-in
+
+**Decision.** `avandar-tui-tasks` is built on standard threads and channels.
+Helpers for tokio live behind a feature.
+
+**Why.** Two of the three source apps are synchronous and one is async. Parts
+that never own the event loop must work in both, and threads work in both. An
+app that does not use tokio must not compile it.
+
+## One fuzzy matcher: nucleo
+
+**Decision.** Fuzzy matching uses `nucleo-matcher`, behind the `fuzzy`
+feature of the widgets crate.
+
+**Why.** One source app carries two matchers. nucleo is the one behind the
+picker with the behavior worth keeping: every query word matched as a run,
+path-aware scoring, and match positions for highlighting.
+
+## Git tags first, crates.io later
+
+**Decision.** Apps depend on a git tag until the first building block has a
+real user. Publishing to crates.io starts then, with `release-plz`.
+
+**Why.** A crate name and a published version are permanent. Tags let the
+APIs change freely while the first apps adopt them. `release-plz` publishes a
+workspace's crates in dependency order and writes the changelogs from
+Conventional Commits, which this repository already uses.
+
+## CI runs the full check on three platforms
+
+**Decision.** Every pull request runs, on GitHub Actions: formatting, clippy,
+tests and docs on macOS, Linux and Windows; a build at the minimum Rust
+version; and the headless xterm.js tests, with tmux on macOS and Linux.
+
+## This repository is the authoritative source
+
+**Decision.** Code and ideas that started in the apps the toolkit was
+extracted from carry no attribution notes here: no credits in source files,
+crate docs or the README. The copyright holder is Avandar Labs, Inc., as
+`LICENSE` states.
+
+**Why.** The earlier versions are the same author's own work, so there is
+nobody to credit, and notes pointing elsewhere would make this repository read
+as a derivative when it is meant to be the reference.
+
+**Consequences.** This does not extend to other people's projects: ideas
+taken from them are reimplemented, never copied, and their licenses are
+respected.

@@ -60,15 +60,17 @@ success, warning, error, info, prompt) and the app's theme maps roles to
 colors. `NO_COLOR` turns color off. The default palette assumes a dark
 terminal, because terminals do not reliably say which they are.
 
-## Two first-class terminals
+## Every first-class target, every time
 
-Every part works in iTerm2 and in xterm.js, or degrades in a way its docs
-describe. A default (a key binding, how copying works) never depends on a
-capability one of them lacks: the kitty keyboard protocol and OSC 52 add to the
-defaults, they never replace them. A part that touches terminal I/O is not done
-until it has escape-sequence tests and has run in both terminals. See
-`docs/terminals.md` for what each terminal is known to do and how they are
-tested.
+iTerm2 and xterm.js are first-class terminals, tmux is first-class inside
+both, and macOS, Linux and Windows are first-class platforms. Every part works
+in all of them, or degrades in a way its docs describe. A default (a key
+binding, how copying works) never depends on a capability one of them lacks:
+the kitty keyboard protocol, OSC 52 and even the mouse (which stock tmux does
+not forward) add to the defaults, they never replace them. A part that touches
+terminal I/O is not done until it has escape-sequence tests and has run in
+each configuration. See `docs/terminals.md` for what each one is known to do
+and how they are tested.
 
 ## Keyboard first, mouse as well
 

@@ -13,17 +13,23 @@
   module.
 - The toolkit is parts an app calls, never a framework: no crate owns the
   event loop or the app's state.
-- **crossterm** is the only supported backend. **iTerm2** and **xterm.js**
-  (the emulator inside Orca and VS Code) are the two first-class target
-  terminals, equally. Any change that writes to or reads from the terminal is
-  tested in both before it lands: see [`docs/terminals.md`](docs/terminals.md).
-  Never rely on a capability one of them lacks for a default behavior.
+- **crossterm** is the only supported backend.
+- **iTerm2** and **xterm.js** (the emulator inside Orca and VS Code) are the
+  first-class terminals, **tmux** is first-class inside both, and **macOS,
+  Linux and Windows** are all first-class platforms. Any change that writes to
+  or reads from the terminal is tested in every one of those before it lands:
+  see [`docs/terminals.md`](docs/terminals.md). Never rely on a capability one
+  of them lacks for a default behavior, and never assume Unix.
 - Shared settings (version, edition, minimum Rust version, license, lints,
   dependency versions) live once in the root `Cargo.toml` and every crate
   inherits them with `.workspace = true`.
 - **This repository is public.** Never commit local file paths, personal
-  data, or private notes. Refer to the apps the toolkit is extracted from by
-  GitHub repository and repo-relative path.
+  data, or private notes. Where the docs name the apps the toolkit was
+  extracted from, refer to them by GitHub repository and repo-relative path.
+- **This repository is the authoritative source.** Do not add attribution
+  notes, credits or "ported from" comments for those apps in source files,
+  crate docs or the README. Ideas from other people's projects are
+  reimplemented, never copied.
 - Tasks live in the `justfile` (`just --list`). Every recipe is a single
   command you could type by hand, so `just` is a convenience and never a
   dependency.

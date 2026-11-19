@@ -25,11 +25,14 @@ never compiles the terminal-emulation or agent crates. See
 - [crossterm](https://crates.io/crates/crossterm) as the terminal backend.
   It is the only backend the toolkit supports.
 
-## Supported terminals
+## Supported terminals and platforms
 
-iTerm2 and xterm.js (the emulator inside Orca and VS Code) are first-class:
-every part is tested in both. Other terminals should work but are not tested.
-See [`docs/terminals.md`](docs/terminals.md).
+- **Terminals:** iTerm2 and xterm.js (the emulator inside Orca and VS Code).
+- **Multiplexer:** tmux 3.3 or newer, inside either terminal.
+- **Platforms:** macOS, Linux and Windows.
+
+All of these are first-class: every part is tested in each. Other terminals
+should work but are not tested. See [`docs/terminals.md`](docs/terminals.md).
 
 ## Developing
 
