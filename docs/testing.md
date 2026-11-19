@@ -41,7 +41,7 @@ thirty runs in a row gave identical results.
 | 4 | tmux in the xterm.js harness | The same, through tmux with its stock and its full configuration | macOS and Linux | Yes, on both |
 | 5 | Orca | The capability probe gives the expected answers in a live Orca terminal | Anywhere Orca runs, through Orca's command line | No: it needs Orca |
 | 6 | iTerm2 in a virtual machine | A real iTerm2 gets real pointer and keyboard events, alone and through tmux | A macOS virtual machine on an Apple Silicon Mac | No: it needs nested virtualization |
-| 7 | Windows in a virtual machine | The Windows build behaves, through the real pseudo-console | A Windows virtual machine | CI covers Windows; the virtual machine is for local runs |
+| 7 | Windows on CI runners | The Windows build behaves, through the real pseudo-console | GitHub's hosted Windows runners | Yes: CI is the only place it runs |
 
 A change runs the layers it can affect. Pure logic stops at layers 1 and 2.
 Anything that writes to or reads from the terminal runs all of them.
@@ -132,14 +132,21 @@ It uses [Tart](https://github.com/openai/tart) to run the virtual machine.
 Tart is source-available under the Functional Source License, not open
 source. It is a development tool only: no crate depends on it.
 
-### 7. Windows in a virtual machine
+### 7. Windows on CI runners
 
-CI builds and tests on Windows on every pull request, including the xterm.js
-harness. That is the gate. For running the same thing locally before a push,
-a Windows virtual machine does the job on a Mac: Windows 11 for ARM runs under
-QEMU with hardware acceleration. UTM and Lima are both open source and can
-manage it, though Lima's Windows support is still experimental. This layer is
-not set up yet.
+Windows is the one platform with no local run. Layers 1, 3 and the build at
+the minimum Rust version run on GitHub's hosted Windows runners on every pull
+request, and that is where Windows behavior is proved. Locally, layer 2
+catches Windows code that no longer compiles before a push.
+
+An agent still runs this layer itself: it pushes the branch, waits for the
+Windows jobs, and reads their logs. Because the loop is slower than a local
+run, Windows-only code is kept small and behind one module per concern (see
+`rules/rust.md`), and the Windows jobs upload the example programs' event
+logs so a failure can be read without rerunning it.
+
+A local Windows virtual machine was considered and set aside: Windows needs a
+paid license to be used properly, and CI runners come already licensed.
 
 ## Status
 
@@ -150,5 +157,4 @@ not set up yet.
 | iTerm2 virtual machine | Proved by hand. The scripted version is to be built. |
 | Linux container run | Proved with the workspace as it is |
 | Cross-target lint | Proved against the planned dependencies |
-| Windows virtual machine | Not started |
 | CI | Not set up |

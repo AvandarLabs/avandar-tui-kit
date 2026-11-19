@@ -305,8 +305,8 @@ platforms has too many of them to check by hand. Automating a layer that only
 runs locally still removes the manual step from every phase of work.
 
 **Consequences.** Test environments are part of the project: a Linux
-container, a macOS virtual machine for iTerm2, a browser harness for
-xterm.js, and a Windows virtual machine. Reliability comes before coverage: a
+container, a macOS virtual machine for iTerm2, and a browser harness for
+xterm.js. Reliability comes before coverage: a
 test that cannot be made reliable is not automated.
 
 ## xterm.js is tested in a real browser
@@ -352,3 +352,22 @@ source; it is a development tool and no crate depends on it.
 
 **Revisit when.** A fully open source tool offers the same thing: a macOS
 guest with input and screen exposed from outside the guest.
+
+## Windows is tested on CI runners only
+
+**Decision.** Windows tests run on GitHub's hosted Windows runners and
+nowhere else. There is no local Windows machine or virtual machine. Locally,
+the Windows targets are linted from a Mac before every push.
+
+**Why.** Windows needs a paid license to be used properly in a virtual
+machine, and no always-on Windows machine is available to connect to. Hosted
+runners are free for public repositories, already licensed, and run the same
+tests on every pull request anyway.
+
+**Consequences.** The Windows loop is push, wait, read the logs, so it is
+slower than every other platform's. Windows-only code stays small and
+isolated, and the Windows jobs upload the logs a failure needs. An agent
+working on Windows behavior needs permission to push its branch.
+
+**Revisit when.** A licensed Windows machine or image becomes available, or
+the slow loop starts costing more than a license would.
