@@ -343,6 +343,47 @@ mod tests {
             .collect()
     }
 
+    fn feed_with_windows_releases(parser: &mut ColorReplyParser, character: char) {
+        let modifiers = if character.is_ascii_uppercase() {
+            KeyModifiers::SHIFT
+        } else {
+            KeyModifiers::NONE
+        };
+        assert_eq!(
+            parser.feed(press_char(character, modifiers)),
+            ColorStep::Buffering
+        );
+        assert_eq!(
+            parser.feed(release_char(character, modifiers)),
+            ColorStep::Buffering
+        );
+    }
+
+    fn parse_alt_osc11_reply(
+        parser: &mut ColorReplyParser,
+        rgb_channels: &str,
+        terminator: Event,
+    ) -> ColorReply {
+        assert_eq!(
+            parser.feed(press_char(']', KeyModifiers::ALT)),
+            ColorStep::Buffering
+        );
+        for event in ascii_body_events(&format!("11;rgb:{rgb_channels}"), false) {
+            assert_eq!(parser.feed(event), ColorStep::Buffering);
+        }
+        let final_step = parser.feed(terminator);
+        let ColorStep::Complete(reply) = final_step else {
+            panic!("expected Complete reply for {rgb_channels}, got {final_step:?}");
+        };
+        reply
+    }
+
+    fn alt_osc11_sequence(body: &str) -> Vec<Event> {
+        let mut sequence = vec![press_char(']', KeyModifiers::ALT)];
+        sequence.extend(ascii_body_events(body, false));
+        sequence
+    }
+
     fn assert_rejects_sequence(parser: &mut ColorReplyParser, mut sequence: Vec<Event>) {
         let expected_rejected = sequence.clone();
         let failing_event = sequence.pop().expect("sequence must be non-empty");
@@ -367,39 +408,18 @@ mod tests {
             parser.feed(release_char(']', KeyModifiers::ALT)),
             ColorStep::Buffering
         );
-
         for body_char in "11;rgb:FFFF/FFFF/FFFF".chars() {
-            let modifiers = if body_char.is_ascii_uppercase() {
-                KeyModifiers::SHIFT
-            } else {
-                KeyModifiers::NONE
-            };
-            assert_eq!(
-                parser.feed(press_char(body_char, modifiers)),
-                ColorStep::Buffering
-            );
-            assert_eq!(
-                parser.feed(release_char(body_char, modifiers)),
-                ColorStep::Buffering
-            );
+            feed_with_windows_releases(&mut parser, body_char);
         }
 
         let final_step = parser.feed(press_char('g', KeyModifiers::CONTROL));
         let ColorStep::Complete(reply) = final_step else {
             panic!("expected Complete reply, got {final_step:?}");
         };
-
         assert_eq!((reply.r, reply.g, reply.b), (255, 255, 255));
         assert!(!reply.is_dark);
         assert!(reply.luminance > DARK_LUMINANCE_THRESHOLD);
-        assert_eq!(
-            reply.channels,
-            [
-                String::from("FFFF"),
-                String::from("FFFF"),
-                String::from("FFFF")
-            ]
-        );
+        assert_eq!(reply.channels, ["FFFF", "FFFF", "FFFF"].map(String::from));
 
         let trailing_release = release_char('g', KeyModifiers::CONTROL);
         assert_eq!(
@@ -436,85 +456,60 @@ mod tests {
         let ColorStep::Complete(reply) = final_step else {
             panic!("expected Complete reply, got {final_step:?}");
         };
-
         assert_eq!((reply.r, reply.g, reply.b), (0x1a, 0x1b, 0x26));
         assert!(reply.is_dark);
-        assert!(reply.luminance < DARK_LUMINANCE_THRESHOLD);
-        assert_eq!(
-            reply.channels,
-            [String::from("1a"), String::from("1b"), String::from("26")]
-        );
+        assert_eq!(reply.channels, ["1a", "1b", "26"].map(String::from));
     }
 
     #[test]
     fn scales_one_two_three_and_four_digit_channels_with_alt_backslash_and_raw_bel_terminators() {
         let mut parser = ColorReplyParser::new();
 
-        assert_eq!(
-            parser.feed(press_char(']', KeyModifiers::ALT)),
-            ColorStep::Buffering
-        );
-        for event in ascii_body_events("11;rgb:f/0/8", false) {
-            assert_eq!(parser.feed(event), ColorStep::Buffering);
-        }
-        let one_digit_step = parser.feed(press_char('\\', KeyModifiers::ALT));
-        let ColorStep::Complete(one_digit_reply) = one_digit_step else {
-            panic!("expected Complete for 1-digit channels, got {one_digit_step:?}");
-        };
-        assert_eq!(
-            (one_digit_reply.r, one_digit_reply.g, one_digit_reply.b),
-            (255, 0, 136)
-        );
-        assert_eq!(
-            one_digit_reply.channels,
-            [String::from("f"), String::from("0"), String::from("8")]
-        );
+        let one_digit =
+            parse_alt_osc11_reply(&mut parser, "f/0/8", press_char('\\', KeyModifiers::ALT));
+        assert_eq!((one_digit.r, one_digit.g, one_digit.b), (255, 0, 136));
+        assert_eq!(one_digit.channels, ["f", "0", "8"].map(String::from));
 
-        assert_eq!(
-            parser.feed(press_char(']', KeyModifiers::ALT)),
-            ColorStep::Buffering
+        let two_digit = parse_alt_osc11_reply(
+            &mut parser,
+            "10/80/ff",
+            press_char('\x07', KeyModifiers::NONE),
         );
-        for event in ascii_body_events("11;rgb:abc/DEF/012", false) {
-            assert_eq!(parser.feed(event), ColorStep::Buffering);
-        }
-        let three_digit_step = parser.feed(press_char('\x07', KeyModifiers::NONE));
-        let ColorStep::Complete(three_digit_reply) = three_digit_step else {
-            panic!("expected Complete for 3-digit channels, got {three_digit_step:?}");
-        };
-        assert_eq!(
-            (
-                three_digit_reply.r,
-                three_digit_reply.g,
-                three_digit_reply.b
-            ),
-            (171, 222, 1)
+        assert_eq!((two_digit.r, two_digit.g, two_digit.b), (0x10, 0x80, 0xff));
+
+        let three_digit = parse_alt_osc11_reply(
+            &mut parser,
+            "abc/DEF/012",
+            press_char('\x07', KeyModifiers::NONE),
         );
-        assert!(!three_digit_reply.is_dark);
+        assert_eq!((three_digit.r, three_digit.g, three_digit.b), (171, 222, 1));
+        assert!(!three_digit.is_dark);
+
+        let four_digit = parse_alt_osc11_reply(
+            &mut parser,
+            "0000/8080/ffff",
+            press_char('\\', KeyModifiers::ALT),
+        );
+        assert_eq!(
+            (four_digit.r, four_digit.g, four_digit.b),
+            (0x00, 0x80, 0xff)
+        );
     }
 
     #[test]
     fn rejects_fifth_hex_digit_empty_channels_extra_slash_and_aborted_split_st() {
         let mut parser = ColorReplyParser::new();
 
-        let mut fifth_digit = vec![press_char(']', KeyModifiers::ALT)];
-        fifth_digit.extend(ascii_body_events("11;rgb:12345", false));
-        assert_rejects_sequence(&mut parser, fifth_digit);
+        assert_rejects_sequence(&mut parser, alt_osc11_sequence("11;rgb:12345"));
+        assert_rejects_sequence(&mut parser, alt_osc11_sequence("11;rgb:/"));
 
-        let mut empty_first_channel = vec![press_char(']', KeyModifiers::ALT)];
-        empty_first_channel.extend(ascii_body_events("11;rgb:/", false));
-        assert_rejects_sequence(&mut parser, empty_first_channel);
-
-        let mut premature_bel = vec![press_char(']', KeyModifiers::ALT)];
-        premature_bel.extend(ascii_body_events("11;rgb:00/00/", false));
+        let mut premature_bel = alt_osc11_sequence("11;rgb:00/00/");
         premature_bel.push(press_char('g', KeyModifiers::CONTROL));
         assert_rejects_sequence(&mut parser, premature_bel);
 
-        let mut fourth_channel_slash = vec![press_char(']', KeyModifiers::ALT)];
-        fourth_channel_slash.extend(ascii_body_events("11;rgb:00/00/00/", false));
-        assert_rejects_sequence(&mut parser, fourth_channel_slash);
+        assert_rejects_sequence(&mut parser, alt_osc11_sequence("11;rgb:00/00/00/"));
 
-        let mut aborted_split_st = vec![press_char(']', KeyModifiers::ALT)];
-        aborted_split_st.extend(ascii_body_events("11;rgb:00/00/00", false));
+        let mut aborted_split_st = alt_osc11_sequence("11;rgb:00/00/00");
         aborted_split_st.push(press_esc());
         aborted_split_st.push(press_char('x', KeyModifiers::NONE));
         assert_rejects_sequence(&mut parser, aborted_split_st);
@@ -532,13 +527,11 @@ mod tests {
             ],
         );
 
-        let mut shifted_lowercase_hex = vec![press_char(']', KeyModifiers::ALT)];
-        shifted_lowercase_hex.extend(ascii_body_events("11;rgb:", false));
+        let mut shifted_lowercase_hex = alt_osc11_sequence("11;rgb:");
         shifted_lowercase_hex.push(press_char('a', KeyModifiers::SHIFT));
         assert_rejects_sequence(&mut parser, shifted_lowercase_hex);
 
-        let mut alt_uppercase_hex = vec![press_char(']', KeyModifiers::ALT)];
-        alt_uppercase_hex.extend(ascii_body_events("11;rgb:", false));
+        let mut alt_uppercase_hex = alt_osc11_sequence("11;rgb:");
         alt_uppercase_hex.push(press_char('A', KeyModifiers::ALT | KeyModifiers::SHIFT));
         assert_rejects_sequence(&mut parser, alt_uppercase_hex);
 
