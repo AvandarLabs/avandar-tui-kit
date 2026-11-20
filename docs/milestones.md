@@ -24,14 +24,16 @@ so on here.
 | 6 | `avandar-tui-tasks` | `avandar-tui-tasks` | huckleberry-cli, dif | Medium | M2 |
 | 7 | `avandar-tui-pty` | `avandar-tui-pty` | dif | Large | M3, M4 |
 | 8 | `avandar-tui-agent` | `avandar-tui-agent` | dif | Large | M7 |
-| 9 | `avandar-tui-view` | `avandar-tui-view` | dif, huckleberry-cli | Medium | M4 |
+| 9.a | `avandar-tui-document`: viewing and opener | `avandar-tui-document` (read-only parity and editor research) | dif, huckleberry-cli | Medium | M4 |
+| 9.b | `avandar-tui-document`: editing | Opt-in nano- and vim-style document editing | none required for parity | Large | M9.a, M10 |
 | 10 | Widgets: layout and command | `layout`, `command`, `input::line` | dif, huckleberry-cli | Large | M4 |
 | 11 | Widgets: pick and tree | `pick`, `tree` | huckleberry-cli | Large | M10 |
 | 12 | Widgets: input | the rest of `input` | huckleberry-cli, dif | Large | M11 |
-| 13 | brain adopts the toolkit | Only what brain's adoption shows is missing | brain | Large | M3 and M7 to start, M8 to M12 to finish, and brain's own upgrade |
+| 13 | brain adopts the toolkit | Only what brain's adoption shows is missing | brain | Large | M3 and M7 to start, M8, M9.a and M10 to M12 to finish, and brain's own upgrade |
 
 Every one of the eight crates has an adopting app by the end of M12. M13
-brings in the last source app. Releases move from git tags to crates.io in
+brings in the last source app, and M9.b adds opt-in document editing after
+M9.a and M10 without blocking M10 to M13. Releases move from git tags to crates.io in
 **M2** (see [Releases](#releases)).
 
 ## The source apps
@@ -78,10 +80,15 @@ These apply to M1 and M3 to M12, and are not repeated in each.
    `[workspace.dependencies]` with its one-line reason. The umbrella gains the
    crate's feature, its pass-through features and its glue rows from the
    architecture spec.
-5. **Docs are current.** `docs/architecture.md` (crate table, layout tree,
-   dependencies table), `decisions.md` for any new decision, `terminals.md`
-   for any new measurement, and the crate's own docs, which say how it
-   degrades wherever a configuration lacks something.
+5. **Docs are current and honest.** `docs/architecture.md` (crate table,
+   layout tree, dependencies table), `decisions.md` for any new decision,
+   `terminals.md` for any new measurement, and the crate's own README and
+   rustdoc, which say how it degrades wherever a configuration lacks
+   something. Where a crate or module is a light wrapper over upstream crates,
+   its README states that upfront, names what specific functionality it adds,
+   and tells visitors when to use the base crate instead. Published READMEs,
+   `Cargo.toml` metadata and rustdoc never name personal or internal source
+   apps (`brain`, `huckleberry-cli`, and similar private workflows).
 6. **A release, then an adoption.** The crate ships in a release (see
    [Releases](#releases)). The named app then follows "How an app adopts a
    crate" in the architecture spec: it replaces its module with the part,
@@ -364,9 +371,11 @@ dif from the git tag to the published crate.
 
 - `ratatui-mouse` depends on `ratatui-core` instead of `ratatui`, declared once
   in the root manifest. `mouse_lab` keeps `ratatui` as a dev-dependency.
-- Package metadata for `ratatui-mouse` and `avandar-tui-kit`: description,
-  readme, keywords, categories, and docs.rs settings that build every feature
-  and show each feature's name on the items behind it.
+- Package metadata and crate READMEs for `ratatui-mouse` and
+  `avandar-tui-kit`: description, readme, keywords, categories, and docs.rs
+  settings that build every feature and show each feature's name on the items
+  behind it, following the wrapper-honesty and no-personal-workflow-leaks
+  rules in `decisions.md`.
 - release-plz configuration and its workflow: one version for the workspace,
   changelogs from Conventional Commits (taking over steps 3 and 4 of the
   release in the architecture spec), and publishing in dependency order.
@@ -506,7 +515,7 @@ apps adopt it.
 
 ## Milestone 4: Widgets: style
 
-**Why here.** Three crates (charts, pty and view) need the `style` module
+**Why here.** Three crates (charts, pty and document) need the `style` module
 before they can start, it is huckleberry-cli's first part, and with
 `avandar-tui-term` released the theme can detect the background.
 
@@ -566,7 +575,7 @@ M3, for background detection in the adopting apps.
 
 | Item | Settled where |
 | --- | --- |
-| Architecture question 2: an off switch for the portable-text rewrite | Here: no switch in the first release. Revisited if an adoption in M4 or M9 shows a need. |
+| Architecture question 2: an off switch for the portable-text rewrite | Here: no switch in the first release. Revisited if an adoption in M4 or M9.a shows a need. |
 | Architecture question 1: a ninth crate | The isolation test lands here. The decision is M12's. |
 | The `Selected` role needs the background's own color | `colors` returns it. Reversed video when it is unknown. |
 | A glyph the specs planned fails M0's width check | It is replaced in the spec before the code |
@@ -837,22 +846,37 @@ M7.
 **Size: large.** Ten modules, three features, a Windows launch path, and an
 adoption that touches dif's startup.
 
-## Milestone 9: `avandar-tui-view`
+## Milestone 9.a: `avandar-tui-document` (viewing and opener)
 
 **Why here.** It needs only `style`, it fixes dif's character-count widths in
-markdown and its macOS-only opener, and it is medium, so it lands before the
-larger widget families.
+markdown and its macOS-only opener, and it is medium, so read-only parity
+lands before the larger widget families while researching the editing model
+that M9.b will build on.
 
-**Goal.** Build `avandar-tui-view` and move dif's markdown views, document
-cursor and opener onto it.
+**Goal.** Research existing ratatui document-viewer and text-editor crates so
+M9.a's design anticipates M9.b's editing, build the read-only viewing and
+opener modules of `avandar-tui-document`, and move dif and huckleberry-cli
+onto it.
 
 ### Scope
 
-- `docs/specs/avandar-tui-view.md`, then the crate's `markdown` (behind the
-  feature, `pulldown-cmark` 0.13), `document`, `log`, `target` and `open`.
-- The `open` crate in the root manifest. The architecture spec names no
-  version, so the current one is chosen when it is added.
-- The umbrella's `view` and `markdown` features.
+- Up-front ecosystem research before finalizing
+  `docs/specs/avandar-tui-document.md`: survey existing ratatui crates for
+  document viewing and text editing (covering both nano-style modeless editing
+  and vim-style normal/insert editing with cursor motions). Decide whether an
+  existing crate should be wrapped in M9.a or M9.b, and shape `document`'s
+  buffer, cursor, outcomes and settings (read-only by default, with options
+  for allowing edits and selecting the editor style) so M9.b extends M9.a
+  without a breaking redesign.
+- `docs/specs/avandar-tui-document.md`, then `crates/avandar-tui-document`
+  with `markdown` (behind the feature, `pulldown-cmark` 0.13), `document`
+  (scrollable document with or without a cursor), `log` (with live
+  follow/tail mode and bounded tail read), `target` and `open`.
+- The `open` crate in the root manifest (plus any upstream viewer crate if
+  selected by the survey and recorded in `decisions.md`). The architecture
+  spec names no version for `open`, so the current one is chosen when it is
+  added.
+- The umbrella's `document` and `markdown` features.
 
 Inventory elements: dif's markdown to ratatui text, box-drawn table, style
 stack, document view with a cursor, opening what the cursor is on, opener,
@@ -874,7 +898,8 @@ over the document's rendered lines.
 
 ### Out of scope
 
-brain's small markdown renderer, which dif's covers. brain's adoption (M13).
+Editing files (M9.b). brain's small markdown renderer, which dif's covers.
+brain's adoption (M13).
 
 ### Depends on
 
@@ -882,23 +907,90 @@ M4.
 
 ### Exit criteria
 
+- The ratatui viewer/editor survey and the forward-compatible editing design
+  are recorded in `docs/specs/avandar-tui-document.md` (and in `decisions.md`
+  if an upstream crate is chosen).
 - Layers 1 and 2: rendering asserted on `TestBackend` with CJK and emoji, the
   glyph check, and each opener's command line asserted per platform as a pure
   function, with nothing launched.
 - Feature checks: no features, `markdown`, every feature.
 - dif and huckleberry-cli adoptions merged, with their tests passing.
-- Docs: the spec, `architecture.md`.
+- Docs: the spec, `architecture.md`, and a crate README that credits wrapped
+  crates honestly without naming personal source apps.
 
 ### Risks and open questions
 
 | Item | Settled where |
 | --- | --- |
+| Choosing a read-only representation in M9.a that fights M9.b's editor | Settled before code by M9.a's editor crate survey and recorded in `docs/specs/avandar-tui-document.md` |
 | dif renders markdown every frame | The spec caches a rendering per width |
-| dif's document view polls its file | Reading files stays the app's. The view takes text. |
+| dif's document view polls its file | Reading files stays the app's. The document part takes text. |
 | The system handler differs per platform from the `open` command dif calls today | Each platform's command line is asserted as a pure function, as the architecture spec's test row for this crate says |
 
-**Size: medium.** Five modules, pure apart from the opener's thin shell,
-tested in layers 1 and 2, with two adoptions.
+**Size: medium.** Ecosystem research plus five modules, pure apart from the
+opener's thin shell, tested in layers 1 and 2, with two adoptions.
+
+## Milestone 9.b: `avandar-tui-document` (editing)
+
+**Why here.** `avandar-tui-document` is meant to edit files as well as view
+them, while M9.a stayed strictly at read-only parity so the source apps could
+adopt it first. Sequencing M9.b after M9.a and M10 lets vim-style editing
+align with `command::motion` without blocking M10 to M13.
+
+**Goal.** Add opt-in document editing to `avandar-tui-document`, supporting
+both nano-style and vim-style editing controlled by caller options.
+
+### Scope
+
+- Extend `docs/specs/avandar-tui-document.md` with the concrete editing API
+  prepared by M9.a's research, wrapping an existing ratatui editor crate when
+  M9.a's survey found a strong fit.
+- Caller options on `document` controlling whether editing is allowed
+  (read-only by default) and which editor style is active:
+  - **Nano-style editing:** modeless editing with chord shortcuts and
+    status/shortcut hints.
+  - **Vim-style editing:** `Normal` and `Insert` modes with common cursor
+    motions (character, word, line, half-page, top and bottom, counts),
+    aligned with `command::motion` where shared.
+- Undo/redo, dirty-state reporting, bracketed and Windows burst paste
+  handling, cell-width cursor movement across CJK and emoji, and outcome
+  variants reporting save or cancel intents while leaving filesystem writes to
+  the caller or an explicit save helper.
+- Any optional feature gate (if M9.a's chosen editor dependency is heavy)
+  wired through the root manifest and the umbrella crate.
+
+### Out of scope
+
+Syntax highlighting or language-server features, and blocking M10 to M13
+(none of the existing source apps require in-place document editing for
+parity).
+
+### Depends on
+
+M9.a, and M10 for shared motion and key-decoding conventions.
+
+### Exit criteria
+
+- Layers 1 and 2 (plus keyboard harness layers 3 to 7 if editing introduces
+  key sequences not already covered by M10's `widget_lab`): tests covering
+  read-only enforcement, nano-style editing, vim `Normal`/`Insert` transitions
+  and motions, undo/redo, multi-line paste, and CJK/emoji cursor columns.
+- Feature checks: no features, `markdown`, every feature.
+- Crate README updated to explain any wrapped upstream editor crate, the
+  specific functionality `avandar-tui-document` adds, and when callers should
+  use the base crate directly.
+- Docs: `docs/specs/avandar-tui-document.md`, `architecture.md`,
+  `decisions.md`.
+
+### Risks and open questions
+
+| Item | Settled where |
+| --- | --- |
+| Wrapping an upstream ratatui editor crate vs owning the buffer and key modes | Researched in M9.a and finalized in `docs/specs/avandar-tui-document.md` before M9.b code |
+| `Esc` timing and chord handling in vim and nano modes across terminals and tmux | Tested through the pure key handlers and M10's keyboard layers |
+
+**Size: large.** Two editing styles (nano and modal vim), undo/paste/cursor
+invariants across wide characters, and full test coverage.
 
 ## Milestone 10: Widgets: layout and command
 
@@ -1122,7 +1214,7 @@ adoptions.
 **Why here.** brain is the largest source app, and its adoption waits on its
 own move to ratatui 0.30. Its first two steps, the guard and the pane, can
 start as soon as that move is done and M3 and M7 are released, without
-waiting for M8 to M12.
+waiting for M8, M9.a or M10 to M12.
 
 **Goal.** Move brain onto the toolkit, starting with the terminal guard and
 the pane.
@@ -1154,7 +1246,7 @@ the command-line theme.
 
 brain's move to ratatui 0.30 (see
 [Work in other repositories](#work-in-other-repositories)), M3 and M7 to
-start, and M8 to M12 to finish.
+start, and M8, M9.a and M10 to M12 to finish (M9.b does not block brain).
 
 ### Exit criteria
 

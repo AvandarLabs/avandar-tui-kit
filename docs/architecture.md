@@ -27,7 +27,7 @@ docs/
 
 Each building block is its own crate under `crates/`. The `avandar-tui-kit`
 crate owns no code: it re-exports each building block behind a cargo feature
-named for the block (`mouse`, `term`, `pty`, `agent`, `widgets`, `view`,
+named for the block (`mouse`, `term`, `pty`, `agent`, `widgets`, `document`,
 `charts`, `tasks`), with nothing on by default. An app depends on the umbrella
 and turns on the features it wants, or depends on a single building block
 directly.
@@ -49,7 +49,7 @@ the source apps and splits along the heavy dependencies:
 | `avandar-tui-pty` | Embedded terminal panes, key encoding, child supervision | portable-pty, vt100, tui-term |
 | `avandar-tui-agent` | Coding-agent frontends: launch, resume, typing and submitting prompts | the `pty` crate, behind a feature |
 | `avandar-tui-widgets` | Style, layout, command palette and shortcuts, pickers, input and forms | nucleo behind `fuzzy`, tui-tree-widget behind `tree`, walkdir behind `tree-walk`, clap behind `clap`, jiff behind `jiff` |
-| `avandar-tui-view` | Read-only viewers: markdown, documents with a cursor, logs | pulldown-cmark behind `markdown` |
+| `avandar-tui-document` | Opening, viewing and (in M9.b) opt-in editing of documents: markdown, scrollable documents, live-tail logs, target opening, nano/vim editing | pulldown-cmark behind `markdown`, open; upstream editor crate if chosen in M9.a |
 | `avandar-tui-charts` | Text charts and tables | none |
 | `avandar-tui-tasks` | Background work a UI needs | process-wrap behind `process`, tokio behind `tokio` |
 
@@ -64,7 +64,7 @@ Three things are shared across crates, and each has one home:
 
 | Shared | Home |
 | --- | --- |
-| Theme roles, the cell-width function, wrapping and truncation | The `style` module of `avandar-tui-widgets`. The view, charts and pty crates depend on widgets for it, and with no feature on widgets pulls in nothing heavy. |
+| Theme roles, the cell-width function, wrapping and truncation | The `style` module of `avandar-tui-widgets`. The document, charts and pty crates depend on widgets for it, and with no feature on widgets pulls in nothing heavy. |
 | Hit areas for the mouse | `ratatui-mouse`. A widget records plain rectangles, and registers them when its `mouse` feature is on. |
 | Events, rectangles, colors and styles | crossterm's and ratatui's own types. `ratatui-mouse` needs no other crate of the workspace, and it and `avandar-tui-term` speak only in those types. |
 
@@ -110,6 +110,23 @@ what each one does and [`testing.md`](testing.md) for how it is proved.
 
 Adding to this table means saying what the crate is for, in one line, in the
 same change. See `docs/rules/rust.md`.
+
+## Public READMEs and crate docs
+
+Published crate READMEs, `Cargo.toml` metadata, and rustdoc headers follow two
+rules:
+
+- **Be upfront about wrappers.** When a crate or module is a light wrapper or
+  glue layer over existing ecosystem crates (`portable-pty`, `vt100`, and
+  `tui-term` in `avandar-tui-pty`, `tui-tree-widget` or `nucleo-matcher` in
+  `avandar-tui-widgets`, `pulldown-cmark`, `open`, or an upstream editor crate
+  in `avandar-tui-document`), say so plainly at the top, state the specific
+  functionality this crate adds, and tell visitors when they are better off
+  using the base crate directly.
+- **Never leak personal source workflows.** Internal source apps (`brain`,
+  `huckleberry-cli`, and similar personal tools) are recorded only in internal
+  planning docs under `docs/`, never in any README, `Cargo.toml`, or rustdoc
+  published to crates.io or shown as a crate entrypoint.
 
 ## Where the parts come from
 

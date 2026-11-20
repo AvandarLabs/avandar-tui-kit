@@ -37,7 +37,7 @@ is written, not ahead of it.
 | `avandar-tui-pty` | Embedded terminal panes, key encoding, child supervision | `mouse` | `avandar-tui-widgets`; `ratatui-mouse` behind `mouse` |
 | `avandar-tui-agent` | Coding-agent frontends: launch, resume, typing and submitting prompts, message queues | `pty`, `resume-evidence`, `uuid` | `avandar-tui-pty` behind `pty` |
 | `avandar-tui-widgets` | Style, layout, commands and keys, pickers, trees, input and forms | `fuzzy`, `tree`, `tree-walk`, `clap`, `jiff`, `mouse` | `ratatui-mouse` behind `mouse` |
-| `avandar-tui-view` | Read-only viewers: markdown, documents with a cursor, logs, open targets | `markdown` | `avandar-tui-widgets` |
+| `avandar-tui-document` | Document opening, viewing and (in M9.b) opt-in editing: markdown, scrollable documents, logs, open targets, nano/vim editing | `markdown` (plus editor features if M9.a selects an upstream crate) | `avandar-tui-widgets` |
 | `avandar-tui-charts` | Text charts and tables | none | `avandar-tui-widgets` |
 | `avandar-tui-tasks` | Background work a UI needs | `process`, `tokio` | none |
 | `avandar-tui-kit` | The umbrella. Owns no code. | see [The umbrella crate](#the-umbrella-crate) | all eight, each optional |
@@ -53,7 +53,7 @@ avandar-tui-kit ........ every crate below, each one optional
 avandar-tui-agent -----> avandar-tui-pty         only with feature `pty`
 avandar-tui-pty -------> avandar-tui-widgets
 avandar-tui-pty -------> ratatui-mouse           only with feature `mouse`
-avandar-tui-view ------> avandar-tui-widgets
+avandar-tui-document --> avandar-tui-widgets
 avandar-tui-charts ----> avandar-tui-widgets
 avandar-tui-widgets ---> ratatui-mouse           only with feature `mouse`
 avandar-tui-term ------> ratatui-mouse           only with feature `mouse`
@@ -97,8 +97,8 @@ one-line reason, in the change that creates the first crate that uses it.
 | `walkdir` 2 | widgets | `tree-walk` | Directory walking for the file tree |
 | `clap` 4 | widgets | `clap` | Menus generated from a command-line definition |
 | `jiff` 1 | widgets | `jiff` | Calendar types for the time dial and time field |
-| `pulldown-cmark` 0.13 | view | `markdown` | The markdown parser |
-| `open` | view | always | Opens a file or link with the system handler on all three platforms |
+| `pulldown-cmark` 0.13 | document | `markdown` | The markdown parser |
+| `open` | document | always | Opens a file or link with the system handler on all three platforms |
 | `process-wrap` 10 | tasks | `process` | A child in a process group on Unix and a job object on Windows, behind one API |
 | `tokio` 1 | tasks | `tokio` | Async variants of the helpers |
 | `serde_json` 1 | agent | `resume-evidence` | Reading agents' session files |
@@ -233,14 +233,22 @@ Everything that needs nothing heavier than ratatui, in six module families.
 The `mouse` feature adds, to each widget state that records areas, a method
 that registers them in a `ratatui_mouse::HitAreas<T>`.
 
-### `avandar-tui-view`
+### `avandar-tui-document`
 
-Read-only viewers.
+Opening, viewing and (in M9.b) editing documents in different forms.
+
+M9.a delivers read-only parity for the source apps, preceded by an ecosystem
+survey of existing ratatui document-viewer and text-editor crates so the
+buffer, cursor and settings (`is_editable` off by default, plus editor-style
+options) are shaped for editing from the start and can wrap a solid upstream
+crate where one fits. M9.b adds opt-in editing with caller-selectable
+nano-style (modeless chords) and vim-style (`Normal` and `Insert` modes with
+common cursor motions) editing.
 
 | Module | Holds | Inventory elements that land here |
 | --- | --- | --- |
 | `markdown` (feature) | Markdown to ratatui text at a width, tables, the inline style stack | dif: markdown to ratatui text, box-drawn table, style stack |
-| `document` | A styled pager whose cursor is the source of truth, motions, a mode with no cursor | dif: document view with a cursor. huckleberry-cli: pager |
+| `document` | A styled document view whose cursor is the source of truth, motions, a mode with no cursor, and settings shaped for M9.b's opt-in nano and vim editing | dif: document view with a cursor. huckleberry-cli: pager |
 | `log` | A scrollable log, a follow mode fed from outside the draw, a bounded tail read | brain: log viewer, live log-tail modal, bounded log-tail export. dif: activity log (when not a pane) |
 | `target` | The token under a cursor as a URL or a path with a line, links found in text | dif: open what the cursor is on (parsing). brain: links in text |
 | `open` | The `Opener` trait and the built-in ones: the system handler, reveal in the file manager, a new tmux window | dif: opener. brain: OS actions |
@@ -311,7 +319,7 @@ taking the element back in.
 | --- | --- | --- |
 | Theme roles and palettes | `avandar_tui_widgets::style::theme` | `ratatui-mouse` and `avandar-tui-term` take a ratatui `Style` or return a ratatui `Color`. They never name a role. |
 | The cell-width function and the portable-text rewrite | `avandar_tui_widgets::style::width` | `ratatui-mouse` calls ratatui's own `CellWidth` per grapheme cluster, which is what the function is defined as. |
-| Wrapping, truncation, column fitting | `avandar_tui_widgets::style` | Only widgets, view, charts and pty need them. |
+| Wrapping, truncation, column fitting | `avandar_tui_widgets::style` | Only widgets, document, charts and pty need them. |
 | Hit areas | `ratatui_mouse::HitAreas<T>` | A widget records plain ratatui `Rect`s in its state. The app, or the widget's `mouse` feature, registers them. |
 | Outcome enums | A convention, not a type | Each part defines its own enum. See below. |
 | Errors | A convention, not a type | Each crate defines its own enum. See below. |
@@ -454,7 +462,7 @@ named for the block. Nothing is on by default.
 | `pty` | `avandar-tui-pty` | `avandar_tui_kit::pty` |
 | `agent` | `avandar-tui-agent` | `avandar_tui_kit::agent` |
 | `widgets` | `avandar-tui-widgets` | `avandar_tui_kit::widgets` |
-| `view` | `avandar-tui-view` | `avandar_tui_kit::view` |
+| `document` | `avandar-tui-document` | `avandar_tui_kit::document` |
 | `charts` | `avandar-tui-charts` | `avandar_tui_kit::charts` |
 | `tasks` | `avandar-tui-tasks` | `avandar_tui_kit::tasks` |
 
@@ -464,7 +472,7 @@ on as well:
 | Feature | Turns on |
 | --- | --- |
 | `fuzzy`, `tree`, `tree-walk`, `clap`, `jiff` | `widgets`, and that feature of the widgets crate |
-| `markdown` | `view`, and `markdown` of the view crate |
+| `markdown` | `document`, and `markdown` of the document crate |
 | `process`, `tokio` | `tasks`, and that feature of the tasks crate |
 | `resume-evidence`, `uuid` | `agent`, and that feature of the agent crate |
 | `full` | Everything. For the API docs and for tests. |
@@ -507,9 +515,9 @@ bindings, because `unsafe` is forbidden.
 | The default environment allowlist | `HOME`, `PATH`, `SHELL`, `TERM`, `LANG`, `LC_*`, `USER`, `TMPDIR` | `SystemRoot`, `PATH`, `PATHEXT`, `COMSPEC`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `TEMP`, `TMP`, `USERNAME` | `pty::env` | data |
 | The local clipboard tool | macOS: `pbcopy`. Linux: `wl-copy` when Wayland is in use, then `xclip`, then `xsel`. Under WSL: `clip.exe`. | `clip.exe`, fed UTF-16 so text outside ASCII survives | `term::clipboard` | `std::process` |
 | The clipboard over OSC 52 | Plain, and wrapped for tmux when inside tmux | Plain | `term::clipboard` | bytes |
-| Opening a file or link | `open`, `xdg-open` | The system handler | `view::open` | the `open` crate |
-| Revealing a file | macOS: `open -R`. Linux: open the parent directory. | `explorer /select,` | `view::open` | `std::process` |
-| An editor in a new window | A new tmux window when inside tmux. Otherwise the app's own `Opener`. | The app's own `Opener` | `view::open` | `std::process` |
+| Opening a file or link | `open`, `xdg-open` | The system handler | `document::open` | the `open` crate |
+| Revealing a file | macOS: `open -R`. Linux: open the parent directory. | `explorer /select,` | `document::open` | `std::process` |
+| An editor in a new window | A new tmux window when inside tmux. Otherwise the app's own `Opener`. | The app's own `Opener` | `document::open` | `std::process` |
 | The home directory | `std::env::home_dir` | The same | `style::fit`, `tree` | std |
 
 Rules that follow from the table:
@@ -721,6 +729,18 @@ Tagging and pushing are done by a person or with their explicit say-so. When
 publishing to crates.io starts, `release-plz` takes over steps 3 and 4 and
 publishes in dependency order.
 
+### Published READMEs and crate docs
+
+- **Honesty about wrappers.** When a crate or module is a light wrapper or glue
+  layer over upstream crates, its README and rustdoc say so upfront, explain
+  the specific functionality added on top, and recommend using the base crate
+  directly when a caller does not need that extra layer. We do not try to sell
+  visitors on our crates over the base crates they wrap.
+- **No personal workflow leaks.** Published READMEs, `Cargo.toml` fields, and
+  rustdoc never mention personal or internal source apps (`brain`,
+  `huckleberry-cli`, and similar private workflows). Those references stay in
+  internal planning docs under `docs/`.
+
 ### Minimum Rust version
 
 - `rust-version` is 1.88, the floor ratatui 0.30 sets, declared once.
@@ -805,7 +825,7 @@ directory, that follows the rules in `testing.md`:
 | `avandar-tui-pty` | 1 to 4, 6, 7 | `pane_lab`, with `echo_input` as its child | Keys, pastes and forwarded mouse events typed at the outer terminal arrive in the child as the expected bytes. A resize reaches the child. Killing the pane leaves no process behind. |
 | `avandar-tui-agent` | 1, 2, and 3 and 7 through `pane_lab` | A stub agent that records what it was sent and when | A prompt arrives as one paste, and the submit key as a later, separate write. No real agent runs in CI. |
 | `avandar-tui-widgets` | 1, 2, and 3 to 7 for key decoding | `widget_lab` | Chords, Option glyphs and Alt keys decode to the same motions in every configuration |
-| `avandar-tui-view` | 1, 2 | none | The opener's command line is asserted per platform as a pure function. Nothing is launched. |
+| `avandar-tui-document` | 1, 2 (and keyboard harness if M9.b adds key paths beyond M10) | none in M9.a | The opener's command line is asserted per platform as a pure function, with nothing launched; M9.b asserts read-only gating plus nano and vim editing states. |
 | `avandar-tui-charts` | 1, 2 | none | Buffers, and the glyph check from [Text width](#text-width) |
 | `avandar-tui-tasks` | 1, 2, 7 | none | Real threads and real children in `cargo test` on all three platforms. No child outlives its handle. |
 | `avandar-tui-kit` | 1 | none | Every feature compiles alone and all together |
@@ -818,7 +838,7 @@ published crates and is the first milestone, with the capability probe.
 
 Each has a recommendation. None blocks the mouse crate.
 
-1. **Do the shared primitives need a ninth crate?** `avandar-tui-view`,
+1. **Do the shared primitives need a ninth crate?** `avandar-tui-document`,
    `avandar-tui-charts` and `avandar-tui-pty` depend on `avandar-tui-widgets`
    only for its `style` module. *Recommendation: stay at eight for now.*
    With no feature on, widgets is plain Rust over ratatui, so the cost is

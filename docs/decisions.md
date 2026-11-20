@@ -142,7 +142,7 @@ one of these two stops being used.
 
 **Decision.** The umbrella crate re-exports eight building blocks:
 `ratatui-mouse`, `avandar-tui-term`, `avandar-tui-pty`, `avandar-tui-agent`,
-`avandar-tui-widgets`, `avandar-tui-view`, `avandar-tui-charts` and
+`avandar-tui-widgets`, `avandar-tui-document`, `avandar-tui-charts` and
 `avandar-tui-tasks`. The table in `docs/architecture.md` says what each owns.
 
 **Why.** The inventory found about 175 extractable elements, roughly twice
@@ -424,8 +424,8 @@ sequences drawn and accepts the misalignment.
 ## Shared primitives live in the widgets crate's style module
 
 **Decision.** Theme roles, the width function, wrapping, truncation and
-column fitting live in `avandar_tui_widgets::style`. The view, charts and pty
-crates depend on the widgets crate for them. `ratatui-mouse` and
+column fitting live in `avandar_tui_widgets::style`. The document, charts and
+pty crates depend on the widgets crate for them. `ratatui-mouse` and
 `avandar-tui-term` take and return ratatui's own types instead, and depend on
 neither. Hit areas live in `ratatui-mouse`.
 
@@ -532,3 +532,55 @@ published, versioned `ratatui-mouse`. The API has to be settled by then,
 because a published name and version are permanent.
 
 **Revisit when.** `dif`'s adoption shows the API still needs breaking changes.
+
+## `avandar-tui-document` starts with read-only parity and grows into opt-in editing
+
+**Decision.** The document crate is named `avandar-tui-document` (re-exported
+as `document` in the umbrella), covering documents opened in any of the
+toolkit's forms: markdown, scrollable documents with or without a cursor,
+live-followed logs, and cursor-targeted file or URL opening. It is built in two
+milestones: M9.a delivers read-only parity for the source apps and surveys
+existing ratatui document-viewer and text-editor crates up front so its types
+and settings leave room for editing; M9.b adds opt-in file editing with
+caller-chosen editor styles (nano-style modeless chords and vim-style normal
+and insert modes with common cursor motions), wrapping an existing ratatui
+crate when one fits.
+
+**Why.** `avandar-tui-view` sounded like a generic layout container or base
+view trait rather than a document opener and reader. Keeping M9.a strictly at
+read-only parity moves the source apps onto the crate without waiting on an
+editor, while doing the editor research in M9.a keeps M9.b from forcing a
+breaking redesign of the document state and options.
+
+**Consequences.** Callers pass options controlling whether editing is allowed
+(read-only by default) and which editor style (`nano` or `vim`) is active when
+it is. M9.b does not block M10 to M13 because none of the source apps need
+in-place file editing for parity, and placing M9.b after M10 lets vim-style
+editing share `command::motion` where it fits.
+
+**Revisit when.** M9.a's ecosystem survey finds an upstream crate whose buffer
+model changes the split between the read-only and editable paths.
+
+## Published READMEs and crate docs are upfront about wrappers and never leak personal workflows
+
+**Decision.** Every published README and rustdoc crate header states plainly
+when a crate or module is a thin wrapper or glue layer over upstream crates,
+names those base crates, explains the specific behavior our crate adds, and
+recommends depending on the base crate directly when a visitor does not need
+that extra layer. Published READMEs, rustdoc comments, and `Cargo.toml`
+metadata never mention personal or internal source apps (`brain`,
+`huckleberry-cli`, and similar private workflows) that inspired the toolkit.
+
+**Why.** Visitors evaluating a dependency deserve an honest description of what
+the crate actually builds rather than salesmanship, and wrapping a solid
+ecosystem crate is welcome when credited clearly. At the same time, honesty is
+about technical scope, not exposing personal workflows or private repositories
+on crates.io and docs.rs.
+
+**Consequences.** Milestone 2 and every subsequent crate milestone verify both
+rules before release: wrapped crates are credited with guidance on when to use
+them directly, and personal app names stay strictly inside repository planning
+docs under `docs/`, never in published READMEs, `Cargo.toml` fields, or
+rustdoc.
+
+**Revisit when.** Never.
