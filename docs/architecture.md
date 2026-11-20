@@ -12,11 +12,13 @@ Cargo.toml              the workspace: members, shared package settings,
 crates/
 └── avandar-tui-kit/    the umbrella crate: re-exports the others behind features
 docs/
+├── archive/            completed specs, moved from specs/ for reference
 ├── architecture.md     this file
 ├── decisions.md        one section per decision worth remembering
 ├── inventory/          every extractable UI element in the source apps
 ├── milestones.md       the order the crates are built in, and what ends each
-├── specs/              the designs the crates are built from
+├── plans/              in-progress or queued implementation plans (deleted on completion)
+├── specs/              unimplemented designs waiting to be built
 ├── terminals.md        the first-class terminals and platforms, and what each does
 ├── testing.md          the test layers, where each runs, and the rules for them
 ├── rules/              how code is written here

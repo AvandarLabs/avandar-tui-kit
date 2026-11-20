@@ -84,11 +84,15 @@ These apply to M1 and M3 to M12, and are not repeated in each.
    layout tree, dependencies table), `decisions.md` for any new decision,
    `terminals.md` for any new measurement, and the crate's own README and
    rustdoc, which say how it degrades wherever a configuration lacks
-   something. Where a crate or module is a light wrapper over upstream crates,
-   its README states that upfront, names what specific functionality it adds,
-   and tells visitors when to use the base crate instead. Published READMEs,
-   `Cargo.toml` metadata and rustdoc never name personal or internal source
-   apps (`brain`, `huckleberry-cli`, and similar private workflows).
+   something. Any completed implementation plan in `docs/plans/` is deleted,
+   and once a spec is fully implemented it moves from `docs/specs/` to
+   `docs/archive/` (multi-milestone specs such as `avandar-tui-widgets.md` and
+   `avandar-tui-document.md` move when their final milestone completes). Where
+   a crate or module is a light wrapper over upstream crates, its README states
+   that upfront, names what specific functionality it adds, and tells visitors
+   when to use the base crate instead. Published READMEs, `Cargo.toml`
+   metadata and rustdoc never name personal or internal source apps (`brain`,
+   `huckleberry-cli`, and similar private workflows).
 6. **A release, then an adoption.** The crate ships in a release (see
    [Releases](#releases)). The named app then follows "How an app adopts a
    crate" in the architecture spec: it replaces its module with the part,

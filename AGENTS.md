@@ -52,6 +52,14 @@
 - Write docs at a high level: what a module or feature does, how the pieces fit
   together, and why the key decisions were made. Do not restate the code
   line by line.
+- **Lifecycle of `docs/specs/`, `docs/plans/` and `docs/archive/`:**
+  - `docs/specs/` holds only specs for work that has **not been implemented
+    yet**.
+  - `docs/plans/` holds only implementation plans that are **in progress or
+    queued to be done**.
+  - Once an implementation is completed, **delete its implementation plan from
+    `docs/plans/`** (completed plans are never kept) and **move its associated
+    spec from `docs/specs/` to `docs/archive/`** for future reference.
 - Before writing code, read the relevant files in `docs/` first (see
   "Implementation approaches").
 - If Context7 MCP is configured, use it to reference the most up-to-date
