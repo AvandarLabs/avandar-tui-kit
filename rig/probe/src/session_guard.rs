@@ -92,20 +92,20 @@ impl TerminalSessionGuard {
     ///
     /// Returns an [`io::Error`] if `crossterm::terminal::enable_raw_mode` fails on an active TTY.
     pub fn acquire(is_tty_available: bool) -> io::Result<Self> {
+        if !is_tty_available {
+            return Ok(Self {
+                state: Arc::new(SharedSessionState::default()),
+            });
+        }
         let state = Arc::clone(shared_session_state());
+        crossterm::terminal::enable_raw_mode()?;
         state.is_kitty_pushed.store(false, Ordering::Release);
         #[cfg(windows)]
         state
             .is_windows_mouse_captured
             .store(false, Ordering::Release);
-        if is_tty_available {
-            crossterm::terminal::enable_raw_mode()?;
-            state.is_raw_mode_enabled.store(true, Ordering::Release);
-            state.has_active_session.store(true, Ordering::Release);
-        } else {
-            state.is_raw_mode_enabled.store(false, Ordering::Release);
-            state.has_active_session.store(false, Ordering::Release);
-        }
+        state.is_raw_mode_enabled.store(true, Ordering::Release);
+        state.has_active_session.store(true, Ordering::Release);
         Ok(Self { state })
     }
 
@@ -214,12 +214,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn detached_guard_and_writer_leave_session_inactive_and_drop_cleanly() {
+    fn detached_guard_and_writer_do_not_touch_shared_panic_hook_state() {
+        let global_state = shared_session_state();
+        global_state.is_kitty_pushed.store(true, Ordering::Release);
+
         let guard = TerminalSessionGuard::acquire(false).expect("detached guard must succeed");
-        guard.set_kitty_pushed(true);
+        assert!(!Arc::ptr_eq(&guard.state, global_state));
+        assert!(global_state.is_kitty_pushed.load(Ordering::Acquire));
+
+        guard.set_kitty_pushed(false);
+        assert!(global_state.is_kitty_pushed.load(Ordering::Acquire));
         assert!(!guard.state.has_active_session.load(Ordering::Acquire));
         drop(guard);
 
+        global_state.is_kitty_pushed.store(false, Ordering::Release);
         let writer = TerminalWriter {
             target: OutputTarget::Detached,
         };

@@ -350,6 +350,17 @@ impl RawQuerySession {
         drop(self.reader.take());
         self.writer
     }
+
+    #[cfg(test)]
+    pub(crate) const fn for_test(reader: DemandByteReader) -> Self {
+        Self {
+            writer: TerminalWriter {
+                target: OutputTarget::Detached,
+            },
+            reader: Some(reader),
+            has_fence_timed_out: false,
+        }
+    }
 }
 
 /// Drains immediately available events after `first_event` and counts leading key-press events.

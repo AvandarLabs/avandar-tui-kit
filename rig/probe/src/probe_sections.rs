@@ -76,6 +76,32 @@ fn run_mouse_modes_section(session: &mut RawQuerySession, log: &mut JsonLog) -> 
     log.write_line(&json_line)
 }
 
+fn push_and_pop_kitty_flags(
+    session: &mut RawQuerySession,
+    guard: &TerminalSessionGuard,
+    log: &mut JsonLog,
+) -> io::Result<(Option<u16>, Option<u16>, bool)> {
+    // Mark Kitty pushed on the guard before writing `>1u` so any panic/error pops the stack,
+    // and emit `<u` via `write_raw` so a timeout on `pushed_query` never skips popping.
+    guard.set_kitty_pushed(true);
+    session.write_raw("kitty_keyboard:push", KITTY_KEYBOARD_PUSH_DISAMBIGUATE, log)?;
+    let pushed_reply =
+        session.query_fenced("kitty_keyboard:pushed_query", KITTY_KEYBOARD_QUERY, log)?;
+    session.write_raw("kitty_keyboard:pop", KITTY_KEYBOARD_POP, log)?;
+    guard.set_kitty_pushed(false);
+    let popped_reply =
+        session.query_fenced("kitty_keyboard:popped_query", KITTY_KEYBOARD_QUERY, log)?;
+    Ok((
+        parse_kitty_flags_replies(&pushed_reply.bytes)
+            .first()
+            .copied(),
+        parse_kitty_flags_replies(&popped_reply.bytes)
+            .first()
+            .copied(),
+        pushed_reply.has_timed_out || popped_reply.has_timed_out,
+    ))
+}
+
 fn run_kitty_keyboard_section(
     session: &mut RawQuerySession,
     guard: &TerminalSessionGuard,
@@ -91,29 +117,20 @@ fn run_kitty_keyboard_section(
     }
     let initial_reply =
         session.query_fenced("kitty_keyboard:initial_query", KITTY_KEYBOARD_QUERY, log)?;
-    // Mark Kitty pushed on the guard before writing `>1u` so any panic/error pops the stack.
-    guard.set_kitty_pushed(true);
-    let push_query = [KITTY_KEYBOARD_PUSH_DISAMBIGUATE, KITTY_KEYBOARD_QUERY].concat();
-    let pushed_reply = session.query_fenced("kitty_keyboard:push_and_query", &push_query, log)?;
-    let pop_query = [KITTY_KEYBOARD_POP, KITTY_KEYBOARD_QUERY].concat();
-    let popped_reply = session.query_fenced("kitty_keyboard:pop_and_query", &pop_query, log)?;
-    guard.set_kitty_pushed(false);
-
-    let has_timed_out =
-        initial_reply.has_timed_out || pushed_reply.has_timed_out || popped_reply.has_timed_out;
-    let json_line = format_kitty_section(
-        parse_kitty_flags_replies(&initial_reply.bytes)
-            .first()
-            .copied(),
-        parse_kitty_flags_replies(&pushed_reply.bytes)
-            .first()
-            .copied(),
-        parse_kitty_flags_replies(&popped_reply.bytes)
-            .first()
-            .copied(),
+    let initial_flags = parse_kitty_flags_replies(&initial_reply.bytes)
+        .first()
+        .copied();
+    if initial_reply.has_timed_out {
+        return log.write_line(&format_kitty_section(initial_flags, None, None, true));
+    }
+    let (pushed_flags, popped_flags, has_timed_out) =
+        push_and_pop_kitty_flags(session, guard, log)?;
+    log.write_line(&format_kitty_section(
+        initial_flags,
+        pushed_flags,
+        popped_flags,
         has_timed_out,
-    );
-    log.write_line(&json_line)
+    ))
 }
 
 fn probe_single_mode(
@@ -124,13 +141,26 @@ fn probe_single_mode(
     disable_bytes: &[u8],
     log: &mut JsonLog,
 ) -> io::Result<(SingleModeProbe, bool)> {
+    if !session.is_raw_query_supported() || session.has_fence_timed_out() {
+        return Ok((
+            SingleModeProbe {
+                mode,
+                name,
+                after_enable: None,
+                after_disable: None,
+            },
+            session.has_fence_timed_out(),
+        ));
+    }
     let decrpm = build_decrpm_query(mode);
-    let enable_payload = [enable_bytes, &decrpm].concat();
+    session.write_raw(&format!("modes:{name}:enable"), enable_bytes, log)?;
     let enable_reply =
-        session.query_fenced(&format!("modes:{name}:enable"), &enable_payload, log)?;
-    let disable_payload = [disable_bytes, &decrpm].concat();
+        session.query_fenced(&format!("modes:{name}:enable_decrpm"), &decrpm, log)?;
+    // Always write `disable_bytes` via `write_raw` so a fence timeout on `enable_decrpm` never
+    // leaves bracketed paste, focus reporting, or synchronized output enabled.
+    session.write_raw(&format!("modes:{name}:disable"), disable_bytes, log)?;
     let disable_reply =
-        session.query_fenced(&format!("modes:{name}:disable"), &disable_payload, log)?;
+        session.query_fenced(&format!("modes:{name}:disable_decrpm"), &decrpm, log)?;
     let probe_result = SingleModeProbe {
         mode,
         name,
@@ -231,4 +261,78 @@ pub fn run_all_probe_sections(
     let mut writer = session.into_writer();
     let color_listener = run_background_color_section(&mut writer, args.is_batch, log)?;
     Ok((writer, color_listener))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::fs;
+    use std::io::Read;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+    use crate::terminal_io::DemandByteReader;
+
+    static NEXT_SECTION_TEST_ID: AtomicUsize = AtomicUsize::new(1);
+
+    struct ChunkSequenceReader {
+        chunks: VecDeque<Vec<u8>>,
+    }
+
+    impl Read for ChunkSequenceReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            let Some(chunk) = self.chunks.pop_front() else {
+                return Ok(0);
+            };
+            buffer[..chunk.len()].copy_from_slice(&chunk);
+            Ok(chunk.len())
+        }
+    }
+
+    fn temp_log_path() -> PathBuf {
+        let id = NEXT_SECTION_TEST_ID.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "rig-probe-sections-{}-{id}.jsonl",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn kitty_keyboard_pops_stack_even_when_pushed_query_fence_times_out() {
+        let log_path = temp_log_path();
+        let mut log = JsonLog::create(&log_path).expect("log must create");
+        let reader = DemandByteReader::spawn(ChunkSequenceReader {
+            // Answers initial_query (`?0u` + DA1), then EOF on pushed_query to trigger timeout.
+            chunks: VecDeque::from([b"\x1b[?0u\x1b[?6c".to_vec()]),
+        });
+        let mut session = RawQuerySession::for_test(reader);
+        let guard = TerminalSessionGuard::acquire(false).expect("detached guard");
+
+        run_kitty_keyboard_section(&mut session, &guard, &mut log)
+            .expect("kitty section must recover cleanly");
+        let logged = fs::read_to_string(&log_path).expect("log must be readable");
+        let _ = fs::remove_file(&log_path);
+
+        assert!(logged.contains("\"hex\":\"1b5b3e3175"));
+        assert!(logged.contains("\"hex\":\"1b5b3c75"));
+    }
+
+    #[test]
+    fn modes_section_disables_toggled_mode_when_enable_fence_times_out() {
+        let log_path = temp_log_path();
+        let mut log = JsonLog::create(&log_path).expect("log must create");
+        let reader = DemandByteReader::spawn(ChunkSequenceReader {
+            chunks: VecDeque::new(),
+        });
+        let mut session = RawQuerySession::for_test(reader);
+
+        run_modes_section(&mut session, &mut log).expect("modes section must recover cleanly");
+        let logged = fs::read_to_string(&log_path).expect("log must be readable");
+        let _ = fs::remove_file(&log_path);
+
+        assert!(logged.contains("1b5b3f3230303468"));
+        assert!(logged.contains("1b5b3f323030346c"));
+        assert!(!logged.contains("1b5b3f3130303468"));
+    }
 }
