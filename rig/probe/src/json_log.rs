@@ -37,6 +37,8 @@ pub fn escape_json_string(input: &str) -> String {
 /// Returns the `.ready` sentinel path paired with `log_path` (`<log_path>.ready`).
 #[must_use]
 pub fn ready_file_path(log_path: &Path) -> PathBuf {
+    // Append `.ready` directly via `OsString` instead of `Path::with_extension`, which would
+    // replace `.jsonl` (`probe.jsonl` -> `probe.ready`) rather than producing `probe.jsonl.ready`.
     let mut sentinel_os_string = log_path.as_os_str().to_os_string();
     sentinel_os_string.push(".ready");
     PathBuf::from(sentinel_os_string)
@@ -90,6 +92,8 @@ impl JsonLog {
     ///
     /// Returns an [`io::Error`] if writing the ready record or creating the `.ready` file fails.
     pub fn mark_ready(&mut self) -> io::Result<()> {
+        // `write_line` flushes `{"kind":"ready"}` before creating the `.ready` sentinel file so any
+        // harness waking on `.ready` observes the flushed ready line and all prior records.
         self.write_line("{\"kind\":\"ready\"}")?;
         fs::write(&self.ready_path, b"ready\n")
     }

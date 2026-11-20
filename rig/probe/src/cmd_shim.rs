@@ -16,13 +16,19 @@ pub fn quote_cmd_arg(argument: &str) -> String {
             '\0' | '\r' | '\n' => {}
             '\\' => pending_backslashes += 1,
             '"' => {
+                // UCRT / CommandLineToArgvW halves backslashes only when immediately preceding `"`.
                 quoted.extend(std::iter::repeat_n('\\', pending_backslashes * 2));
                 pending_backslashes = 0;
+                // Close quote, emit `\^^^"` (`cmd /S /C` pass 1 -> `\^"`, `.cmd %*` pass 2 -> `\"`),
+                // then reopen quote so both `cmd.exe` passes and `CommandLineToArgvW` stay in-quotes.
                 quoted.push_str("\"\\^^^\"\"");
             }
             '%' => {
+                // Backslashes before non-quote characters are literal in `CommandLineToArgvW` (1:1).
                 quoted.extend(std::iter::repeat_n('\\', pending_backslashes));
                 pending_backslashes = 0;
+                // Pass 1 expands `%cd:~,%` to `""` leaving literal `%`; `.cmd %*` pass 2 scans past
+                // `%*` without re-expanding `%VAR%` or `%1`.
                 quoted.push_str("%%cd:~,%");
             }
             plain_char => {
@@ -32,6 +38,7 @@ pub fn quote_cmd_arg(argument: &str) -> String {
             }
         }
     }
+    // Double trailing backslashes so they do not escape the closing quote in `CommandLineToArgvW`.
     quoted.extend(std::iter::repeat_n('\\', pending_backslashes * 2));
     quoted.push('"');
     quoted
@@ -54,12 +61,12 @@ mod tests {
     use super::*;
 
     fn simulate_cmd_line_pass(raw_command_line: &str) -> String {
-        let stripped = raw_command_line
+        let stripped_line = raw_command_line
             .strip_prefix('"')
-            .and_then(|rest| rest.strip_suffix('"'))
+            .and_then(|remaining_line| remaining_line.strip_suffix('"'))
             .expect("outer /S quotes required");
-        let after_percent = stripped.replace("%%cd:~,%", "%");
-        strip_unquoted_carets_and_forbid_operators(&after_percent)
+        let percent_expanded_line = stripped_line.replace("%%cd:~,%", "%");
+        strip_unquoted_carets_and_forbid_operators(&percent_expanded_line)
     }
 
     fn strip_unquoted_carets_and_forbid_operators(line: &str) -> String {
@@ -94,8 +101,8 @@ mod tests {
 
     #[derive(Default)]
     struct WindowsArgvDecoder {
-        parsed_args: Vec<String>,
-        current_arg: String,
+        parsed_arguments: Vec<String>,
+        current_argument: String,
         is_in_quotes: bool,
         was_in_quotes: bool,
         backslash_count: usize,
@@ -103,12 +110,12 @@ mod tests {
 
     impl WindowsArgvDecoder {
         fn feed_quote(&mut self) {
-            self.current_arg
+            self.current_argument
                 .extend(std::iter::repeat_n('\\', self.backslash_count / 2));
             let is_escaped_quote = !self.backslash_count.is_multiple_of(2);
             self.backslash_count = 0;
             if is_escaped_quote || self.was_in_quotes {
-                self.current_arg.push('"');
+                self.current_argument.push('"');
                 self.was_in_quotes = false;
             } else {
                 self.was_in_quotes = self.is_in_quotes;
@@ -124,31 +131,32 @@ mod tests {
                 }
                 '"' => self.feed_quote(),
                 ' ' | '\t' if !self.is_in_quotes => {
-                    self.current_arg
+                    self.current_argument
                         .extend(std::iter::repeat_n('\\', self.backslash_count));
-                    if !self.current_arg.is_empty() || self.was_in_quotes {
-                        self.parsed_args.push(std::mem::take(&mut self.current_arg));
+                    if !self.current_argument.is_empty() || self.was_in_quotes {
+                        self.parsed_arguments
+                            .push(std::mem::take(&mut self.current_argument));
                     }
                     self.backslash_count = 0;
                     self.was_in_quotes = false;
                 }
                 other_char => {
-                    self.current_arg
+                    self.current_argument
                         .extend(std::iter::repeat_n('\\', self.backslash_count));
                     self.backslash_count = 0;
                     self.was_in_quotes = false;
-                    self.current_arg.push(other_char);
+                    self.current_argument.push(other_char);
                 }
             }
         }
 
         fn finish(mut self) -> Vec<String> {
-            self.current_arg
+            self.current_argument
                 .extend(std::iter::repeat_n('\\', self.backslash_count));
-            if !self.current_arg.is_empty() || self.was_in_quotes || self.is_in_quotes {
-                self.parsed_args.push(self.current_arg);
+            if !self.current_argument.is_empty() || self.was_in_quotes || self.is_in_quotes {
+                self.parsed_arguments.push(self.current_argument);
             }
-            self.parsed_args
+            self.parsed_arguments
         }
     }
 
@@ -238,6 +246,8 @@ mod tests {
 
         fn execute_cmd_shim(shim_path: &Path, dump_path: &Path, arguments: &[&str]) -> Vec<String> {
             let invocation = build_cmd_shim_invocation(shim_path, arguments);
+            // `raw_arg` is required because `Command::arg` applies MSVCRT `\"` escaping,
+            // which breaks `cmd.exe /S /C` outer-quote stripping.
             let status = Command::new("cmd.exe")
                 .env("RIG_PROBE_DUMP", dump_path)
                 .env("RIG_PROBE_SECRET", "EXPANDED_BY_MISTAKE")

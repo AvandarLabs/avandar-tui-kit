@@ -129,9 +129,9 @@ mod tests {
             ("zwsp", "emoji_split", "\u{200B}"),
         ];
         for (expected_name, expected_category, expected_text) in expected_samples {
-            let found = find_sample(expected_name);
-            assert_eq!(found.category, expected_category);
-            assert_eq!(found.text, expected_text);
+            let found_sample = find_sample(expected_name);
+            assert_eq!(found_sample.category, expected_category);
+            assert_eq!(found_sample.text, expected_text);
         }
     }
 
@@ -157,9 +157,9 @@ mod tests {
             ("private_use_icon", "\u{E0B0}"),
         ];
         for (expected_name, expected_text) in expected_glyphs {
-            let found = find_sample(expected_name);
-            assert_eq!(found.category, "toolkit_glyph");
-            assert_eq!(found.text, expected_text);
+            let found_sample = find_sample(expected_name);
+            assert_eq!(found_sample.category, "toolkit_glyph");
+            assert_eq!(found_sample.text, expected_text);
         }
     }
 

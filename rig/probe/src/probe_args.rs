@@ -21,11 +21,11 @@ where
     let Some(raw_value) = iterator.next() else {
         return Err(format!("missing value for {flag_name}"));
     };
-    let value_str = raw_value.as_ref();
-    if value_str.is_empty() {
+    let value_text = raw_value.as_ref();
+    if value_text.is_empty() {
         return Err(format!("{flag_name} value must not be empty"));
     }
-    Ok(value_str.to_owned())
+    Ok(value_text.to_owned())
 }
 
 #[derive(Default)]
@@ -61,7 +61,9 @@ impl PartialProbeArgs {
                 }
                 self.osc52_token = Some(take_non_empty_flag_value("--osc52", iterator)?);
             }
-            unexpected_arg => return Err(format!("unexpected argument: {unexpected_arg}")),
+            unexpected_argument => {
+                return Err(format!("unexpected argument: {unexpected_argument}"));
+            }
         }
         Ok(())
     }
@@ -123,23 +125,40 @@ mod tests {
 
     #[test]
     fn rejects_missing_empty_duplicate_and_unknown_arguments() {
-        let invalid_cases: &[&[&str]] = &[
-            &[],
-            &["--batch"],
-            &["--log"],
-            &["--log", ""],
-            &["--log", "a.jsonl", "--log", "b.jsonl"],
-            &["--log", "a.jsonl", "--batch", "--batch"],
-            &["--log", "a.jsonl", "--osc52"],
-            &["--log", "a.jsonl", "--osc52", ""],
-            &["--log", "a.jsonl", "--osc52", "one", "--osc52", "two"],
-            &["--log", "a.jsonl", "--unknown"],
-            &["positional"],
+        let invalid_cases: &[(&[&str], &str)] = &[
+            (&[], "missing required --log"),
+            (&["--batch"], "missing required --log"),
+            (&["--log"], "missing value for --log"),
+            (&["--log", ""], "--log value must not be empty"),
+            (&["--log", "a.jsonl", "--log", "b.jsonl"], "duplicate --log"),
+            (
+                &["--log", "a.jsonl", "--batch", "--batch"],
+                "duplicate --batch",
+            ),
+            (
+                &["--log", "a.jsonl", "--osc52"],
+                "missing value for --osc52",
+            ),
+            (
+                &["--log", "a.jsonl", "--osc52", ""],
+                "--osc52 value must not be empty",
+            ),
+            (
+                &["--log", "a.jsonl", "--osc52", "one", "--osc52", "two"],
+                "duplicate --osc52",
+            ),
+            (
+                &["--log", "a.jsonl", "--unknown"],
+                "unexpected argument: --unknown",
+            ),
+            (&["positional"], "unexpected argument: positional"),
         ];
-        for &case_args in invalid_cases {
+        for &(case_args, expected_substring) in invalid_cases {
+            let error_message =
+                parse_probe_args(case_args).expect_err("invalid arguments should fail");
             assert!(
-                parse_probe_args(case_args).is_err(),
-                "expected Err for {case_args:?}"
+                error_message.contains(expected_substring),
+                "expected {expected_substring:?} in {error_message:?} for {case_args:?}"
             );
         }
     }

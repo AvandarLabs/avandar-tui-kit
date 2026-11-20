@@ -37,6 +37,8 @@ fn non_empty_variable<F>(lookup: &F, variable_name: &str) -> Option<String>
 where
     F: Fn(&str) -> Option<String>,
 {
+    // Empty values count as absent: `NO_COLOR=""` overrides an inherited `NO_COLOR=1` per
+    // no-color.org (Detection Rule 2), and cleared exports like `TMUX=""` mean inactive.
     lookup(variable_name).filter(|variable_value| !variable_value.is_empty())
 }
 
