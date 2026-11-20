@@ -361,6 +361,27 @@ impl RawQuerySession {
             has_fence_timed_out: false,
         }
     }
+
+    #[cfg(test)]
+    pub(crate) const fn detached_for_test() -> Self {
+        Self::detached()
+    }
+}
+
+pub(crate) fn count_leading_press_burst(events: &[Event]) -> usize {
+    let mut burst_press_count = 0;
+    for event in events {
+        match event {
+            Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
+                burst_press_count += 1;
+            }
+            // Windows ConPTY interleaves `Release` after each pasted `Press`; skip `Release`
+            // so the leading press burst count matches the pasted character count.
+            Event::Key(key_event) if key_event.kind == KeyEventKind::Release => {}
+            _ => break,
+        }
+    }
+    burst_press_count
 }
 
 /// Drains immediately available events after `first_event` and counts leading key-press events.
@@ -376,18 +397,7 @@ where
     while let Some(next_event) = poll_zero()? {
         events.push(next_event);
     }
-    let mut burst_press_count = 0;
-    for event in &events {
-        match event {
-            Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
-                burst_press_count += 1;
-            }
-            // Windows ConPTY interleaves `Release` after each pasted `Press`; skip `Release`
-            // so the leading press burst count matches the pasted character count.
-            Event::Key(key_event) if key_event.kind == KeyEventKind::Release => {}
-            _ => break,
-        }
-    }
+    let burst_press_count = count_leading_press_burst(&events);
     Ok((events, burst_press_count))
 }
 
@@ -436,7 +446,7 @@ mod tests {
 
     #[test]
     fn drain_event_burst_counts_consecutive_press_keys_and_preserves_trailing_events() {
-        // Review Focus #5: paste burst followed by FocusLost reports burst_len == 3 and keeps FocusLost.
+        // Paste burst followed by FocusLost reports burst_len == 3 and preserves FocusLost.
         let mut queued = VecDeque::from([
             Ok(Some(Event::Key(KeyEvent::new(
                 KeyCode::Char('b'),

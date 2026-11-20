@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 use crate::color_reply::ColorReply;
 use crate::environment::EnvironmentSnapshot;
 use crate::json_log::escape_json_string;
-use crate::parsers::{CellPixelSize, ModeReport, ModeReportState};
+use crate::parsers::{CellPixelSize, ModeReport, ModeReportState, latest_mode_state};
 
 const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
 
@@ -51,14 +51,6 @@ fn json_optional_str(value: Option<&str>) -> String {
 
 fn json_optional_u16(value: Option<u16>) -> String {
     value.map_or_else(|| "null".to_owned(), |number| number.to_string())
-}
-
-fn find_latest_mode_state(reports: &[ModeReport], target_mode: u16) -> Option<ModeReportState> {
-    reports
-        .iter()
-        .rev()
-        .find(|report| report.mode == target_mode)
-        .map(|report| report.state)
 }
 
 fn format_mode_report_array(reports: &[ModeReport]) -> String {
@@ -129,14 +121,13 @@ pub fn format_mouse_modes_section(
     after_m5_reports: &[ModeReport],
     has_timed_out: bool,
 ) -> String {
-    let is_m1_expected = find_latest_mode_state(after_m1_reports, 1000)
-        == Some(ModeReportState::Reset)
-        && find_latest_mode_state(after_m1_reports, 1002) == Some(ModeReportState::Set)
-        && find_latest_mode_state(after_m1_reports, 1003) == Some(ModeReportState::Reset)
-        && find_latest_mode_state(after_m1_reports, 1006) == Some(ModeReportState::Set);
+    let is_m1_expected = latest_mode_state(after_m1_reports, 1000) == Some(ModeReportState::Reset)
+        && latest_mode_state(after_m1_reports, 1002) == Some(ModeReportState::Set)
+        && latest_mode_state(after_m1_reports, 1003) == Some(ModeReportState::Reset)
+        && latest_mode_state(after_m1_reports, 1006) == Some(ModeReportState::Set);
     let is_m5_reset = [1000_u16, 1002, 1003, 1006]
         .into_iter()
-        .all(|mode| find_latest_mode_state(after_m5_reports, mode) == Some(ModeReportState::Reset));
+        .all(|mode| latest_mode_state(after_m5_reports, mode) == Some(ModeReportState::Reset));
     format!(
         concat!(
             "{{\"kind\":\"section\",\"section\":\"mouse_modes\",\"timed_out\":{},",

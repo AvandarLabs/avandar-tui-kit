@@ -68,11 +68,18 @@ impl ArmedColorListener {
         std::mem::take(&mut self.queued_events)
     }
 
-    /// Returns the remaining duration until the armed `OSC 11` window expires, if still armed.
+    /// Returns `true` while the post-query `OSC 11` listener is still armed (including overdue before flush).
+    #[must_use]
+    pub const fn is_armed(&self) -> bool {
+        self.armed_deadline.is_some()
+    }
+
+    /// Returns the strictly positive remaining duration until the armed `OSC 11` window expires.
     #[must_use]
     pub fn remaining_window(&self, now: Instant) -> Option<Duration> {
         self.armed_deadline
             .and_then(|deadline| deadline.checked_duration_since(now))
+            .filter(|duration| !duration.is_zero())
     }
 
     /// Expires the armed window at or after `now`, returning any buffered incomplete prefix events.

@@ -10,6 +10,23 @@ use crate::json_log::JsonLog;
 use crate::section_json::format_write_record;
 #[cfg(unix)]
 use crate::sequences::MOUSE_SETUP_M1;
+use crate::sequences::{
+    BRACKETED_PASTE_OFF, FOCUS_EVENTS_OFF, KITTY_KEYBOARD_POP, MOUSE_TEARDOWN_M5, SYNC_OUTPUT_OFF,
+};
+
+/// Builds the full terminal-mode reset sequence for `Drop` and panic-hook teardown.
+#[must_use]
+pub fn build_teardown_bytes(was_kitty_pushed: bool) -> Vec<u8> {
+    let mut teardown = Vec::with_capacity(64);
+    teardown.extend_from_slice(MOUSE_TEARDOWN_M5);
+    teardown.extend_from_slice(BRACKETED_PASTE_OFF);
+    teardown.extend_from_slice(FOCUS_EVENTS_OFF);
+    teardown.extend_from_slice(SYNC_OUTPUT_OFF);
+    if was_kitty_pushed {
+        teardown.extend_from_slice(KITTY_KEYBOARD_POP);
+    }
+    teardown
+}
 
 #[derive(Debug, Default)]
 struct SharedSessionState {
@@ -28,7 +45,7 @@ impl SharedSessionState {
         }
         let was_kitty_pushed = self.is_kitty_pushed.swap(false, Ordering::AcqRel);
         let was_raw_mode_enabled = self.is_raw_mode_enabled.swap(false, Ordering::AcqRel);
-        let reset_bytes = crate::probe_runner::build_teardown_bytes(was_kitty_pushed);
+        let reset_bytes = build_teardown_bytes(was_kitty_pushed);
         self.write_teardown_sequences(&reset_bytes);
         if was_raw_mode_enabled {
             let _ = crossterm::terminal::disable_raw_mode();

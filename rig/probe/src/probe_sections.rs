@@ -6,8 +6,8 @@ use crate::armed_color::{ArmedColorListener, run_background_color_section};
 use crate::environment::{EnvironmentSnapshot, read_process_environment};
 use crate::json_log::JsonLog;
 use crate::parsers::{
-    ModeReport, ModeReportState, parse_cell_pixel_size, parse_kitty_flags_replies,
-    parse_mode_reports, parse_xtversion_reply,
+    latest_mode_state, parse_cell_pixel_size, parse_kitty_flags_replies, parse_mode_reports,
+    parse_xtversion_reply,
 };
 use crate::probe_args::ProbeArgs;
 use crate::section_json::{
@@ -32,14 +32,6 @@ fn build_mouse_decrpm_queries() -> Vec<u8> {
     payload
 }
 
-fn find_report_state(reports: &[ModeReport], target_mode: u16) -> Option<ModeReportState> {
-    reports
-        .iter()
-        .rev()
-        .find(|report| report.mode == target_mode)
-        .map(|report| report.state)
-}
-
 fn run_identity_section(
     session: &mut RawQuerySession,
     log: &mut JsonLog,
@@ -58,17 +50,30 @@ fn run_identity_section(
 }
 
 fn run_mouse_modes_section(session: &mut RawQuerySession, log: &mut JsonLog) -> io::Result<()> {
+    if !session.is_raw_query_supported() || session.has_fence_timed_out() {
+        let json_line = format_mouse_modes_section(&[], &[], &[], session.has_fence_timed_out());
+        return log.write_line(&json_line);
+    }
     let decrpm_batch = build_mouse_decrpm_queries();
     let initial_reply = session.query_fenced("mouse_modes:initial_decrpm", &decrpm_batch, log)?;
+    let initial_reports = parse_mode_reports(&initial_reply.bytes);
+    if initial_reply.has_timed_out {
+        return log.write_line(&format_mouse_modes_section(
+            &initial_reports,
+            &[],
+            &[],
+            true,
+        ));
+    }
     session.write_raw("mouse_modes:setup_m1", MOUSE_SETUP_M1, log)?;
     let after_m1_reply = session.query_fenced("mouse_modes:after_m1_decrpm", &decrpm_batch, log)?;
+    // Always write `MOUSE_TEARDOWN_M5` via `write_raw` once `MOUSE_SETUP_M1` has been emitted.
     session.write_raw("mouse_modes:teardown_m5", MOUSE_TEARDOWN_M5, log)?;
     let after_m5_reply = session.query_fenced("mouse_modes:after_m5_decrpm", &decrpm_batch, log)?;
 
-    let has_timed_out =
-        initial_reply.has_timed_out || after_m1_reply.has_timed_out || after_m5_reply.has_timed_out;
+    let has_timed_out = after_m1_reply.has_timed_out || after_m5_reply.has_timed_out;
     let json_line = format_mouse_modes_section(
-        &parse_mode_reports(&initial_reply.bytes),
+        &initial_reports,
         &parse_mode_reports(&after_m1_reply.bytes),
         &parse_mode_reports(&after_m5_reply.bytes),
         has_timed_out,
@@ -164,8 +169,8 @@ fn probe_single_mode(
     let probe_result = SingleModeProbe {
         mode,
         name,
-        after_enable: find_report_state(&parse_mode_reports(&enable_reply.bytes), mode),
-        after_disable: find_report_state(&parse_mode_reports(&disable_reply.bytes), mode),
+        after_enable: latest_mode_state(&parse_mode_reports(&enable_reply.bytes), mode),
+        after_disable: latest_mode_state(&parse_mode_reports(&disable_reply.bytes), mode),
     };
     Ok((
         probe_result,
@@ -334,5 +339,42 @@ mod tests {
         assert!(logged.contains("1b5b3f3230303468"));
         assert!(logged.contains("1b5b3f323030346c"));
         assert!(!logged.contains("1b5b3f3130303468"));
+    }
+
+    #[test]
+    fn mouse_modes_skips_non_raw_and_tears_down_m5_on_fence_timeout() {
+        let non_raw_path = temp_log_path();
+        let mut non_raw_log = JsonLog::create(&non_raw_path).expect("log must create");
+        let mut non_raw_session = RawQuerySession::detached_for_test();
+        run_mouse_modes_section(&mut non_raw_session, &mut non_raw_log)
+            .expect("detached mouse section must succeed");
+        let non_raw_logged = fs::read_to_string(&non_raw_path).expect("log must be readable");
+        let _ = fs::remove_file(&non_raw_path);
+        assert!(!non_raw_logged.contains("mouse_modes:setup_m1"));
+
+        let initial_to_path = temp_log_path();
+        let mut initial_to_log = JsonLog::create(&initial_to_path).expect("log must create");
+        let empty_reader = DemandByteReader::spawn(ChunkSequenceReader {
+            chunks: VecDeque::new(),
+        });
+        let mut initial_to_session = RawQuerySession::for_test(empty_reader);
+        run_mouse_modes_section(&mut initial_to_session, &mut initial_to_log)
+            .expect("initial-timeout mouse section must succeed");
+        let initial_to_logged = fs::read_to_string(&initial_to_path).expect("log must be readable");
+        let _ = fs::remove_file(&initial_to_path);
+        assert!(!initial_to_logged.contains("mouse_modes:setup_m1"));
+
+        let timeout_path = temp_log_path();
+        let mut timeout_log = JsonLog::create(&timeout_path).expect("log must create");
+        let reader = DemandByteReader::spawn(ChunkSequenceReader {
+            chunks: VecDeque::from([b"\x1b[?1002;2$y\x1b[?6c".to_vec()]),
+        });
+        let mut timeout_session = RawQuerySession::for_test(reader);
+        run_mouse_modes_section(&mut timeout_session, &mut timeout_log)
+            .expect("timed-out mouse section must recover cleanly");
+        let timeout_logged = fs::read_to_string(&timeout_path).expect("log must be readable");
+        let _ = fs::remove_file(&timeout_path);
+        assert!(timeout_logged.contains("mouse_modes:setup_m1"));
+        assert!(timeout_logged.contains("mouse_modes:teardown_m5"));
     }
 }

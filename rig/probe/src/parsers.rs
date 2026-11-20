@@ -88,6 +88,16 @@ pub fn parse_mode_reports(bytes: &[u8]) -> Vec<ModeReport> {
     reports
 }
 
+/// Returns the most recent reported [`ModeReportState`] for `target_mode` in `reports`.
+#[must_use]
+pub fn latest_mode_state(reports: &[ModeReport], target_mode: u16) -> Option<ModeReportState> {
+    reports
+        .iter()
+        .rev()
+        .find(|report| report.mode == target_mode)
+        .map(|report| report.state)
+}
+
 /// Extracts the terminal version string from a `DCS > | <version> ST` (`XTVERSION`) reply.
 #[must_use]
 pub fn parse_xtversion_reply(bytes: &[u8]) -> Option<String> {
