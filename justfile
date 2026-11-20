@@ -22,6 +22,10 @@ test:
 lint:
     cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+# Lint Windows and Linux targets from the development machine (Layer 2).
+lint-targets:
+    cargo clippy --workspace --all-targets --all-features --target x86_64-pc-windows-msvc --target x86_64-unknown-linux-gnu -- -D warnings
+
 # Format the source.
 fmt:
     cargo fmt --all

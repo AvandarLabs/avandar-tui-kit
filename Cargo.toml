@@ -3,7 +3,7 @@
 # docs/architecture.md for the crate map and why it is split this way.
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "rig/probe"]
 
 # Every crate inherits these with `<key>.workspace = true`, so a release bumps
 # one version and every crate states the same edition, license and floor.
