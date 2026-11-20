@@ -1576,14 +1576,14 @@ Then pass-through on and the select mode command.
 ## Open questions
 
 1. **Selection where Shift never reaches the app** (xterm.js on Linux and
-   Windows). Select mode covers it and is required. Beyond that:
-   *recommendation: add Alt to the default `selection_modifiers`, on every
-   platform, once the harness on Linux and Windows shows that Alt with a
-   click and Alt with a drag reach the app.* xterm.js reserves only Shift
-   there, and on macOS Option with a click is already measured to arrive. The
-   cost is that a pane's program never receives Alt with the mouse, which
-   few programs use. Until that measurement, the default stays Shift alone,
-   as decided. This widens a settled decision, so it needs a yes.
+   Windows). *Decided: select mode covers it and is required. Alt joins
+   Shift in the default `selection_modifiers` on every platform once the
+   harness on Linux and Windows shows that Alt with a click and Alt with a
+   drag reach the app.* xterm.js reserves only Shift there, and on macOS
+   Option with a click is already measured to arrive. The cost is that a
+   pane's program never receives Alt with the mouse, which few programs use.
+   Until that measurement the default stays Shift alone. The decision is
+   recorded in `decisions.md`.
 2. **Which tracking mode the Windows pseudo-console asks xterm.js for.** The
    crate has to turn mouse input on through the console API, and what the
    pseudo-console then requests is its choice. If it requests every move

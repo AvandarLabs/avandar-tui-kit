@@ -231,7 +231,7 @@ specs list, and the width samples the text width policy needs:
 | Architecture question 5 (the color reply and paste on Windows) | Measured here (rows 15, 16). The design is proved with toolkit code in M3. |
 | Architecture question 6 (tmux inside iTerm2) | Measured here (row 11). No design change. M3 asserts the late-reply handling. |
 | Architecture question 4 (`.cmd` shims) | Measured here (row 18). Proved with toolkit code in M7 and M8. |
-| Mouse question 1 (Alt as a second selection modifier) | The measurement is here (row 3). The yes or no is M1's. |
+| Mouse question 1 (Alt as a second selection modifier) | The yes is decided (see `decisions.md`). The measurement is here (row 3), and it sets the default when it passes. |
 | Mouse question 2 (Windows tracking mode) | Measured here (row 14). Asserted by M1's scenario X1 on the runners. |
 | Mouse questions 3 and 4 (iTerm2 wheel direction, native selection modifier) | Measured here (rows 1, 4). M1 documents them. |
 | Getting Option into the guest over VNC: a VNC client's Alt can arrive as Command | The driver finds the key that arrives as Option before rows 5 and 6 are measured |

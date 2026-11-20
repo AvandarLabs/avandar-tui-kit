@@ -499,3 +499,36 @@ outside the toolkit. `release-plz` can version crates apart.
 would compile for a dozen lines per crate.
 
 **Revisit when.** An error enum grows past what is pleasant to write by hand.
+
+## Alt joins Shift as a selection modifier, once measured
+
+**Decision.** In a pane whose program has the mouse, Alt held at a press
+selects text, in addition to Shift, on every platform. It becomes a default
+only after the xterm.js harness shows, on Linux and Windows, that Alt with a
+click and Alt with a drag reach the app. Until then the default stays Shift
+alone. Select mode, the keyboard-reachable way to select, is required of every
+app that embeds a pane regardless.
+
+**Why.** xterm.js on Linux and Windows reserves Shift for its own selection,
+so the app never sees Shift with a click there, while Shift is the settled
+modifier. Select mode already covers that case. Alt gives the same one-gesture
+path on every platform, and on macOS Option with a click is measured to arrive.
+
+**Consequences.** A pane's program never receives Alt with the mouse. The
+`selection_modifiers` default in `ratatui-mouse` changes from Shift to Shift
+and Alt when the measurement passes, which is part of milestone 0's exit
+criteria.
+
+**Revisit when.** The measurement shows Alt does not arrive on some platform.
+
+## crates.io publishing starts in milestone 2
+
+**Decision.** Publishing moves from git tags to crates.io in milestone 2,
+right after `dif` adopts `ratatui-mouse`, as `docs/milestones.md` plans.
+
+**Why.** This is the earlier "git tags first" decision applied: the first
+crate then has a real user, and the next crates are written against a
+published, versioned `ratatui-mouse`. The API has to be settled by then,
+because a published name and version are permanent.
+
+**Revisit when.** `dif`'s adoption shows the API still needs breaking changes.
