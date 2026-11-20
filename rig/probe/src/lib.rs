@@ -4,4 +4,5 @@
 //! terminal dialect edge cases can be verified with unit tests independent of
 //! live TTY I/O.
 
+pub mod parsers;
 pub mod sequences;
