@@ -9,6 +9,8 @@ pub struct ProbeArgs {
     pub log_path: PathBuf,
     /// Whether `--batch` was passed to exit immediately after automated sections finish.
     pub is_batch: bool,
+    /// Whether `--push-kitty` was passed to push Kitty disambiguate mode during interactive input.
+    pub is_push_kitty: bool,
     /// Optional token supplied via `--osc52 <token>` to emit `OSC 52` clipboard probes.
     pub osc52_token: Option<String>,
 }
@@ -32,6 +34,7 @@ where
 struct PartialProbeArgs {
     log_path: Option<PathBuf>,
     is_batch: bool,
+    is_push_kitty: bool,
     osc52_token: Option<String>,
 }
 
@@ -54,6 +57,12 @@ impl PartialProbeArgs {
                     return Err("duplicate --batch flag".to_owned());
                 }
                 self.is_batch = true;
+            }
+            "--push-kitty" => {
+                if self.is_push_kitty {
+                    return Err("duplicate --push-kitty flag".to_owned());
+                }
+                self.is_push_kitty = true;
             }
             "--osc52" => {
                 if self.osc52_token.is_some() {
@@ -91,6 +100,7 @@ where
     Ok(ProbeArgs {
         log_path: resolved_log_path,
         is_batch: partial.is_batch,
+        is_push_kitty: partial.is_push_kitty,
         osc52_token: partial.osc52_token,
     })
 }
@@ -100,24 +110,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_required_log_and_optional_batch_and_osc52_flags() {
+    fn parses_required_log_and_optional_batch_kitty_and_osc52_flags() {
         let minimal = parse_probe_args(["--log", "/tmp/p.jsonl"]).expect("minimal args must parse");
         assert_eq!(
             minimal,
             ProbeArgs {
                 log_path: PathBuf::from("/tmp/p.jsonl"),
                 is_batch: false,
+                is_push_kitty: false,
                 osc52_token: None,
             }
         );
 
-        let full = parse_probe_args(["--batch", "--osc52", "tok-1", "--log", "/tmp/p.jsonl"])
-            .expect("full args must parse in any flag order");
+        let full = parse_probe_args([
+            "--batch",
+            "--push-kitty",
+            "--osc52",
+            "tok-1",
+            "--log",
+            "/tmp/p.jsonl",
+        ])
+        .expect("full args must parse in any flag order");
         assert_eq!(
             full,
             ProbeArgs {
                 log_path: PathBuf::from("/tmp/p.jsonl"),
                 is_batch: true,
+                is_push_kitty: true,
                 osc52_token: Some("tok-1".to_owned()),
             }
         );
@@ -134,6 +153,10 @@ mod tests {
             (
                 &["--log", "a.jsonl", "--batch", "--batch"],
                 "duplicate --batch",
+            ),
+            (
+                &["--log", "a.jsonl", "--push-kitty", "--push-kitty"],
+                "duplicate --push-kitty",
             ),
             (
                 &["--log", "a.jsonl", "--osc52"],
