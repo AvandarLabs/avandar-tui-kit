@@ -57,6 +57,10 @@ xterm-tmux *args:
 orca *args:
     ./rig/orca/run.sh "$@"
 
+# Run an example program inside iTerm2 in the headless Tart + VNC macOS VM (Layer 6).
+iterm2 *args:
+    ./rig/iterm2/run.sh "$@"
+
 # Inspect and download Windows CI job logs and event artifacts for the current branch (Layer 7).
 windows *args:
     ./rig/windows/run.sh "$@"
