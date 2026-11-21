@@ -8,10 +8,12 @@ use std::sync::{Arc, OnceLock};
 
 use crate::json_log::JsonLog;
 use crate::section_json::format_write_record;
-#[cfg(unix)]
-use crate::sequences::MOUSE_SETUP_M1;
 use crate::sequences::{
     BRACKETED_PASTE_OFF, FOCUS_EVENTS_OFF, KITTY_KEYBOARD_POP, MOUSE_TEARDOWN_M5, SYNC_OUTPUT_OFF,
+};
+#[cfg(unix)]
+use crate::sequences::{
+    BRACKETED_PASTE_ON, FOCUS_EVENTS_ON, KITTY_KEYBOARD_PUSH_DISAMBIGUATE, MOUSE_SETUP_M1,
 };
 
 /// Builds the full terminal-mode reset sequence for `Drop` and panic-hook teardown.
@@ -174,6 +176,54 @@ impl TerminalSessionGuard {
         }
         Ok(())
     }
+
+    /// Enables platform-appropriate interactive input modes on the active terminal.
+    ///
+    /// On Unix, writes rule M1 mouse tracking, bracketed paste (`2004`), focus events (`1004`),
+    /// and (when `is_push_kitty` is `true`) Kitty disambiguate mode (`>1u`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`io::Error`] if writing mode sequences or logging fails.
+    #[cfg(unix)]
+    pub fn enable_interactive_modes(
+        &self,
+        writer: &mut TerminalWriter,
+        is_push_kitty: bool,
+        log: &mut JsonLog,
+    ) -> io::Result<()> {
+        self.enable_interactive_mouse(writer, log)?;
+        writer.write_logged("interactive:bracketed_paste_on", BRACKETED_PASTE_ON, log)?;
+        writer.write_logged("interactive:focus_events_on", FOCUS_EVENTS_ON, log)?;
+        if is_push_kitty {
+            self.set_kitty_pushed(true);
+            writer.write_logged(
+                "interactive:kitty_push",
+                KITTY_KEYBOARD_PUSH_DISAMBIGUATE,
+                log,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Enables platform-appropriate interactive input modes on the active terminal.
+    ///
+    /// On Windows, enables console mouse capture via `crossterm` and leaves modes `2004`, `1004`,
+    /// and Kitty flags off because `crossterm` reads console `INPUT_RECORD` events directly and
+    /// does not parse bracketed paste escape sequences.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`io::Error`] if updating console mouse mode or logging fails.
+    #[cfg(windows)]
+    pub fn enable_interactive_modes(
+        &self,
+        writer: &mut TerminalWriter,
+        _is_push_kitty: bool,
+        log: &mut JsonLog,
+    ) -> io::Result<()> {
+        self.enable_interactive_mouse(writer, log)
+    }
 }
 
 impl Drop for TerminalSessionGuard {
@@ -249,5 +299,56 @@ mod tests {
             target: OutputTarget::Detached,
         };
         assert!(!writer.is_tty_available());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn enable_interactive_modes_writes_unix_sequences_and_tracks_kitty_push() {
+        let base_path =
+            std::env::temp_dir().join(format!("rig-probe-guard-unix-{}.jsonl", std::process::id()));
+        let guard = TerminalSessionGuard::acquire(false).expect("detached guard must succeed");
+        let mut writer = TerminalWriter {
+            target: OutputTarget::Detached,
+        };
+        let mut log = JsonLog::create(&base_path).expect("log must create");
+        guard
+            .enable_interactive_modes(&mut writer, false, &mut log)
+            .expect("unix interactive setup without kitty must succeed");
+        assert!(!guard.state.is_kitty_pushed.load(Ordering::Acquire));
+
+        guard
+            .enable_interactive_modes(&mut writer, true, &mut log)
+            .expect("unix interactive setup with kitty must succeed");
+        assert!(guard.state.is_kitty_pushed.load(Ordering::Acquire));
+
+        let logged = std::fs::read_to_string(&base_path).expect("log must be readable");
+        let _ = std::fs::remove_file(&base_path);
+        assert_eq!(logged.matches("interactive:mouse_setup_m1").count(), 2);
+        assert_eq!(logged.matches("interactive:bracketed_paste_on").count(), 2);
+        assert_eq!(logged.matches("interactive:focus_events_on").count(), 2);
+        assert_eq!(logged.matches("interactive:kitty_push").count(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn enable_interactive_modes_uses_windows_mouse_capture_and_skips_unix_modes() {
+        let base_path =
+            std::env::temp_dir().join(format!("rig-probe-guard-win-{}.jsonl", std::process::id()));
+        let guard = TerminalSessionGuard::acquire(false).expect("detached guard must succeed");
+        let mut writer = TerminalWriter {
+            target: OutputTarget::Detached,
+        };
+        let mut log = JsonLog::create(&base_path).expect("log must create");
+        guard
+            .enable_interactive_modes(&mut writer, true, &mut log)
+            .expect("windows interactive setup must succeed");
+        assert!(!guard.state.is_kitty_pushed.load(Ordering::Acquire));
+
+        let logged = std::fs::read_to_string(&base_path).expect("log must be readable");
+        let _ = std::fs::remove_file(&base_path);
+        assert!(logged.contains("interactive:windows_enable_mouse_capture"));
+        assert!(!logged.contains("interactive:bracketed_paste_on"));
+        assert!(!logged.contains("interactive:focus_events_on"));
+        assert!(!logged.contains("interactive:kitty_push"));
     }
 }

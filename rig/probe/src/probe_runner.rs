@@ -12,11 +12,9 @@ use crate::json_log::JsonLog;
 use crate::probe_args::{ProbeArgs, parse_probe_args};
 use crate::probe_sections::run_all_probe_sections;
 use crate::section_json::{format_background_color_section, format_summary_record};
-use crate::sequences::{BRACKETED_PASTE_ON, FOCUS_EVENTS_ON, KITTY_KEYBOARD_PUSH_DISAMBIGUATE};
 pub use crate::session_guard::build_teardown_bytes;
 use crate::terminal_io::{
-    RawQuerySession, TerminalSessionGuard, TerminalWriter, count_leading_press_burst,
-    drain_event_burst,
+    RawQuerySession, TerminalSessionGuard, count_leading_press_burst, drain_event_burst,
 };
 
 /// Human-readable description of the interactive clean-exit key chord.
@@ -52,26 +50,6 @@ pub fn classify_probe_control(event: &Event) -> LoopControl {
         KeyCode::F(12) if key_event.modifiers == KeyModifiers::NONE => LoopControl::TriggerPanic,
         _ => LoopControl::Continue,
     }
-}
-
-fn enable_interactive_modes(
-    guard: &TerminalSessionGuard,
-    writer: &mut TerminalWriter,
-    is_push_kitty: bool,
-    log: &mut JsonLog,
-) -> io::Result<()> {
-    guard.enable_interactive_mouse(writer, log)?;
-    writer.write_logged("interactive:bracketed_paste_on", BRACKETED_PASTE_ON, log)?;
-    writer.write_logged("interactive:focus_events_on", FOCUS_EVENTS_ON, log)?;
-    if is_push_kitty {
-        guard.set_kitty_pushed(true);
-        writer.write_logged(
-            "interactive:kitty_push",
-            KITTY_KEYBOARD_PUSH_DISAMBIGUATE,
-            log,
-        )?;
-    }
-    Ok(())
 }
 
 fn log_and_classify_events(
@@ -197,7 +175,7 @@ fn execute_probe(args: &ProbeArgs) -> io::Result<()> {
             "interactive capability_probe requires a TTY; pass --batch for detached runs",
         ));
     }
-    enable_interactive_modes(&guard, &mut writer, args.is_push_kitty, &mut log)?;
+    guard.enable_interactive_modes(&mut writer, args.is_push_kitty, &mut log)?;
     log.write_line(&format_summary_record(
         "interactive",
         EXIT_CHORD_DESCRIPTION,

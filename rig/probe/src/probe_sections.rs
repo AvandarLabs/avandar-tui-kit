@@ -9,7 +9,7 @@ use crate::parsers::{
     latest_mode_state, parse_cell_pixel_size, parse_kitty_flags_replies, parse_mode_reports,
     parse_xtversion_reply,
 };
-use crate::probe_args::ProbeArgs;
+use crate::probe_args::{Osc52Form, ProbeArgs};
 use crate::section_json::{
     MeasuredWidthSample, SingleModeProbe, format_cell_size_section, format_identity_section,
     format_kitty_section, format_modes_section, format_mouse_modes_section, format_osc52_section,
@@ -225,6 +225,15 @@ fn run_widths_section(session: &mut RawQuerySession, log: &mut JsonLog) -> io::R
     log.write_line(&format_widths_section(&measurements, has_any_timed_out))
 }
 
+const fn resolve_osc52_forms(form: Osc52Form, is_tmux: bool) -> (bool, bool) {
+    match form {
+        Osc52Form::Auto => (true, is_tmux),
+        Osc52Form::Plain => (true, false),
+        Osc52Form::Tmux => (false, true),
+        Osc52Form::Both => (true, true),
+    }
+}
+
 fn run_osc52_section(
     session: &mut RawQuerySession,
     args: &ProbeArgs,
@@ -234,13 +243,20 @@ fn run_osc52_section(
     let Some(token) = &args.osc52_token else {
         return log.write_line(&format_osc52_section(false, false, false));
     };
-    let plain_bytes = build_osc52_plain(token.as_bytes());
-    session.write_raw("osc52:plain", &plain_bytes, log)?;
-    if is_tmux {
+    let (should_send_plain, should_send_tmux) = resolve_osc52_forms(args.osc52_form, is_tmux);
+    if should_send_plain {
+        let plain_bytes = build_osc52_plain(token.as_bytes());
+        session.write_raw("osc52:plain", &plain_bytes, log)?;
+    }
+    if should_send_tmux {
         let tmux_bytes = build_osc52_tmux(token.as_bytes());
         session.write_raw("osc52:tmux", &tmux_bytes, log)?;
     }
-    log.write_line(&format_osc52_section(true, true, is_tmux))
+    log.write_line(&format_osc52_section(
+        true,
+        should_send_plain,
+        should_send_tmux,
+    ))
 }
 
 /// Runs all deterministic capability probe sections (`identity` through `background_color`).
@@ -376,5 +392,52 @@ mod tests {
         let _ = fs::remove_file(&timeout_path);
         assert!(timeout_logged.contains("mouse_modes:setup_m1"));
         assert!(timeout_logged.contains("mouse_modes:teardown_m5"));
+    }
+
+    fn run_osc52_case(
+        token: Option<&str>,
+        form: crate::probe_args::Osc52Form,
+        is_tmux: bool,
+    ) -> String {
+        let log_path = temp_log_path();
+        let mut log = JsonLog::create(&log_path).expect("log must create");
+        let mut session = RawQuerySession::detached_for_test();
+        let args = ProbeArgs {
+            log_path: log_path.clone(),
+            is_batch: true,
+            is_push_kitty: false,
+            osc52_token: token.map(str::to_owned),
+            osc52_form: form,
+        };
+        run_osc52_section(&mut session, &args, is_tmux, &mut log)
+            .expect("osc52 section must succeed");
+        let logged = fs::read_to_string(&log_path).expect("log must be readable");
+        let _ = fs::remove_file(&log_path);
+        logged
+    }
+
+    #[test]
+    fn osc52_section_respects_osc52_form_across_plain_and_tmux_environments() {
+        use crate::probe_args::Osc52Form;
+
+        let unconfigured = run_osc52_case(None, Osc52Form::Both, true);
+        assert!(unconfigured.contains(r#""emitted":false,"plain_sent":false,"tmux_sent":false"#));
+        assert!(!unconfigured.contains("osc52:plain") && !unconfigured.contains("osc52:tmux"));
+
+        let cases = [
+            (Osc52Form::Auto, false, true, false),
+            (Osc52Form::Auto, true, true, true),
+            (Osc52Form::Plain, true, true, false),
+            (Osc52Form::Tmux, false, false, true),
+            (Osc52Form::Both, false, true, true),
+        ];
+        for (form, is_tmux, expect_plain, expect_tmux) in cases {
+            let logged = run_osc52_case(Some("tok"), form, is_tmux);
+            let expected_section =
+                format!(r#""emitted":true,"plain_sent":{expect_plain},"tmux_sent":{expect_tmux}"#);
+            assert!(logged.contains(&expected_section), "logged: {logged}");
+            assert_eq!(logged.contains("osc52:plain"), expect_plain);
+            assert_eq!(logged.contains("osc52:tmux"), expect_tmux);
+        }
     }
 }
