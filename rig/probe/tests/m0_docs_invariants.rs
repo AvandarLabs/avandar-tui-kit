@@ -1,6 +1,7 @@
 //! Milestone 0 exit-invariant tests across documentation, `justfile`, `rig/expected`, and `rig/`.
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -43,6 +44,8 @@ const RIG_SLEEP_SCAN_TARGETS: &[&str] = &[
     "rig/xterm/run-tmux.sh",
 ];
 
+const SKIPPED_FILE_EXTENSIONS: &[&str] = &["pyc", "pyo", "png", "swp"];
+
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -55,18 +58,25 @@ fn read_repo_file(relative_path: &str) -> String {
     let full_path = repository_root().join(relative_path);
     fs::read_to_string(&full_path)
         .unwrap_or_else(|read_error| panic!("failed to read {}: {read_error}", full_path.display()))
+        .replace("\r\n", "\n")
 }
 
-fn extract_markdown_h2_section<'a>(markdown: &'a str, heading: &str) -> &'a str {
-    let heading_line = format!("## {heading}\n");
-    let start_offset = markdown
-        .find(&heading_line)
-        .unwrap_or_else(|| panic!("missing heading '## {heading}'"))
-        + heading_line.len();
-    let remainder = &markdown[start_offset..];
-    remainder
-        .find("\n## ")
-        .map_or(remainder, |end_offset| &remainder[..end_offset])
+fn extract_markdown_h2_section(markdown: &str, heading: &str) -> String {
+    let target_heading = format!("## {heading}");
+    let mut section_lines = Vec::new();
+    let mut is_in_section = false;
+    for line in markdown.lines() {
+        if is_in_section {
+            if line.starts_with("## ") {
+                break;
+            }
+            section_lines.push(line);
+        } else if line.trim_end() == target_heading {
+            is_in_section = true;
+        }
+    }
+    assert!(is_in_section, "missing heading '## {heading}'");
+    section_lines.join("\n")
 }
 
 fn has_standalone_ascii_word(haystack: &str, target_word: &str) -> bool {
@@ -77,33 +87,54 @@ fn has_standalone_ascii_word(haystack: &str, target_word: &str) -> bool {
         .any(|token| token == lowered_target)
 }
 
+fn is_skipped_dir(path: &Path) -> bool {
+    let Some(dir_name) = path.file_name().and_then(OsStr::to_str) else {
+        return false;
+    };
+    matches!(
+        dir_name,
+        "node_modules" | "__pycache__" | "target" | ".pytest_cache" | ".mypy_cache" | ".ruff_cache"
+    )
+}
+
+fn is_skipped_file(path: &Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(OsStr::to_str) else {
+        return false;
+    };
+    file_name == ".DS_Store"
+        || Path::new(file_name).extension().is_some_and(|extension| {
+            SKIPPED_FILE_EXTENSIONS
+                .iter()
+                .any(|skipped_extension| extension.eq_ignore_ascii_case(skipped_extension))
+        })
+}
+
 fn collect_rig_source_files(target_path: &Path, collected_paths: &mut Vec<PathBuf>) {
-    if target_path.is_file() {
-        let is_skipped_file = target_path
-            .file_name()
-            .and_then(|os_name| os_name.to_str())
-            .is_some_and(|file_name| {
-                file_name == ".DS_Store"
-                    || Path::new(file_name)
-                        .extension()
-                        .is_some_and(|ext| ext.eq_ignore_ascii_case("pyc"))
-            });
-        if !is_skipped_file {
+    let root_type = fs::symlink_metadata(target_path)
+        .unwrap_or_else(|read_error| {
+            panic!("failed to stat {}: {read_error}", target_path.display())
+        })
+        .file_type();
+    if root_type.is_file() {
+        if !is_skipped_file(target_path) {
             collected_paths.push(target_path.to_path_buf());
         }
+        return;
+    }
+    if !root_type.is_dir() || is_skipped_dir(target_path) {
         return;
     }
     let directory_entries = fs::read_dir(target_path).unwrap_or_else(|read_error| {
         panic!("failed to list {}: {read_error}", target_path.display())
     });
     for entry_result in directory_entries {
-        let entry_path = entry_result.expect("directory entry").path();
-        let is_skipped_dir = entry_path
-            .file_name()
-            .and_then(|os_name| os_name.to_str())
-            .is_some_and(|dir_name| matches!(dir_name, "node_modules" | "__pycache__"));
-        if !is_skipped_dir {
+        let entry = entry_result.expect("directory entry");
+        let file_type = entry.file_type().expect("directory entry file type");
+        let entry_path = entry.path();
+        if file_type.is_dir() && !is_skipped_dir(&entry_path) {
             collect_rig_source_files(&entry_path, collected_paths);
+        } else if file_type.is_file() && !is_skipped_file(&entry_path) {
+            collected_paths.push(entry_path);
         }
     }
 }
@@ -116,7 +147,7 @@ fn parse_justfile_recipe_bodies(justfile_text: &str) -> BTreeMap<String, Vec<Str
             continue;
         }
         if line.starts_with(' ') || line.starts_with('\t') {
-            if let Some(ref recipe_name) = active_recipe {
+            if let Some(recipe_name) = &active_recipe {
                 recipes
                     .entry(recipe_name.clone())
                     .or_default()
@@ -124,19 +155,34 @@ fn parse_justfile_recipe_bodies(justfile_text: &str) -> BTreeMap<String, Vec<Str
             }
             continue;
         }
-        if let Some((header_left, _header_right)) = line.split_once(':') {
-            let recipe_name = header_left
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .to_owned();
-            active_recipe = Some(recipe_name.clone());
-            recipes.entry(recipe_name).or_default();
-        } else {
+        let Some((header_left, _)) = line.split_once(':') else {
             active_recipe = None;
-        }
+            continue;
+        };
+        let recipe_token = header_left.split_whitespace().next().unwrap_or("");
+        let recipe_name = recipe_token.to_owned();
+        active_recipe = Some(recipe_name.clone());
+        recipes.entry(recipe_name).or_default();
     }
     recipes
+}
+
+fn assert_contains_all(haystack: &str, context: &str, required_fragments: &[&str]) {
+    for required_fragment in required_fragments {
+        assert!(
+            haystack.contains(required_fragment),
+            "{context} missing '{required_fragment}'"
+        );
+    }
+}
+
+fn assert_lacks_all(haystack: &str, context: &str, forbidden_fragments: &[&str]) {
+    for forbidden_fragment in forbidden_fragments {
+        assert!(
+            !haystack.contains(forbidden_fragment),
+            "{context} unexpectedly contains '{forbidden_fragment}'"
+        );
+    }
 }
 
 #[test]
@@ -146,7 +192,7 @@ fn terminals_doc_has_zero_verify_markers_and_records_conpty_and_tmux_3_3() {
         !has_standalone_ascii_word(&terminals_doc, "verify"),
         "docs/terminals.md still contains standalone 'Verify'/'verify'"
     );
-    for required_fragment in [
+    let required_fragments = [
         "ConPTY",
         "tmux 3.3",
         "tmux 3.8",
@@ -154,40 +200,31 @@ fn terminals_doc_has_zero_verify_markers_and_records_conpty_and_tmux_3_3() {
         "cmd.exe /D /S /C",
         "`\"\\^^^\"\"`",
         "rig/expected",
-    ] {
-        assert!(
-            terminals_doc.contains(required_fragment),
-            "docs/terminals.md missing '{required_fragment}'"
-        );
-    }
+    ];
+    assert_contains_all(&terminals_doc, "docs/terminals.md", &required_fragments);
 }
 
 #[test]
 fn testing_doc_aligns_runner_cli_flags_and_expected_compare() {
     let testing_doc = read_repo_file("docs/testing.md");
-    for required_fragment in [
+    let required_fragments = [
         "orca terminal create",
         "expected_compare.mjs",
         "--tmux <stock|full>",
         "expected_baselines.rs",
-    ] {
-        assert!(
-            testing_doc.contains(required_fragment),
-            "docs/testing.md missing '{required_fragment}'"
-        );
-    }
-    for forbidden_fragment in ["--tmux-config", "orca terminal spawn"] {
-        assert!(
-            !testing_doc.contains(forbidden_fragment),
-            "docs/testing.md contains nonexistent CLI syntax '{forbidden_fragment}'"
-        );
-    }
+    ];
+    assert_contains_all(&testing_doc, "docs/testing.md", &required_fragments);
+    assert_lacks_all(
+        &testing_doc,
+        "docs/testing.md",
+        &["--tmux-config", "orca terminal spawn"],
+    );
 }
 
 #[test]
 fn testing_doc_covers_all_layers_vm_settings_reliability_counts_and_built_status() {
     let testing_doc = read_repo_file("docs/testing.md");
-    for required_fragment in [
+    let required_fragments = [
         "just test",
         "just linux",
         "just lint-targets",
@@ -201,62 +238,52 @@ fn testing_doc_covers_all_layers_vm_settings_reliability_counts_and_built_status
         "--vnc-experimental",
         "30",
         "10",
-    ] {
-        assert!(
-            testing_doc.contains(required_fragment),
-            "docs/testing.md missing '{required_fragment}'"
-        );
-    }
+    ];
+    assert_contains_all(&testing_doc, "docs/testing.md", &required_fragments);
     let status_section = extract_markdown_h2_section(&testing_doc, "Status").to_ascii_lowercase();
-    for stale_phrase in ["to be built", "not set up", "throwaway"] {
-        assert!(
-            !status_section.contains(stale_phrase),
-            "docs/testing.md ## Status still contains '{stale_phrase}'"
-        );
-    }
-    for built_piece in [
+    assert_lacks_all(
+        &status_section,
+        "docs/testing.md ## Status",
+        &["to be built", "not set up", "throwaway"],
+    );
+    let built_pieces = [
         "rig/probe",
         "rig/xterm",
         "rig/tmux",
         "rig/iterm2",
         "rig/linux",
         "rig/expected",
-    ] {
-        assert!(
-            status_section.contains(built_piece),
-            "docs/testing.md ## Status missing '{built_piece}'"
-        );
-    }
+    ];
+    assert_contains_all(&status_section, "docs/testing.md ## Status", &built_pieces);
 }
 
 #[test]
 fn architecture_and_decisions_satisfy_m0_exit_criteria() {
     let architecture_doc = read_repo_file("docs/architecture.md");
     let layout_section = extract_markdown_h2_section(&architecture_doc, "The layout");
-    for required_entry in [".github/", "justfile", "rig/", "scripts/"] {
-        assert!(
-            layout_section.contains(required_entry),
-            "docs/architecture.md layout missing '{required_entry}'"
-        );
-    }
+    assert_contains_all(
+        &layout_section,
+        "docs/architecture.md layout",
+        &[".github/", "justfile", "rig/", "scripts/"],
+    );
 
     let decisions_doc = read_repo_file("docs/decisions.md");
+    let required_labels = [
+        "**Decision.**",
+        "**Why.**",
+        "**Consequences.**",
+        "**Revisit when.**",
+    ];
     for decision_heading in [
         "The capability probe lives in the test rig until avandar-tui-term exists",
         "tmux 3.3 is tested in the Linux floor container",
     ] {
         let section_body = extract_markdown_h2_section(&decisions_doc, decision_heading);
-        for required_label in [
-            "**Decision.**",
-            "**Why.**",
-            "**Consequences.**",
-            "**Revisit when.**",
-        ] {
-            assert!(
-                section_body.contains(required_label),
-                "decision '{decision_heading}' missing '{required_label}'"
-            );
-        }
+        assert_contains_all(
+            &section_body,
+            &format!("decision '{decision_heading}'"),
+            &required_labels,
+        );
     }
 }
 
@@ -264,7 +291,7 @@ fn architecture_and_decisions_satisfy_m0_exit_criteria() {
 fn readme_documents_rig_commands_and_hides_private_apps() {
     let readme_doc = read_repo_file("README.md");
     let developing_section = extract_markdown_h2_section(&readme_doc, "Developing");
-    for required_command in [
+    let required_commands = [
         "just check",
         "just lint-targets",
         "just linux",
@@ -274,20 +301,17 @@ fn readme_documents_rig_commands_and_hides_private_apps() {
         "just iterm2",
         "just windows",
         "docs/testing.md",
-    ] {
-        assert!(
-            developing_section.contains(required_command),
-            "README.md ## Developing missing '{required_command}'"
-        );
-    }
-    for forbidden_private_name in ["brain", "huckleberry-cli", "jpsyx"] {
-        assert!(
-            !readme_doc
-                .to_ascii_lowercase()
-                .contains(forbidden_private_name),
-            "README.md leaked private app reference '{forbidden_private_name}'"
-        );
-    }
+    ];
+    assert_contains_all(
+        &developing_section,
+        "README.md ## Developing",
+        &required_commands,
+    );
+    assert_lacks_all(
+        &readme_doc.to_ascii_lowercase(),
+        "README.md",
+        &["brain", "huckleberry-cli", "jpsyx"],
+    );
 }
 
 #[test]
@@ -315,12 +339,11 @@ fn justfile_recipes_and_expected_baselines_are_complete() {
     }
 
     for baseline_file in EXPECTED_BASELINE_FILES {
+        let baseline_path = workspace_root.join("rig/expected").join(baseline_file);
         assert!(
-            workspace_root
-                .join("rig/expected")
-                .join(baseline_file)
-                .is_file(),
-            "missing baseline rig/expected/{baseline_file}"
+            baseline_path.is_file(),
+            "missing {}",
+            baseline_path.display()
         );
     }
 }
@@ -336,7 +359,9 @@ fn rig_sleep_ban_and_touched_docs_em_dash_and_local_path_bans_hold() {
     rig_files.sort();
     assert!(!rig_files.is_empty());
     for file_path in rig_files {
-        let file_contents = fs::read_to_string(&file_path).expect("UTF-8 rig source file");
+        let file_contents = fs::read_to_string(&file_path).unwrap_or_else(|read_error| {
+            panic!("failed to read {}: {read_error}", file_path.display())
+        });
         assert!(
             !has_standalone_ascii_word(&file_contents, sleep_word),
             "{} contains forbidden synchronization word",
@@ -356,4 +381,13 @@ fn rig_sleep_ban_and_touched_docs_em_dash_and_local_path_bans_hold() {
             "{relative_path} leaks a local path"
         );
     }
+}
+
+#[test]
+fn extract_markdown_h2_section_handles_crlf_and_ignores_h3_headings() {
+    let crlf_markdown = "# Title\r\n\r\n### Target\r\ndecoy\r\n## Target\r\nbody\r\n### Sub\r\nsub\r\n## Next\r\ntail\r\n";
+    assert_eq!(
+        extract_markdown_h2_section(crlf_markdown, "Target"),
+        "body\n### Sub\nsub"
+    );
 }
