@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { CliUsageError, parseHarnessArgs } from './args.mjs';
+import { archiveHarnessError, archiveHarnessReport } from './log_archive.mjs';
 import { runScenario } from './scenarios.mjs';
 
 const MODULE_FILE_PATH = fileURLToPath(import.meta.url);
@@ -219,6 +220,34 @@ function handleCliFailure(caughtError, stderrTheme, scriptName, shouldRequireTmu
   return 1;
 }
 
+async function executeAndArchiveScenario({
+  parsedArgs,
+  programPath,
+  createSession,
+  readTmuxBuffer,
+}) {
+  try {
+    const report = await runScenario(parsedArgs.scenario, {
+      program: parsedArgs.program,
+      programPath,
+      extraArgs: parsedArgs.extraArgs,
+      timeoutMs: parsedArgs.timeoutMs,
+      tmuxMode: parsedArgs.tmuxConfig,
+      createSession,
+      readTmuxBuffer,
+    });
+    archiveHarnessReport({ report, parsedArgs });
+    return report;
+  } catch (scenarioError) {
+    try {
+      archiveHarnessError({ error: scenarioError, parsedArgs });
+    } catch {
+      // Preserve the primary scenario failure if error-report archiving fails.
+    }
+    throw scenarioError;
+  }
+}
+
 /**
  * Parses CLI flags, builds `<program>`, executes the scenario, and writes JSON to `stdout`.
  */
@@ -245,12 +274,9 @@ export async function runHarnessCliMain({
       stderrTheme,
       `Running Layer ${layerNumber} xterm.js scenario '${parsedArgs.scenario}' for '${parsedArgs.program}'${modeSuffix}...`,
     );
-    const report = await runScenario(parsedArgs.scenario, {
-      program: parsedArgs.program,
+    const report = await executeAndArchiveScenario({
+      parsedArgs,
       programPath,
-      extraArgs: parsedArgs.extraArgs,
-      timeoutMs: parsedArgs.timeoutMs,
-      tmuxMode: parsedArgs.tmuxConfig,
       createSession,
       readTmuxBuffer,
     });

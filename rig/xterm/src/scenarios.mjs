@@ -14,6 +14,7 @@ import {
   shouldExpectOuterMouseEvents,
   waitForReadyOuterTerminalModes,
 } from './interactive_scenario.mjs';
+import { archiveSessionProbeLog, buildSessionArchiveLabel } from './log_archive.mjs';
 import { startPtySession } from './pty_session.mjs';
 import { readJsonLines, waitForProbeReady } from './ready_waiter.mjs';
 
@@ -103,6 +104,9 @@ function waitBrieflyForSessionExit(exitPromise, maxWaitMs = 1500) {
   });
 }
 
+/**
+ * Disposes `session`, closes `bridge`, and deletes `scratchDir`, rethrowing the first error if any.
+ */
 export async function cleanupManagedSession(session, bridge, scratchDir) {
   let firstCleanupError = null;
   try {
@@ -126,11 +130,25 @@ export async function cleanupManagedSession(session, bridge, scratchDir) {
   }
 }
 
-async function withManagedSession(runtime, managedArgs, runWithContext) {
+async function finalizeManagedSession(session, bridge, scratchDir, archiveOptions, hasPrimaryError) {
+  try {
+    archiveSessionProbeLog(archiveOptions);
+  } catch (archiveError) {
+    if (!hasPrimaryError) {
+      throw archiveError;
+    }
+  } finally {
+    await cleanupManagedSession(session, bridge, scratchDir);
+  }
+}
+
+async function withManagedSession(runtime, managedArgs, runWithContext, sessionLabel = null) {
   const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tuikit-xterm-'));
   const logPath = path.join(scratchDir, 'probe.jsonl');
+  const label = buildSessionArchiveLabel(runtime, managedArgs, sessionLabel);
   let bridge = null;
   let session = null;
+  let hasPrimaryError = false;
   try {
     bridge = await startBrowserBridge({
       cols: DEFAULT_TERMINAL_COLS,
@@ -155,33 +173,28 @@ async function withManagedSession(runtime, managedArgs, runWithContext) {
       timeoutMs: runtime.timeoutMs,
       tmuxMode: runtime.tmuxMode,
     });
+  } catch (caughtError) {
+    hasPrimaryError = true;
+    throw caughtError;
   } finally {
-    await cleanupManagedSession(session, bridge, scratchDir);
+    const archiveOpts = { logPath, label, tmuxMode: runtime.tmuxMode };
+    await finalizeManagedSession(session, bridge, scratchDir, archiveOpts, hasPrimaryError);
   }
 }
 
 async function executeBatchScenario(runtime) {
-  return withManagedSession(runtime, ['--batch'], async (stepContext) => {
-    await waitForProbeReady(
-      stepContext.logPath,
-      stepContext.timeoutMs,
-      stepContext.session.exitPromise,
-    );
-    const exitOutcome = await stepContext.session.waitForExit(stepContext.timeoutMs);
+  return withManagedSession(runtime, ['--batch'], async (ctx) => {
+    await waitForProbeReady(ctx.logPath, ctx.timeoutMs, ctx.session.exitPromise);
+    const exitOutcome = await ctx.session.waitForExit(ctx.timeoutMs);
     assert.equal(exitOutcome.exitCode, 0, `batch probe exited with ${exitOutcome.exitCode}`);
 
-    const terminalStateAfterExit = await stepContext.bridge.getTerminalState(stepContext.timeoutMs);
+    const terminalStateAfterExit = await ctx.bridge.getTerminalState(ctx.timeoutMs);
     assert.equal(terminalStateAfterExit.unicodeVersion, '11');
     assert.equal(terminalStateAfterExit.mouseTrackingMode, 'none');
 
-    const records = readJsonLines(stepContext.logPath);
-    return {
-      scenario: 'batch',
-      exitCode: exitOutcome.exitCode,
-      terminalStateAfterExit,
-      records,
-    };
-  });
+    const records = readJsonLines(ctx.logPath);
+    return { scenario: 'batch', exitCode: exitOutcome.exitCode, terminalStateAfterExit, records };
+  }, 'batch');
 }
 
 async function readActiveTmuxBuffer(runtime, session) {
@@ -191,39 +204,26 @@ async function readActiveTmuxBuffer(runtime, session) {
   if (typeof session.readTmuxBuffer === 'function') {
     return session.readTmuxBuffer();
   }
-  if (typeof runtime.readTmuxBuffer === 'function') {
-    return runtime.readTmuxBuffer(session);
-  }
-  return null;
+  return typeof runtime.readTmuxBuffer === 'function' ? runtime.readTmuxBuffer(session) : null;
 }
 
 async function runSingleOsc52Probe(runtime, form, token) {
   const managedOsc52Args = ['--batch', '--osc52', token, '--osc52-form', form];
-  return withManagedSession(runtime, managedOsc52Args, async (stepContext) => {
-    await waitForProbeReady(
-      stepContext.logPath,
-      stepContext.timeoutMs,
-      stepContext.session.exitPromise,
-    );
-    const exitOutcome = await stepContext.session.waitForExit(stepContext.timeoutMs);
+  return withManagedSession(runtime, managedOsc52Args, async (ctx) => {
+    await waitForProbeReady(ctx.logPath, ctx.timeoutMs, ctx.session.exitPromise);
+    const exitOutcome = await ctx.session.waitForExit(ctx.timeoutMs);
     assert.equal(exitOutcome.exitCode, 0, `osc52 (${form}) exited with ${exitOutcome.exitCode}`);
 
-    const terminalState = await stepContext.bridge.getTerminalState(stepContext.timeoutMs);
-    const tmuxBuffer = await readActiveTmuxBuffer(runtime, stepContext.session);
-
+    const terminalState = await ctx.bridge.getTerminalState(ctx.timeoutMs);
+    const tmuxBuffer = await readActiveTmuxBuffer(runtime, ctx.session);
     if (runtime.tmuxMode === null) {
       assert.ok(
         terminalState.osc52Payloads.some((payload) => payload.decodedText === token),
         `expected xterm.js OSC 52 payload '${token}' in Layer 3`,
       );
     }
-    return {
-      form,
-      token,
-      osc52Payloads: terminalState.osc52Payloads,
-      tmuxBuffer,
-    };
-  });
+    return { form, token, osc52Payloads: terminalState.osc52Payloads, tmuxBuffer };
+  }, `osc52-${form}`);
 }
 
 async function executeOsc52Scenario(runtime) {
@@ -243,17 +243,11 @@ async function executeOsc52Scenario(runtime) {
 }
 
 async function executePanicScenario(runtime) {
-  return withManagedSession(runtime, [], async (stepContext) => {
-    await waitForProbeReady(
-      stepContext.logPath,
-      stepContext.timeoutMs,
-      stepContext.session.exitPromise,
-    );
-    await waitForReadyOuterTerminalModes(stepContext);
-    const terminalStateBeforePanic = await stepContext.bridge.getTerminalState(
-      stepContext.timeoutMs,
-    );
-    if (shouldExpectOuterMouseEvents(stepContext)) {
+  return withManagedSession(runtime, [], async (ctx) => {
+    await waitForProbeReady(ctx.logPath, ctx.timeoutMs, ctx.session.exitPromise);
+    await waitForReadyOuterTerminalModes(ctx);
+    const terminalStateBeforePanic = await ctx.bridge.getTerminalState(ctx.timeoutMs);
+    if (shouldExpectOuterMouseEvents(ctx)) {
       assert.notEqual(
         terminalStateBeforePanic.mouseTrackingMode,
         'none',
@@ -261,14 +255,14 @@ async function executePanicScenario(runtime) {
       );
     }
 
-    await stepContext.bridge.page.keyboard.press('F12');
-    const exitOutcome = await stepContext.session.waitForExit(stepContext.timeoutMs);
-    const hasNonZeroExit = exitOutcome.exitCode !== 0 || exitOutcome.signal !== 0;
-    assert.ok(hasNonZeroExit, 'expected non-zero exit status when F12 panic triggers');
-
-    const terminalStateAfterPanic = await stepContext.bridge.getTerminalState(
-      stepContext.timeoutMs,
+    await ctx.bridge.page.keyboard.press('F12');
+    const exitOutcome = await ctx.session.waitForExit(ctx.timeoutMs);
+    assert.ok(
+      exitOutcome.exitCode !== 0 || exitOutcome.signal !== 0,
+      'expected non-zero exit status when F12 panic triggers',
     );
+
+    const terminalStateAfterPanic = await ctx.bridge.getTerminalState(ctx.timeoutMs);
     assert.equal(terminalStateAfterPanic.mouseTrackingMode, 'none');
     assert.equal(terminalStateAfterPanic.bracketedPasteMode, false);
     assert.equal(terminalStateAfterPanic.sendFocusMode, false);
@@ -280,20 +274,16 @@ async function executePanicScenario(runtime) {
       terminalStateBeforePanic,
       terminalStateAfterPanic,
     };
-  });
+  }, 'panic');
 }
 
 async function executePassthroughScenario(runtime) {
-  return withManagedSession(runtime, [], async (stepContext) => {
-    const exitOutcome = await stepContext.session.waitForExit(stepContext.timeoutMs);
+  return withManagedSession(runtime, [], async (ctx) => {
+    const exitOutcome = await ctx.session.waitForExit(ctx.timeoutMs);
     assert.equal(exitOutcome.exitCode, 0, `passthrough program exited with ${exitOutcome.exitCode}`);
-    const records = fs.existsSync(stepContext.logPath) ? readJsonLines(stepContext.logPath) : [];
-    return {
-      scenario: 'passthrough',
-      exitCode: exitOutcome.exitCode,
-      records,
-    };
-  });
+    const records = fs.existsSync(ctx.logPath) ? readJsonLines(ctx.logPath) : [];
+    return { scenario: 'passthrough', exitCode: exitOutcome.exitCode, records };
+  }, 'passthrough');
 }
 
 async function dispatchScenarioByName(scenarioName, runtime) {

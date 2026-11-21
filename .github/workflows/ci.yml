@@ -1,0 +1,240 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compute Linux floor image tag and stage build context
+        id: linux-image
+        run: |
+          input_digests="$(sha256sum \
+            rig/linux/Dockerfile \
+            rig/linux/entrypoint.sh \
+            rig/xterm/package.json \
+            rig/xterm/package-lock.json)"
+          combined_hash="$(printf '%s\n' "$input_digests" | sha256sum | awk '{print $1}')"
+          image_tag="avandar-tui-kit-linux:${combined_hash:0:12}"
+          echo "image_tag=${image_tag}" >> "$GITHUB_OUTPUT"
+          mkdir -p "${RUNNER_TEMP}/linux-ctx/rig/linux" "${RUNNER_TEMP}/linux-ctx/rig/xterm"
+          cp -p rig/linux/Dockerfile rig/linux/entrypoint.sh "${RUNNER_TEMP}/linux-ctx/rig/linux/"
+          cp -p rig/xterm/package.json rig/xterm/package-lock.json "${RUNNER_TEMP}/linux-ctx/rig/xterm/"
+          mkdir -p target/ci-event-logs/linux
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and cache Linux floor image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ runner.temp }}/linux-ctx
+          file: ${{ runner.temp }}/linux-ctx/rig/linux/Dockerfile
+          tags: ${{ steps.linux-image.outputs.image_tag }}
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Format check
+        run: ./rig/linux/run.sh cargo fmt --all --check
+
+      - name: Clippy, tests, and docs
+        run: |
+          ./rig/linux/run.sh bash -c '
+            set -euo pipefail
+            cargo clippy --workspace --all-targets --all-features -- -D warnings
+            cargo test --workspace --all-features
+            RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
+          '
+
+      - name: Build and test at Rust 1.88 with every feature
+        run: |
+          ./rig/linux/run.sh bash -c '
+            set -euo pipefail
+            rustc --version | grep -E "^rustc 1\.88\."
+            cargo build --workspace --all-features
+            cargo test --workspace --all-features
+          '
+
+      - name: Feature checks
+        run: ./rig/linux/run.sh ./scripts/ci/check-features.sh
+
+      - name: xterm.js harness
+        run: |
+          ./rig/linux/run.sh npm --prefix rig/xterm test
+          RIG_XTERM_LOG_DIR="${GITHUB_WORKSPACE}/target/ci-event-logs/linux" \
+            ./rig/linux/run.sh ./rig/xterm/run.sh capability_probe \
+            > target/ci-event-logs/linux/stdout-xterm.json
+
+      - name: xterm.js harness in stock and full tmux
+        run: |
+          RIG_XTERM_LOG_DIR="${GITHUB_WORKSPACE}/target/ci-event-logs/linux" \
+            ./rig/linux/run.sh ./rig/xterm/run-tmux.sh stock capability_probe \
+            > target/ci-event-logs/linux/stdout-tmux-stock.json
+          RIG_XTERM_LOG_DIR="${GITHUB_WORKSPACE}/target/ci-event-logs/linux" \
+            ./rig/linux/run.sh ./rig/xterm/run-tmux.sh full capability_probe \
+            > target/ci-event-logs/linux/stdout-tmux-full.json
+
+      - name: Upload Linux event logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-event-logs
+          path: target/ci-event-logs/linux
+          if-no-files-found: ignore
+
+  macos:
+    name: macOS
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.88.0
+        uses: dtolnay/rust-toolchain@1.88.0
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: rig/xterm/package-lock.json
+
+      - name: Install tmux and xterm.js harness dependencies
+        run: |
+          command -v tmux >/dev/null 2>&1 || HOMEBREW_NO_AUTO_UPDATE=1 brew install tmux
+          npm --prefix rig/xterm ci
+          npx --prefix rig/xterm playwright install chromium
+          mkdir -p target/ci-event-logs/macos
+
+      - name: Clippy, tests, and docs
+        run: |
+          cargo +stable clippy --workspace --all-targets --all-features -- -D warnings
+          cargo +stable test --workspace --all-features
+          RUSTDOCFLAGS="-D warnings" cargo +stable doc --workspace --all-features --no-deps
+
+      - name: Build and test at Rust 1.88 with every feature
+        run: |
+          rustc +1.88.0 --version | grep -E '^rustc 1\.88\.'
+          cargo +1.88.0 build --workspace --all-features
+          cargo +1.88.0 test --workspace --all-features
+
+      - name: xterm.js harness
+        run: |
+          npm --prefix rig/xterm test
+          RIG_XTERM_LOG_DIR="${GITHUB_WORKSPACE}/target/ci-event-logs/macos" \
+            ./rig/xterm/run.sh capability_probe \
+            > target/ci-event-logs/macos/stdout-xterm.json
+
+      - name: xterm.js harness in stock and full tmux
+        run: |
+          RIG_XTERM_LOG_DIR="${GITHUB_WORKSPACE}/target/ci-event-logs/macos" \
+            ./rig/xterm/run-tmux.sh stock capability_probe \
+            > target/ci-event-logs/macos/stdout-tmux-stock.json
+          RIG_XTERM_LOG_DIR="${GITHUB_WORKSPACE}/target/ci-event-logs/macos" \
+            ./rig/xterm/run-tmux.sh full capability_probe \
+            > target/ci-event-logs/macos/stdout-tmux-full.json
+
+      - name: Upload macOS event logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-event-logs
+          path: target/ci-event-logs/macos
+          if-no-files-found: ignore
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.88.0
+        uses: dtolnay/rust-toolchain@1.88.0
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: rig/xterm/package-lock.json
+
+      - name: Install xterm.js harness dependencies
+        run: |
+          New-Item -ItemType Directory -Force -Path target/ci-event-logs/windows | Out-Null
+          npm --prefix rig/xterm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx --prefix rig/xterm playwright install chromium
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Clippy, tests, and docs
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          cargo +stable clippy --workspace --all-targets --all-features -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +stable test --workspace --all-features
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +stable test -p rig-probe cmd_shim -- --nocapture | Tee-Object -FilePath target/ci-event-logs/windows/cmd-shim-test.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +stable doc --workspace --all-features --no-deps
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build and test at Rust 1.88 with every feature
+        run: |
+          $rustcVersion = rustc +1.88.0 --version
+          if ($LASTEXITCODE -ne 0 -or $rustcVersion -notmatch '^rustc 1\.88\.') {
+            Write-Error "Unexpected Rust 1.88 toolchain output: $rustcVersion"
+            exit 1
+          }
+          cargo +1.88.0 build --workspace --all-features
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +1.88.0 test --workspace --all-features
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: xterm.js harness
+        run: |
+          npm --prefix rig/xterm test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:RIG_XTERM_LOG_DIR = "${env:GITHUB_WORKSPACE}/target/ci-event-logs/windows"
+          $stdoutJson = node rig/xterm/src/harness.mjs capability_probe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+          [System.IO.File]::WriteAllText("$PWD/target/ci-event-logs/windows/stdout-xterm.json", ($stdoutJson -join "`n") + "`n", $utf8NoBom)
+
+      - name: Upload Windows event logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-event-logs
+          path: target/ci-event-logs/windows
+          if-no-files-found: warn

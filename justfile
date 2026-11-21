@@ -57,6 +57,10 @@ xterm-tmux *args:
 orca *args:
     ./rig/orca/run.sh "$@"
 
+# Inspect and download Windows CI job logs and event artifacts for the current branch (Layer 7).
+windows *args:
+    ./rig/windows/run.sh "$@"
+
 # Restore the agent skills pinned in skills-lock.json (run once after cloning).
 skills-install:
     npx --yes skills experimental_install
