@@ -196,7 +196,7 @@ esac
     }
 
     #[test]
-    fn help_flags_work_outside_repo_without_external_tools() {
+    fn help_flags_print_usage_sections_outside_repo_with_hermetic_path() {
         let temp_dir = TempTestDir::create("help");
         let hermetic_bin = temp_dir.0.join("hermetic-bin");
         create_hermetic_shell_bin(&hermetic_bin);

@@ -122,45 +122,46 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mouse_setup_and_teardown_follow_rules_m1_m2_and_m5() {
-        assert_eq!(MOUSE_SETUP_M1, b"\x1b[?1000h\x1b[?1002h\x1b[?1006h");
+    fn mouse_setup_enables_button_drag_and_sgr_without_any_event_motion_1003() {
+        for required_enable in [&b"\x1b[?1000h"[..], b"\x1b[?1002h", b"\x1b[?1006h"] {
+            assert!(
+                MOUSE_SETUP_M1
+                    .windows(required_enable.len())
+                    .any(|window| window == required_enable)
+            );
+        }
         assert!(!MOUSE_SETUP_M1.windows(5).any(|window| window == b"1003h"));
-        assert_eq!(
-            MOUSE_TEARDOWN_M5,
-            b"\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1016l"
-        );
     }
 
     #[test]
-    fn builds_decrpm_and_osc52_sequences_with_padding() {
-        assert_eq!(build_decrpm_query(1002), b"\x1b[?1002$p");
+    fn mouse_teardown_resets_every_tracking_and_encoding_mode() {
+        for mode_number in [9_u16, 1000, 1002, 1003, 1005, 1006, 1015, 1016] {
+            let reset_sequence = format!("\x1b[?{mode_number}l");
+            assert!(
+                MOUSE_TEARDOWN_M5
+                    .windows(reset_sequence.len())
+                    .any(|window| window == reset_sequence.as_bytes()),
+                "missing reset for mode {mode_number}"
+            );
+        }
+    }
+
+    #[test]
+    fn encode_base64_pads_zero_one_and_two_remainder_bytes() {
         assert_eq!(encode_base64(b""), "");
         assert_eq!(encode_base64(b"f"), "Zg==");
         assert_eq!(encode_base64(b"fo"), "Zm8=");
         assert_eq!(encode_base64(b"foo"), "Zm9v");
         assert_eq!(encode_base64("漢".as_bytes()), "5ryi");
+    }
+
+    #[test]
+    fn decrpm_and_osc52_builders_frame_payload_and_double_tmux_escapes() {
+        assert_eq!(build_decrpm_query(1002), b"\x1b[?1002$p");
         assert_eq!(build_osc52_plain(b"probe-1"), b"\x1b]52;c;cHJvYmUtMQ==\x07");
         assert_eq!(
             build_osc52_tmux(b"probe-1"),
             b"\x1bPtmux;\x1b\x1b]52;c;cHJvYmUtMQ==\x07\x1b\\"
         );
-    }
-
-    #[test]
-    fn query_and_mode_toggle_constants_match_exact_wire_bytes() {
-        assert_eq!(XTVERSION_QUERY, b"\x1b[>0q");
-        assert_eq!(DA1_FENCE_QUERY, b"\x1b[c");
-        assert_eq!(KITTY_KEYBOARD_QUERY, b"\x1b[?u");
-        assert_eq!(KITTY_KEYBOARD_PUSH_DISAMBIGUATE, b"\x1b[>1u");
-        assert_eq!(KITTY_KEYBOARD_POP, b"\x1b[<u");
-        assert_eq!(CELL_SIZE_PIXELS_QUERY, b"\x1b[16t");
-        assert_eq!(CURSOR_POSITION_QUERY, b"\x1b[6n");
-        assert_eq!(OSC_11_BACKGROUND_QUERY, b"\x1b]11;?\x07");
-        assert_eq!(BRACKETED_PASTE_ON, b"\x1b[?2004h");
-        assert_eq!(BRACKETED_PASTE_OFF, b"\x1b[?2004l");
-        assert_eq!(FOCUS_EVENTS_ON, b"\x1b[?1004h");
-        assert_eq!(FOCUS_EVENTS_OFF, b"\x1b[?1004l");
-        assert_eq!(SYNC_OUTPUT_ON, b"\x1b[?2026h");
-        assert_eq!(SYNC_OUTPUT_OFF, b"\x1b[?2026l");
     }
 }

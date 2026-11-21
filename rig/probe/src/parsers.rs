@@ -75,17 +75,7 @@ pub struct CellPixelSize {
 /// Extracts all `DECRPM` replies (`CSI ? <mode> ; <state> $ y`) in arrival order.
 #[must_use]
 pub fn parse_mode_reports(bytes: &[u8]) -> Vec<ModeReport> {
-    let mut reports = Vec::new();
-    let mut scan_index = 0;
-    while scan_index < bytes.len() {
-        if let Some((report, next_index)) = parse_mode_report_at(bytes, scan_index) {
-            reports.push(report);
-            scan_index = next_index;
-        } else {
-            scan_index += 1;
-        }
-    }
-    reports
+    scan_tokens(bytes, parse_mode_report_at).collect()
 }
 
 /// Returns the most recent reported [`ModeReportState`] for `target_mode` in `reports`.
@@ -128,33 +118,13 @@ pub fn parse_xtversion_reply(bytes: &[u8]) -> Option<String> {
 /// Extracts all Kitty keyboard `<flags>` replies (`CSI ? <flags> u` or `CSI ? <flags> ; <mode> u`) in arrival order.
 #[must_use]
 pub fn parse_kitty_flags_replies(bytes: &[u8]) -> Vec<u16> {
-    let mut flag_values = Vec::new();
-    let mut scan_index = 0;
-    while scan_index < bytes.len() {
-        if let Some((flags, next_index)) = parse_kitty_flags_at(bytes, scan_index) {
-            flag_values.push(flags);
-            scan_index = next_index;
-        } else {
-            scan_index += 1;
-        }
-    }
-    flag_values
+    scan_tokens(bytes, parse_kitty_flags_at).collect()
 }
 
 /// Extracts the latest valid one-based cursor position from `CSI <row> ; <column> R` replies.
 #[must_use]
 pub fn parse_cursor_position(bytes: &[u8]) -> Option<CursorPosition> {
-    let mut latest_position = None;
-    let mut scan_index = 0;
-    while scan_index < bytes.len() {
-        if let Some((position, next_index)) = parse_cursor_position_at(bytes, scan_index) {
-            latest_position = Some(position);
-            scan_index = next_index;
-        } else {
-            scan_index += 1;
-        }
-    }
-    latest_position
+    scan_tokens(bytes, parse_cursor_position_at).last()
 }
 
 /// Extracts cell pixel dimensions from a `CSI 6 ; <height> ; <width> t` reply.
@@ -167,6 +137,23 @@ pub fn parse_cell_pixel_size(bytes: &[u8]) -> Option<CellPixelSize> {
 #[must_use]
 pub fn has_da1_reply(bytes: &[u8]) -> bool {
     (0..bytes.len()).any(|scan_index| has_da1_reply_at(bytes, scan_index))
+}
+
+fn scan_tokens<T, F>(bytes: &[u8], mut parse_at: F) -> impl Iterator<Item = T>
+where
+    F: FnMut(&[u8], usize) -> Option<(T, usize)>,
+{
+    let mut scan_index = 0;
+    std::iter::from_fn(move || {
+        while scan_index < bytes.len() {
+            if let Some((token, next_index)) = parse_at(bytes, scan_index) {
+                scan_index = next_index;
+                return Some(token);
+            }
+            scan_index += 1;
+        }
+        None
+    })
 }
 
 fn parse_ascii_u16(bytes: &[u8], start_index: usize) -> Option<(u16, usize)> {
@@ -285,9 +272,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_coalesced_mode_reports_and_missing_optional_replies_before_da1_fence() {
-        // Simulates tmux: answers DECRPM for 1000/1002/1006, ignores Kitty (?u) and cell size (16t),
-        // then answers DA1 (\x1b[?1;2c).
+    fn coalesced_mode_reports_before_da1_fence_decode_in_arrival_order() {
         let reply_bytes = b"\x1b[?1000;2$y\x1b[?1002;1$y\x1b[?1006;1$y\x1b[?1;2c";
         assert!(has_da1_reply(reply_bytes));
         let report = |mode, state| ModeReport { mode, state };
@@ -306,40 +291,49 @@ mod tests {
     }
 
     #[test]
-    fn parses_xtversion_kitty_cursor_and_cell_size_replies() {
+    fn xtversion_reply_decodes_utf8_and_resumes_after_interrupted_dcs() {
+        assert_eq!(
+            parse_xtversion_reply(b"\x1bP>|xterm.js(6.0.0)\x1b\\").as_deref(),
+            Some("xterm.js(6.0.0)")
+        );
+        assert_eq!(
+            parse_xtversion_reply(b"\x1bP>|v1-\xff\x1b\\").as_deref(),
+            Some("v1-\u{fffd}")
+        );
+        assert_eq!(
+            parse_xtversion_reply(b"\x1bP>|foo\x1bP>|bar\x1b\\").as_deref(),
+            Some("bar")
+        );
+        assert_eq!(parse_xtversion_reply(b"\x1bP>|unterminated\x1b"), None);
+    }
+
+    #[test]
+    fn kitty_cursor_and_cell_size_parsers_extract_latest_values() {
         let reply_bytes = concat!(
-            "\x1bP>|xterm.js(6.0.0)\x1b\\",
             "\x1b[?0u\x1b[?1;1u",
             "\x1b[6;18;9t",
             "\x1b[1;1Rnoise\x1b[1;3R",
             "\x1b[?62;22c",
         )
         .as_bytes();
-        assert_eq!(
-            parse_xtversion_reply(reply_bytes).as_deref(),
-            Some("xterm.js(6.0.0)")
-        );
         assert_eq!(parse_kitty_flags_replies(reply_bytes), vec![0, 1]);
-        let expected_cell = CellPixelSize {
-            height_px: 18,
-            width_px: 9,
-        };
-        assert_eq!(parse_cell_pixel_size(reply_bytes), Some(expected_cell));
+        assert_eq!(
+            parse_cell_pixel_size(reply_bytes),
+            Some(CellPixelSize {
+                height_px: 18,
+                width_px: 9,
+            })
+        );
         assert_eq!(
             parse_cursor_position(reply_bytes),
             Some(CursorPosition { row: 1, column: 3 })
         );
         assert!(has_da1_reply(reply_bytes));
         assert!(has_da1_reply(b"\x1b[?6c"));
-        let non_utf8_xt = b"\x1bP>|v1-\xff\x1b\\";
-        assert_eq!(
-            parse_xtversion_reply(non_utf8_xt).as_deref(),
-            Some("v1-\u{fffd}")
-        );
     }
 
     #[test]
-    fn incomplete_da1_or_malformed_csi_does_not_false_trigger_fence() {
+    fn incomplete_or_malformed_da1_sequences_leave_fence_unsatisfied() {
         for malformed in [
             &b"\x1b[?1002;1$y\x1b[?62;"[..],
             b"\x1b[?u",
@@ -351,7 +345,10 @@ mod tests {
             assert!(!has_da1_reply(malformed));
         }
         assert!(has_da1_reply(b"leading-noise\x00\xff\x1b[?6c"));
+    }
 
+    #[test]
+    fn out_of_range_or_zero_csi_parameters_parse_as_none_before_valid_tail() {
         let bad_kitty = b"\x1b[?u\x1b[?;1u\x1b[?1;u\x1b[?999999u";
         assert_eq!(parse_kitty_flags_replies(bad_kitty), Vec::<u16>::new());
         let bad_cpr = b"\x1b[0;1R\x1b[1;0R\x1b[999999;1R";
@@ -359,21 +356,19 @@ mod tests {
         let bad_cell = b"\x1b[6;0;9t\x1b[6;18;0t\x1b[6;999999;9t";
         assert_eq!(parse_cell_pixel_size(bad_cell), None);
         let mixed_cell = b"\x1b[6;0;9t\x1b[6;16;8t";
-        let valid_cell = CellPixelSize {
-            height_px: 16,
-            width_px: 8,
-        };
-        assert_eq!(parse_cell_pixel_size(mixed_cell), Some(valid_cell));
+        assert_eq!(
+            parse_cell_pixel_size(mixed_cell),
+            Some(CellPixelSize {
+                height_px: 16,
+                width_px: 8,
+            })
+        );
         let bad_modes = b"\x1b[?999999;1$y\x1b[?1000;999999$y";
         assert_eq!(parse_mode_reports(bad_modes), Vec::<ModeReport>::new());
-
-        let multi_xt = b"\x1bP>|foo\x1bP>|bar\x1b\\";
-        assert_eq!(parse_xtversion_reply(multi_xt).as_deref(), Some("bar"));
-        assert_eq!(parse_xtversion_reply(b"\x1bP>|unterminated\x1b"), None);
     }
 
     #[test]
-    fn maps_all_decrpm_mode_report_state_codes_and_labels() {
+    fn mode_report_state_maps_standard_and_unknown_decrpm_codes() {
         let expected_cases = [
             (0, ModeReportState::NotRecognized, "not_recognized"),
             (1, ModeReportState::Set, "set"),

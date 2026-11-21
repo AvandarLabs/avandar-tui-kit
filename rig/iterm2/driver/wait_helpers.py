@@ -13,8 +13,13 @@ from typing import TypeVar
 
 from driver.cli_args import DriverRuntimeError
 
+# Generic return value produced by `poll_until` predicates.
 OutcomeT = TypeVar("OutcomeT")
+
+# Pattern matching DEC private mode report replies (`CSI ? <mode> ; <pm> $ y`).
 DECRQM_REPORT_PATTERN = re.compile(r"\x1b\[\?(\d+);(\d+)\$y")
+
+# Unbracketed character key sequence expected when `alpha\nbeta` arrives as raw keys.
 EXPECTED_PASTE_KEYS: tuple[str, ...] = (
     "char:a",
     "char:l",
@@ -57,6 +62,17 @@ def poll_until(
         waiter.wait(min(poll_interval, remaining))
 
 
+def _parse_jsonl_lines(lines: Sequence[str]) -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if stripped:
+            parsed = json.loads(stripped)
+            if isinstance(parsed, dict):
+                records.append(parsed)
+    return records
+
+
 def read_complete_jsonl_records(log_path: str | Path) -> list[dict[str, object]]:
     """Reads all newline-terminated JSON objects from `log_path`, ignoring partial tail bytes."""
     target = Path(log_path)
@@ -65,17 +81,7 @@ def read_complete_jsonl_records(log_path: str | Path) -> list[dict[str, object]]
     raw_text = target.read_text(encoding="utf-8", errors="replace")
     if not raw_text:
         return []
-    lines = raw_text.split("\n")
-    complete_lines = lines[:-1]
-    records: list[dict[str, object]] = []
-    for raw_line in complete_lines:
-        stripped = raw_line.strip()
-        if not stripped:
-            continue
-        parsed = json.loads(stripped)
-        if isinstance(parsed, dict):
-            records.append(parsed)
-    return records
+    return _parse_jsonl_lines(raw_text.split("\n")[:-1])
 
 
 def read_all_jsonl_records(log_path: str | Path) -> list[dict[str, object]]:
@@ -83,14 +89,7 @@ def read_all_jsonl_records(log_path: str | Path) -> list[dict[str, object]]:
     target = Path(log_path)
     if not target.is_file():
         return []
-    records: list[dict[str, object]] = []
-    for raw_line in target.read_text(encoding="utf-8", errors="replace").splitlines():
-        stripped = raw_line.strip()
-        if stripped:
-            parsed = json.loads(stripped)
-            if isinstance(parsed, dict):
-                records.append(parsed)
-    return records
+    return _parse_jsonl_lines(target.read_text(encoding="utf-8", errors="replace").splitlines())
 
 
 def is_fence_key_record(record: dict[str, object]) -> bool:
@@ -102,21 +101,17 @@ def is_fence_key_record(record: dict[str, object]) -> bool:
     )
 
 
-def is_fence_press_record(record: dict[str, object]) -> bool:
-    """Returns True when `record` is an F2 key-press fence boundary."""
-    return is_fence_key_record(record) and record.get("key_kind") == "press"
-
-
 def extract_fence_slice(
     records: Sequence[dict[str, object]],
-    start_count: int,
+    start_record_count: int,
 ) -> list[dict[str, object]] | None:
-    """Returns event records between `start_count` and the next F2 press, or None if not arrived."""
-    for index in range(start_count, len(records)):
-        if is_fence_press_record(records[index]):
+    """Returns event records between `start_record_count` and the next F2 press, or None if not arrived."""
+    for index in range(start_record_count, len(records)):
+        candidate = records[index]
+        if is_fence_key_record(candidate) and candidate.get("key_kind") == "press":
             return [
                 record
-                for record in records[start_count:index]
+                for record in records[start_record_count:index]
                 if record.get("kind") == "event" and not is_fence_key_record(record)
             ]
     return None

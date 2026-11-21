@@ -24,14 +24,6 @@ use crate::sequences::{
 use crate::terminal_io::{RawQuerySession, TerminalSessionGuard, TerminalWriter};
 use crate::widths::WIDTH_SAMPLES;
 
-fn build_mouse_decrpm_queries() -> Vec<u8> {
-    let mut payload = Vec::with_capacity(36);
-    for mode in [1000_u16, 1002, 1003, 1006] {
-        payload.extend_from_slice(&build_decrpm_query(mode));
-    }
-    payload
-}
-
 fn run_identity_section(
     session: &mut RawQuerySession,
     log: &mut JsonLog,
@@ -54,7 +46,10 @@ fn run_mouse_modes_section(session: &mut RawQuerySession, log: &mut JsonLog) -> 
         let json_line = format_mouse_modes_section(&[], &[], &[], session.has_fence_timed_out());
         return log.write_line(&json_line);
     }
-    let decrpm_batch = build_mouse_decrpm_queries();
+    let decrpm_batch: Vec<u8> = [1000_u16, 1002, 1003, 1006]
+        .into_iter()
+        .flat_map(build_decrpm_query)
+        .collect();
     let initial_reply = session.query_fenced("mouse_modes:initial_decrpm", &decrpm_batch, log)?;
     let initial_reports = parse_mode_reports(&initial_reply.bytes);
     if initial_reply.has_timed_out {
@@ -225,15 +220,6 @@ fn run_widths_section(session: &mut RawQuerySession, log: &mut JsonLog) -> io::R
     log.write_line(&format_widths_section(&measurements, has_any_timed_out))
 }
 
-const fn resolve_osc52_forms(form: Osc52Form, is_tmux: bool) -> (bool, bool) {
-    match form {
-        Osc52Form::Auto => (true, is_tmux),
-        Osc52Form::Plain => (true, false),
-        Osc52Form::Tmux => (false, true),
-        Osc52Form::Both => (true, true),
-    }
-}
-
 fn run_osc52_section(
     session: &mut RawQuerySession,
     args: &ProbeArgs,
@@ -243,7 +229,12 @@ fn run_osc52_section(
     let Some(token) = &args.osc52_token else {
         return log.write_line(&format_osc52_section(false, false, false));
     };
-    let (should_send_plain, should_send_tmux) = resolve_osc52_forms(args.osc52_form, is_tmux);
+    let (should_send_plain, should_send_tmux) = match args.osc52_form {
+        Osc52Form::Auto => (true, is_tmux),
+        Osc52Form::Plain => (true, false),
+        Osc52Form::Tmux => (false, true),
+        Osc52Form::Both => (true, true),
+    };
     if should_send_plain {
         let plain_bytes = build_osc52_plain(token.as_bytes());
         session.write_raw("osc52:plain", &plain_bytes, log)?;
@@ -270,13 +261,13 @@ pub fn run_all_probe_sections(
     args: &ProbeArgs,
     log: &mut JsonLog,
 ) -> io::Result<(TerminalWriter, ArmedColorListener)> {
-    let env_snapshot = run_identity_section(&mut session, log)?;
+    let environment_snapshot = run_identity_section(&mut session, log)?;
     run_mouse_modes_section(&mut session, log)?;
     run_kitty_keyboard_section(&mut session, guard, log)?;
     run_modes_section(&mut session, log)?;
     run_cell_size_section(&mut session, log)?;
     run_widths_section(&mut session, log)?;
-    run_osc52_section(&mut session, args, env_snapshot.is_tmux, log)?;
+    run_osc52_section(&mut session, args, environment_snapshot.is_tmux, log)?;
 
     // Drop the demand-driven raw reader before `crossterm::event` opens `/dev/tty`.
     let mut writer = session.into_writer();
@@ -285,159 +276,4 @@ pub fn run_all_probe_sections(
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::VecDeque;
-    use std::fs;
-    use std::io::Read;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use super::*;
-    use crate::terminal_io::DemandByteReader;
-
-    static NEXT_SECTION_TEST_ID: AtomicUsize = AtomicUsize::new(1);
-
-    struct ChunkSequenceReader {
-        chunks: VecDeque<Vec<u8>>,
-    }
-
-    impl Read for ChunkSequenceReader {
-        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-            let Some(chunk) = self.chunks.pop_front() else {
-                return Ok(0);
-            };
-            buffer[..chunk.len()].copy_from_slice(&chunk);
-            Ok(chunk.len())
-        }
-    }
-
-    fn temp_log_path() -> PathBuf {
-        let id = NEXT_SECTION_TEST_ID.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
-            "rig-probe-sections-{}-{id}.jsonl",
-            std::process::id()
-        ))
-    }
-
-    #[test]
-    fn kitty_keyboard_pops_stack_even_when_pushed_query_fence_times_out() {
-        let log_path = temp_log_path();
-        let mut log = JsonLog::create(&log_path).expect("log must create");
-        let reader = DemandByteReader::spawn(ChunkSequenceReader {
-            // Answers initial_query (`?0u` + DA1), then EOF on pushed_query to trigger timeout.
-            chunks: VecDeque::from([b"\x1b[?0u\x1b[?6c".to_vec()]),
-        });
-        let mut session = RawQuerySession::for_test(reader);
-        let guard = TerminalSessionGuard::acquire(false).expect("detached guard");
-
-        run_kitty_keyboard_section(&mut session, &guard, &mut log)
-            .expect("kitty section must recover cleanly");
-        let logged = fs::read_to_string(&log_path).expect("log must be readable");
-        let _ = fs::remove_file(&log_path);
-
-        assert!(logged.contains("\"hex\":\"1b5b3e3175"));
-        assert!(logged.contains("\"hex\":\"1b5b3c75"));
-    }
-
-    #[test]
-    fn modes_section_disables_toggled_mode_when_enable_fence_times_out() {
-        let log_path = temp_log_path();
-        let mut log = JsonLog::create(&log_path).expect("log must create");
-        let reader = DemandByteReader::spawn(ChunkSequenceReader {
-            chunks: VecDeque::new(),
-        });
-        let mut session = RawQuerySession::for_test(reader);
-
-        run_modes_section(&mut session, &mut log).expect("modes section must recover cleanly");
-        let logged = fs::read_to_string(&log_path).expect("log must be readable");
-        let _ = fs::remove_file(&log_path);
-
-        assert!(logged.contains("1b5b3f3230303468"));
-        assert!(logged.contains("1b5b3f323030346c"));
-        assert!(!logged.contains("1b5b3f3130303468"));
-    }
-
-    #[test]
-    fn mouse_modes_skips_non_raw_and_tears_down_m5_on_fence_timeout() {
-        let non_raw_path = temp_log_path();
-        let mut non_raw_log = JsonLog::create(&non_raw_path).expect("log must create");
-        let mut non_raw_session = RawQuerySession::detached_for_test();
-        run_mouse_modes_section(&mut non_raw_session, &mut non_raw_log)
-            .expect("detached mouse section must succeed");
-        let non_raw_logged = fs::read_to_string(&non_raw_path).expect("log must be readable");
-        let _ = fs::remove_file(&non_raw_path);
-        assert!(!non_raw_logged.contains("mouse_modes:setup_m1"));
-
-        let initial_to_path = temp_log_path();
-        let mut initial_to_log = JsonLog::create(&initial_to_path).expect("log must create");
-        let empty_reader = DemandByteReader::spawn(ChunkSequenceReader {
-            chunks: VecDeque::new(),
-        });
-        let mut initial_to_session = RawQuerySession::for_test(empty_reader);
-        run_mouse_modes_section(&mut initial_to_session, &mut initial_to_log)
-            .expect("initial-timeout mouse section must succeed");
-        let initial_to_logged = fs::read_to_string(&initial_to_path).expect("log must be readable");
-        let _ = fs::remove_file(&initial_to_path);
-        assert!(!initial_to_logged.contains("mouse_modes:setup_m1"));
-
-        let timeout_path = temp_log_path();
-        let mut timeout_log = JsonLog::create(&timeout_path).expect("log must create");
-        let reader = DemandByteReader::spawn(ChunkSequenceReader {
-            chunks: VecDeque::from([b"\x1b[?1002;2$y\x1b[?6c".to_vec()]),
-        });
-        let mut timeout_session = RawQuerySession::for_test(reader);
-        run_mouse_modes_section(&mut timeout_session, &mut timeout_log)
-            .expect("timed-out mouse section must recover cleanly");
-        let timeout_logged = fs::read_to_string(&timeout_path).expect("log must be readable");
-        let _ = fs::remove_file(&timeout_path);
-        assert!(timeout_logged.contains("mouse_modes:setup_m1"));
-        assert!(timeout_logged.contains("mouse_modes:teardown_m5"));
-    }
-
-    fn run_osc52_case(
-        token: Option<&str>,
-        form: crate::probe_args::Osc52Form,
-        is_tmux: bool,
-    ) -> String {
-        let log_path = temp_log_path();
-        let mut log = JsonLog::create(&log_path).expect("log must create");
-        let mut session = RawQuerySession::detached_for_test();
-        let args = ProbeArgs {
-            log_path: log_path.clone(),
-            is_batch: true,
-            is_push_kitty: false,
-            osc52_token: token.map(str::to_owned),
-            osc52_form: form,
-        };
-        run_osc52_section(&mut session, &args, is_tmux, &mut log)
-            .expect("osc52 section must succeed");
-        let logged = fs::read_to_string(&log_path).expect("log must be readable");
-        let _ = fs::remove_file(&log_path);
-        logged
-    }
-
-    #[test]
-    fn osc52_section_respects_osc52_form_across_plain_and_tmux_environments() {
-        use crate::probe_args::Osc52Form;
-
-        let unconfigured = run_osc52_case(None, Osc52Form::Both, true);
-        assert!(unconfigured.contains(r#""emitted":false,"plain_sent":false,"tmux_sent":false"#));
-        assert!(!unconfigured.contains("osc52:plain") && !unconfigured.contains("osc52:tmux"));
-
-        let cases = [
-            (Osc52Form::Auto, false, true, false),
-            (Osc52Form::Auto, true, true, true),
-            (Osc52Form::Plain, true, true, false),
-            (Osc52Form::Tmux, false, false, true),
-            (Osc52Form::Both, false, true, true),
-        ];
-        for (form, is_tmux, expect_plain, expect_tmux) in cases {
-            let logged = run_osc52_case(Some("tok"), form, is_tmux);
-            let expected_section =
-                format!(r#""emitted":true,"plain_sent":{expect_plain},"tmux_sent":{expect_tmux}"#);
-            assert!(logged.contains(&expected_section), "logged: {logged}");
-            assert_eq!(logged.contains("osc52:plain"), expect_plain);
-            assert_eq!(logged.contains("osc52:tmux"), expect_tmux);
-        }
-    }
-}
+mod tests;

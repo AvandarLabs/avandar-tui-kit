@@ -1,6 +1,6 @@
 /**
- * Condition-based JSONL log reader, `.ready` sentinel waiter, and live record condition waiter
- * (Rule 3 of docs/testing.md).
+ * Condition-based JSONL log reader, `.ready` sentinel waiter, and live record
+ * selector waiter for deterministic terminal probe synchronization.
  */
 
 import fs from 'node:fs';
@@ -9,30 +9,32 @@ import path from 'node:path';
 const CONDITION_POLL_INTERVAL_MS = 25;
 
 /**
- * Builds the `<logPath>.ready` sentinel path paired with `logPath`.
+ * Appends `.ready` to `logPath`, returning the sentinel file path polled by
+ * `waitForProbeReady`.
  */
 export function buildReadySentinelPath(logPath) {
   return `${logPath}.ready`;
 }
 
-/**
- * Reads and parses all non-empty JSON Lines records from `logPath`.
- */
-export function readJsonLines(logPath) {
-  const rawContents = fs.readFileSync(logPath, 'utf8');
-  const records = [];
-  for (const rawLine of rawContents.split('\n')) {
-    const trimmedLine = rawLine.trim();
-    if (trimmedLine.length > 0) {
-      records.push(JSON.parse(trimmedLine));
-    }
-  }
-  return records;
+function parseNonEmptyJsonLines(lines) {
+  return lines.flatMap((line) => {
+    const trimmedLine = line.trim();
+    return trimmedLine.length > 0 ? [JSON.parse(trimmedLine)] : [];
+  });
 }
 
 /**
- * Reads only newline-terminated JSON Lines records from `logPath`, ignoring any trailing
- * partial line that is still mid-write.
+ * Reads `logPath` and parses every non-empty JSON Lines record into an array
+ * of objects for post-exit scenario assertions.
+ */
+export function readJsonLines(logPath) {
+  const rawContents = fs.readFileSync(logPath, 'utf8');
+  return parseNonEmptyJsonLines(rawContents.split('\n'));
+}
+
+/**
+ * Reads only newline-terminated JSON Lines records from `logPath`, ignoring any
+ * trailing partial line while a live probe process is still appending output.
  */
 export function readCompleteJsonLines(logPath) {
   if (!fs.existsSync(logPath)) {
@@ -41,14 +43,7 @@ export function readCompleteJsonLines(logPath) {
   const rawContents = fs.readFileSync(logPath, 'utf8');
   const rawLines = rawContents.split('\n');
   const completedLines = rawContents.endsWith('\n') ? rawLines : rawLines.slice(0, -1);
-  const records = [];
-  for (const completedLine of completedLines) {
-    const trimmedLine = completedLine.trim();
-    if (trimmedLine.length > 0) {
-      records.push(JSON.parse(trimmedLine));
-    }
-  }
-  return records;
+  return parseNonEmptyJsonLines(completedLines);
 }
 
 function tryReadCompletedReadyRecords(logPath, readySentinelPath) {
@@ -107,7 +102,11 @@ function registerConditionHandlers(options, settle) {
   handles.pollTimer.unref?.();
   handles.failureTimer = setTimeout(() => {
     if (!checkCondition()) {
-      settle(new Error(`Timed out after ${timeoutMs}ms waiting for ${earlyExitLabel}`), null, handles);
+      settle(
+        new Error(`Timed out after ${timeoutMs}ms waiting for ${earlyExitLabel}`),
+        null,
+        handles,
+      );
     }
   }, timeoutMs);
 
@@ -153,8 +152,8 @@ function waitForDirectoryCondition(options) {
 }
 
 /**
- * Waits until `<logPath>.ready` exists and `logPath` contains a `{"kind":"ready"}` record,
- * failing fast if `processExitPromise` terminates beforehand or `timeoutMs` expires.
+ * Waits until `<logPath>.ready` exists and `logPath` contains a `{"kind":"ready"}`
+ * record, resolving the parsed JSONL records or rejecting on exit/timeout.
  */
 export function waitForProbeReady(logPath, timeoutMs = 10000, processExitPromise = null) {
   const readySentinelPath = buildReadySentinelPath(logPath);
@@ -168,8 +167,8 @@ export function waitForProbeReady(logPath, timeoutMs = 10000, processExitPromise
 }
 
 /**
- * Waits until `selectMatchingValue(records)` over newline-terminated JSONL records in `logPath`
- * returns a non-nullish value, failing fast on early process exit or `timeoutMs` expiry.
+ * Polls and watches `logPath` until `selectMatchingValue(records)` returns a
+ * non-nullish value, resolving that value or rejecting on early exit/timeout.
  */
 export function waitForLogRecords(
   logPath,

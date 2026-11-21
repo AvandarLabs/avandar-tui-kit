@@ -188,7 +188,7 @@ prepare_output_directory() {
   if [ -z "$output_dir" ]; then
     output_dir="$repository_root/target/windows-ci/$run_id"
   elif [[ "$output_dir" != /* ]]; then
-    output_dir="$caller_cwd/$output_dir"
+    output_dir="$caller_working_directory/$output_dir"
   fi
   mkdir -p "$output_dir" || fail_error \
     "Could not create output directory '$output_dir'." \
@@ -282,7 +282,7 @@ emit_summary_and_finish() {
     "Inspect downloaded logs under '$output_dir' (or re-run with '--wait' if still in progress)." 1
 }
 
-caller_cwd="$(pwd)"
+caller_working_directory="$(pwd)"
 parse_arguments "$@"
 check_prerequisites
 

@@ -46,7 +46,7 @@ def run_fenced_vnc_step(
     should_dismiss_menu_before_fence: bool = False,
 ) -> list[dict[str, object]]:
     """Executes `action`, optionally dismisses any popup menu, sends F2, and returns the slice."""
-    start_count = len(read_complete_jsonl_records(session.host_log_path))
+    start_record_count = len(read_complete_jsonl_records(session.host_log_path))
     action()
     if should_dismiss_menu_before_fence:
         dismiss_popup_menus_if_any(vm, vnc, timeout_seconds)
@@ -54,7 +54,7 @@ def run_fenced_vnc_step(
 
     def _poll_slice() -> list[dict[str, object]] | None:
         records = read_complete_jsonl_records(session.host_log_path)
-        sliced = extract_fence_slice(records, start_count)
+        sliced = extract_fence_slice(records, start_record_count)
         if sliced is not None:
             return sliced
         if session.host_exit_path.is_file():
@@ -70,13 +70,13 @@ def run_fenced_vnc_step(
 def _has_mouse_event(
     records: Sequence[dict[str, object]],
     mouse_kind: str,
-    col: int | None = None,
+    column: int | None = None,
     row: int | None = None,
 ) -> bool:
     for record in records:
         if record.get("event_type") != "mouse" or record.get("mouse_kind") != mouse_kind:
             continue
-        if col is not None and record.get("column") != col:
+        if column is not None and record.get("column") != column:
             continue
         if row is not None and record.get("row") != row:
             continue
@@ -118,8 +118,8 @@ def assert_iterm2_pointer_results(
 def _build_pointer_step_specs(
     geometry: WindowGeometry, modifiers: ModifierMap,
 ) -> list[tuple[str, list[str], bool]]:
-    def cell_pixels(col: int, row: int) -> tuple[int, int]:
-        return cell_center_to_vnc_pixels(geometry, col, row)
+    def cell_pixels(column: int, row: int) -> tuple[int, int]:
+        return cell_center_to_vnc_pixels(geometry, column, row)
 
     return [
         ("hover", build_move_tokens([cell_pixels(2, 2), cell_pixels(4, 2), cell_pixels(6, 2)]), False),
@@ -198,13 +198,13 @@ def run_paste_step(
     timeout_seconds: float,
 ) -> list[dict[str, object]]:
     """Loads `alpha\\nbeta` into guest pasteboard, presses Cmd+V over VNC, and verifies arrival."""
-    start_count = len(read_complete_jsonl_records(session.host_log_path))
+    start_record_count = len(read_complete_jsonl_records(session.host_log_path))
     vm.write_guest_clipboard("alpha\nbeta")
     vnc.run_tokens(build_chord_tokens("v", (modifiers.command_key,)))
     poll_until(
         lambda: (
             True
-            if has_delivered_paste_payload(read_complete_jsonl_records(session.host_log_path)[start_count:])
+            if has_delivered_paste_payload(read_complete_jsonl_records(session.host_log_path)[start_record_count:])
             else None
         ),
         timeout_seconds,
@@ -212,7 +212,7 @@ def run_paste_step(
     )
     vnc.send_fence_key()
     paste_events = poll_until(
-        lambda: extract_fence_slice(read_complete_jsonl_records(session.host_log_path), start_count),
+        lambda: extract_fence_slice(read_complete_jsonl_records(session.host_log_path), start_record_count),
         timeout_seconds,
         "F2 fence after Cmd+V paste",
     )
@@ -236,7 +236,7 @@ def _blur_iterm_to_desktop(
     should_expect_focus: bool,
     timeout_seconds: float,
 ) -> int:
-    blur_start = len(read_complete_jsonl_records(session.host_log_path))
+    blur_start_record_count = len(read_complete_jsonl_records(session.host_log_path))
     outside_x, outside_y = outside_focus_point_vnc_pixels(geometry)
     vnc.run_tokens(build_click_tokens(outside_x, outside_y, button=1))
     poll_until(
@@ -250,14 +250,14 @@ def _blur_iterm_to_desktop(
                 True
                 if any(
                     record.get("event_type") == "focus" and record.get("focused") is False
-                    for record in read_complete_jsonl_records(session.host_log_path)[blur_start:]
+                    for record in read_complete_jsonl_records(session.host_log_path)[blur_start_record_count:]
                 )
                 else None
             ),
             timeout_seconds,
             "FocusLost event in probe log",
         )
-    return blur_start
+    return blur_start_record_count
 
 
 def run_focus_steps(
@@ -269,11 +269,13 @@ def run_focus_steps(
 ) -> dict[str, list[dict[str, object]]]:
     """Blurs iTerm2 by clicking Finder desktop, then restores focus via the iTerm2 title bar."""
     should_expect_focus = session.tmux_mode in (None, "full", "cc-stock", "cc-full")
-    blur_start = _blur_iterm_to_desktop(vm, vnc, session, geometry, should_expect_focus, timeout_seconds)
+    blur_start_record_count = _blur_iterm_to_desktop(
+        vm, vnc, session, geometry, should_expect_focus, timeout_seconds
+    )
     ensure_iterm_window_focused(vm, vnc, geometry, timeout_seconds)
     vnc.send_fence_key()
     all_events = poll_until(
-        lambda: extract_fence_slice(read_complete_jsonl_records(session.host_log_path), blur_start),
+        lambda: extract_fence_slice(read_complete_jsonl_records(session.host_log_path), blur_start_record_count),
         timeout_seconds,
         "F2 fence after focus regain",
     )

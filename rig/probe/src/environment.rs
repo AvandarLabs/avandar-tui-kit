@@ -105,7 +105,7 @@ mod tests {
     }
 
     #[test]
-    fn reads_populated_terminal_tmux_no_color_orca_and_tty_flags() {
+    fn populated_environment_lookup_sets_terminal_tmux_no_color_orca_and_tty_fields() {
         let snapshot = read_environment_with(
             map_lookup(&[
                 ("TERM", "tmux-256color"),
@@ -168,9 +168,11 @@ mod tests {
     }
 
     #[test]
-    fn reads_live_process_environment_os_and_arch() {
+    fn process_environment_snapshot_reflects_live_tty_streams_and_non_empty_term() {
         let snapshot = read_process_environment();
-        assert_eq!(snapshot.os, std::env::consts::OS);
-        assert_eq!(snapshot.arch, std::env::consts::ARCH);
+        let expected_term = std::env::var("TERM").ok().filter(|value| !value.is_empty());
+        assert_eq!(snapshot.term, expected_term);
+        assert_eq!(snapshot.is_stdin_tty, std::io::stdin().is_terminal());
+        assert_eq!(snapshot.is_stdout_tty, std::io::stdout().is_terminal());
     }
 }

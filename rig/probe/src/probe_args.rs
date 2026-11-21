@@ -15,16 +15,68 @@ pub enum Osc52Form {
     Both,
 }
 
+/// Concrete CLI argument parsing failure returned by [`parse_probe_args`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProbeArgsError {
+    /// Required `--log <path>` flag was omitted.
+    MissingRequiredLog,
+    /// Value-taking flag appeared at the end of the argument stream without a value.
+    MissingFlagValue {
+        /// Flag name (`"--log"`, `"--osc52"`, or `"--osc52-form"`).
+        flag: &'static str,
+    },
+    /// Value-taking flag received an empty string (`""`).
+    EmptyFlagValue {
+        /// Flag name (`"--log"`, `"--osc52"`, or `"--osc52-form"`).
+        flag: &'static str,
+    },
+    /// Flag was passed more than once.
+    DuplicateFlag {
+        /// Repeated flag name.
+        flag: &'static str,
+    },
+    /// `--osc52-form` received a value outside `auto|plain|tmux|both`.
+    InvalidOsc52Form {
+        /// Unrecognized `--osc52-form` value.
+        value: String,
+    },
+    /// Unrecognized flag or unexpected positional argument.
+    UnexpectedArgument {
+        /// Offending CLI token.
+        argument: String,
+    },
+}
+
+impl std::fmt::Display for ProbeArgsError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingRequiredLog => formatter.write_str("missing required --log <path> flag"),
+            Self::MissingFlagValue { flag } => write!(formatter, "missing value for {flag}"),
+            Self::EmptyFlagValue { flag } => write!(formatter, "{flag} value must not be empty"),
+            Self::DuplicateFlag { flag } => write!(formatter, "duplicate {flag} flag"),
+            Self::InvalidOsc52Form { value } => write!(
+                formatter,
+                "invalid --osc52-form value '{value}': expected auto, plain, tmux, or both"
+            ),
+            Self::UnexpectedArgument { argument } => {
+                write!(formatter, "unexpected argument: {argument}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProbeArgsError {}
+
 impl Osc52Form {
-    fn parse(raw_value: &str) -> Result<Self, String> {
+    fn parse(raw_value: &str) -> Result<Self, ProbeArgsError> {
         match raw_value {
             "auto" => Ok(Self::Auto),
             "plain" => Ok(Self::Plain),
             "tmux" => Ok(Self::Tmux),
             "both" => Ok(Self::Both),
-            other => Err(format!(
-                "invalid --osc52-form value '{other}': expected auto, plain, tmux, or both"
-            )),
+            other => Err(ProbeArgsError::InvalidOsc52Form {
+                value: other.to_owned(),
+            }),
         }
     }
 }
@@ -44,32 +96,39 @@ pub struct ProbeArgs {
     pub osc52_form: Osc52Form,
 }
 
-fn take_non_empty_flag_value<I, S>(flag_name: &str, iterator: &mut I) -> Result<String, String>
+fn take_non_empty_flag_value<I, S>(
+    flag_name: &'static str,
+    iterator: &mut I,
+) -> Result<String, ProbeArgsError>
 where
     I: Iterator<Item = S>,
     S: AsRef<str>,
 {
     let Some(raw_value) = iterator.next() else {
-        return Err(format!("missing value for {flag_name}"));
+        return Err(ProbeArgsError::MissingFlagValue { flag: flag_name });
     };
     let value_text = raw_value.as_ref();
     if value_text.is_empty() {
-        return Err(format!("{flag_name} value must not be empty"));
+        return Err(ProbeArgsError::EmptyFlagValue { flag: flag_name });
     }
     Ok(value_text.to_owned())
 }
 
-fn set_unique_option<T>(slot: &mut Option<T>, flag_name: &str, value: T) -> Result<(), String> {
+fn set_unique_option<T>(
+    slot: &mut Option<T>,
+    flag_name: &'static str,
+    value: T,
+) -> Result<(), ProbeArgsError> {
     if slot.is_some() {
-        return Err(format!("duplicate {flag_name} flag"));
+        return Err(ProbeArgsError::DuplicateFlag { flag: flag_name });
     }
     *slot = Some(value);
     Ok(())
 }
 
-fn set_unique_bool(slot: &mut bool, flag_name: &str) -> Result<(), String> {
+const fn set_unique_bool(slot: &mut bool, flag_name: &'static str) -> Result<(), ProbeArgsError> {
     if *slot {
-        return Err(format!("duplicate {flag_name} flag"));
+        return Err(ProbeArgsError::DuplicateFlag { flag: flag_name });
     }
     *slot = true;
     Ok(())
@@ -85,7 +144,7 @@ struct PartialProbeArgs {
 }
 
 impl PartialProbeArgs {
-    fn apply_flag<I, S>(&mut self, flag: &str, iterator: &mut I) -> Result<(), String>
+    fn apply_flag<I, S>(&mut self, flag: &str, iterator: &mut I) -> Result<(), ProbeArgsError>
     where
         I: Iterator<Item = S>,
         S: AsRef<str>,
@@ -109,7 +168,9 @@ impl PartialProbeArgs {
                     Osc52Form::parse(&raw_form)?,
                 )
             }
-            unexpected_argument => Err(format!("unexpected argument: {unexpected_argument}")),
+            unexpected_argument => Err(ProbeArgsError::UnexpectedArgument {
+                argument: unexpected_argument.to_owned(),
+            }),
         }
     }
 }
@@ -118,9 +179,9 @@ impl PartialProbeArgs {
 ///
 /// # Errors
 ///
-/// Returns a human-readable error message when `--log <path>` is missing or empty, when a value-taking
+/// Returns a [`ProbeArgsError`] when `--log <path>` is missing or empty, when a value-taking
 /// flag is missing its argument, invalid, or repeated, or when an unrecognized argument is encountered.
-pub fn parse_probe_args<I, S>(args: I) -> Result<ProbeArgs, String>
+pub fn parse_probe_args<I, S>(args: I) -> Result<ProbeArgs, ProbeArgsError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
@@ -131,7 +192,7 @@ where
         partial.apply_flag(raw_argument.as_ref(), &mut iterator)?;
     }
     let Some(resolved_log_path) = partial.log_path else {
-        return Err("missing required --log <path> flag".to_owned());
+        return Err(ProbeArgsError::MissingRequiredLog);
     };
     Ok(ProbeArgs {
         log_path: resolved_log_path,
@@ -147,7 +208,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_required_log_and_optional_batch_kitty_and_osc52_flags() {
+    fn minimal_and_reordered_flags_populate_probe_args_fields() {
         let minimal = parse_probe_args(["--log", "/tmp/p.jsonl"]).expect("minimal args must parse");
         assert_eq!(
             minimal,
@@ -184,7 +245,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_and_rejects_osc52_form_arguments() {
+    fn documented_osc52_form_values_map_to_matching_variants() {
         for (raw_form, expected_form) in [
             ("auto", Osc52Form::Auto),
             ("plain", Osc52Form::Plain),
@@ -195,11 +256,30 @@ mod tests {
                 .expect("each documented --osc52-form variant must parse");
             assert_eq!(parsed.osc52_form, expected_form);
         }
-        let invalid_forms: &[(&[&str], &str)] = &[
-            (&["--log", "a", "--osc52-form"], "missing value"),
-            (&["--log", "a", "--osc52-form", ""], "must not be empty"),
+    }
+
+    #[test]
+    fn invalid_osc52_form_flags_return_typed_errors() {
+        let invalid_forms: &[(&[&str], ProbeArgsError, &str)] = &[
+            (
+                &["--log", "a", "--osc52-form"],
+                ProbeArgsError::MissingFlagValue {
+                    flag: "--osc52-form",
+                },
+                "missing value",
+            ),
+            (
+                &["--log", "a", "--osc52-form", ""],
+                ProbeArgsError::EmptyFlagValue {
+                    flag: "--osc52-form",
+                },
+                "must not be empty",
+            ),
             (
                 &["--log", "a", "--osc52-form", "bogus"],
+                ProbeArgsError::InvalidOsc52Form {
+                    value: "bogus".to_owned(),
+                },
                 "invalid --osc52-form",
             ),
             (
@@ -211,50 +291,95 @@ mod tests {
                     "--osc52-form",
                     "both",
                 ],
+                ProbeArgsError::DuplicateFlag {
+                    flag: "--osc52-form",
+                },
                 "duplicate --osc52-form",
             ),
         ];
-        for &(case_args, needle) in invalid_forms {
-            let err = parse_probe_args(case_args).expect_err("invalid --osc52-form should fail");
-            assert!(err.contains(needle), "got {err:?} for {case_args:?}");
+        for (case_args, expected_error, expected_substring) in invalid_forms {
+            let parse_error =
+                parse_probe_args(*case_args).expect_err("invalid --osc52-form should fail");
+            assert_eq!(&parse_error, expected_error);
+            assert!(parse_error.to_string().contains(expected_substring));
         }
     }
 
     #[test]
-    fn rejects_missing_empty_duplicate_and_unknown_arguments() {
-        let invalid_cases: &[(&[&str], &str)] = &[
-            (&[], "missing required --log"),
-            (&["--batch"], "missing required --log"),
-            (&["--log"], "missing value for --log"),
-            (&["--log", ""], "--log value must not be empty"),
-            (&["--log", "a", "--log", "b"], "duplicate --log"),
-            (&["--log", "a", "--batch", "--batch"], "duplicate --batch"),
+    fn missing_empty_duplicate_and_unknown_flags_return_typed_errors() {
+        let invalid_cases: &[(&[&str], ProbeArgsError, &str)] = &[
+            (
+                &[],
+                ProbeArgsError::MissingRequiredLog,
+                "missing required --log",
+            ),
+            (
+                &["--batch"],
+                ProbeArgsError::MissingRequiredLog,
+                "missing required --log",
+            ),
+            (
+                &["--log"],
+                ProbeArgsError::MissingFlagValue { flag: "--log" },
+                "missing value for --log",
+            ),
+            (
+                &["--log", ""],
+                ProbeArgsError::EmptyFlagValue { flag: "--log" },
+                "--log value must not be empty",
+            ),
+            (
+                &["--log", "a", "--log", "b"],
+                ProbeArgsError::DuplicateFlag { flag: "--log" },
+                "duplicate --log",
+            ),
+            (
+                &["--log", "a", "--batch", "--batch"],
+                ProbeArgsError::DuplicateFlag { flag: "--batch" },
+                "duplicate --batch",
+            ),
             (
                 &["--log", "a", "--push-kitty", "--push-kitty"],
+                ProbeArgsError::DuplicateFlag {
+                    flag: "--push-kitty",
+                },
                 "duplicate --push-kitty",
             ),
-            (&["--log", "a", "--osc52"], "missing value for --osc52"),
+            (
+                &["--log", "a", "--osc52"],
+                ProbeArgsError::MissingFlagValue { flag: "--osc52" },
+                "missing value for --osc52",
+            ),
             (
                 &["--log", "a", "--osc52", ""],
+                ProbeArgsError::EmptyFlagValue { flag: "--osc52" },
                 "--osc52 value must not be empty",
             ),
             (
                 &["--log", "a", "--osc52", "1", "--osc52", "2"],
+                ProbeArgsError::DuplicateFlag { flag: "--osc52" },
                 "duplicate --osc52",
             ),
             (
                 &["--log", "a", "--unknown"],
+                ProbeArgsError::UnexpectedArgument {
+                    argument: "--unknown".to_owned(),
+                },
                 "unexpected argument: --unknown",
             ),
-            (&["positional"], "unexpected argument: positional"),
+            (
+                &["positional"],
+                ProbeArgsError::UnexpectedArgument {
+                    argument: "positional".to_owned(),
+                },
+                "unexpected argument: positional",
+            ),
         ];
-        for &(case_args, expected_substring) in invalid_cases {
-            let error_message =
-                parse_probe_args(case_args).expect_err("invalid arguments should fail");
-            assert!(
-                error_message.contains(expected_substring),
-                "expected {expected_substring:?} in {error_message:?} for {case_args:?}"
-            );
+        for (case_args, expected_error, expected_substring) in invalid_cases {
+            let parse_error =
+                parse_probe_args(*case_args).expect_err("invalid arguments should fail");
+            assert_eq!(&parse_error, expected_error);
+            assert!(parse_error.to_string().contains(expected_substring));
         }
     }
 }

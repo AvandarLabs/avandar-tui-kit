@@ -1,4 +1,4 @@
-//! Milestone 0 exit-invariant tests across documentation, `justfile`, `rig/expected`, and `rig/`.
+//! Repository invariant tests across documentation, `justfile`, `rig/expected`, and `rig/`.
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -269,7 +269,7 @@ fn testing_doc_covers_all_layers_vm_settings_reliability_counts_and_built_status
 }
 
 #[test]
-fn architecture_and_decisions_satisfy_m0_exit_criteria() {
+fn architecture_layout_and_adr_sections_include_required_headings() {
     let architecture_doc = read_repo_file("docs/architecture.md");
     let layout_section = extract_markdown_h2_section(&architecture_doc, "The layout");
     assert_contains_all(
@@ -388,7 +388,7 @@ fn rig_sleep_ban_and_touched_docs_em_dash_and_local_path_bans_hold() {
 }
 
 #[test]
-fn extract_markdown_h2_section_handles_crlf_and_ignores_h3_headings() {
+fn extract_markdown_h2_section_normalizes_crlf_preserving_nested_h3_blocks() {
     let crlf_markdown = "# Title\r\n\r\n### Target\r\ndecoy\r\n## Target\r\nbody\r\n### Sub\r\nsub\r\n## Next\r\ntail\r\n";
     assert_eq!(
         extract_markdown_h2_section(crlf_markdown, "Target"),

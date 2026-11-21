@@ -230,8 +230,7 @@ mod tests {
     }
 
     #[test]
-    fn teardown_bytes_and_control_keys_cover_clean_exit_and_panic_paths() {
-        // Teardown resets M5 mouse modes, paste, focus, sync, and pops kitty iff pushed.
+    fn build_teardown_bytes_resets_terminal_modes_and_pops_kitty_only_when_pushed() {
         let with_kitty = build_teardown_bytes(true);
         for required in [
             MOUSE_TEARDOWN_M5,
@@ -249,7 +248,10 @@ mod tests {
         assert!(has_subslice(&without_kitty, FOCUS_EVENTS_OFF));
         assert!(has_subslice(&without_kitty, SYNC_OUTPUT_OFF));
         assert!(!has_subslice(&without_kitty, KITTY_KEYBOARD_POP));
+    }
 
+    #[test]
+    fn classify_probe_control_maps_ctrl_c_press_to_exit_and_f12_press_to_panic() {
         let ctrl_c_press = Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
         let ctrl_c_release = Event::Key(KeyEvent::new_with_kind(
             KeyCode::Char('c'),

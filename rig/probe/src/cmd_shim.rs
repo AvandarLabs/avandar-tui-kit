@@ -1,4 +1,4 @@
-//! Windows `cmd.exe` `.cmd` shim argument quoting and invocation builder (Milestone 0 row 18).
+//! Windows `cmd.exe` `.cmd` shim argument quoting and invocation builder.
 
 use std::path::Path;
 
@@ -169,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn quotes_empty_spaces_backslashes_percent_and_strips_newlines() {
+    fn quote_cmd_arg_escapes_trailing_backslashes_percent_signs_and_strips_control_chars() {
         assert_eq!(quote_cmd_arg(""), "\"\"");
         assert_eq!(quote_cmd_arg("hello world"), "\"hello world\"");
         assert_eq!(quote_cmd_arg("C:\\dir\\"), "\"C:\\dir\\\\\"");

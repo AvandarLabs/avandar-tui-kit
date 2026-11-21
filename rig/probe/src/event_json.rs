@@ -123,7 +123,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn formats_key_mouse_paste_focus_and_resize_event_records() {
+    fn key_event_record_serializes_press_code_and_active_modifier_flags() {
         let key_event = Event::Key(KeyEvent::new_with_kind(
             KeyCode::Enter,
             KeyModifiers::ALT | KeyModifiers::SHIFT,
@@ -132,7 +132,10 @@ mod tests {
         let key_line = format_event_record(&key_event, 1);
         assert!(key_line.contains(r#""event_type":"key","code":"enter","key_kind":"press""#));
         assert!(key_line.contains(r#""shift":true,"ctrl":false,"alt":true"#));
+    }
 
+    #[test]
+    fn mouse_event_record_serializes_button_action_coordinates_and_modifiers() {
         let mouse_event = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: 12,
@@ -141,7 +144,10 @@ mod tests {
         });
         let mouse_line = format_event_record(&mouse_event, 0);
         assert!(mouse_line.contains(r#""mouse_kind":"down:left","column":12,"row":4"#));
+    }
 
+    #[test]
+    fn paste_focus_and_resize_events_serialize_escaped_payloads_and_dimensions() {
         let paste_line = format_event_record(&Event::Paste("a\nb".to_owned()), 0);
         assert!(paste_line.contains(r#""event_type":"paste","text":"a\nb","byte_len":3"#));
         assert!(format_event_record(&Event::FocusLost, 0).contains(r#""focused":false"#));

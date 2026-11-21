@@ -37,3 +37,7 @@ logs
 
 # Node harness dependencies
 rig/xterm/node_modules/
+
+# Python bytecode cache
+__pycache__/
+*.py[cod]

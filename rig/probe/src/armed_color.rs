@@ -218,7 +218,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn armed_color_listener_completes_late_reply_and_flushes_on_deadline() {
+    fn armed_color_listener_swallows_late_reply_and_disarms_remaining_window() {
         let start = Instant::now();
         let deadline = start + Duration::from_secs(2);
         let initial_focus = Event::FocusGained;

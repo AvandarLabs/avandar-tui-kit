@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from driver.tart_vm import GUEST_SHARED_ROOT
 
-ACTIVATE_SETTINGS_BIN = (
+# macOS framework helper that applies updated user defaults immediately without logout.
+ACTIVATE_SETTINGS_BINARY = (
     "/System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings"
 )
 
+# Guest Python script querying on-screen iTerm2 windows via CoreGraphics.
 CG_WINDOWS_SCRIPT = """import ctypes, json, plistlib
 core_graphics = ctypes.CDLL("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
 core_foundation = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
@@ -26,13 +28,14 @@ iterm_windows = [entry for entry in plistlib.loads(raw_bytes) if entry.get("kCGW
 print(json.dumps(iterm_windows))
 """
 
+# Guest Python wrapper running inside the iTerm2/tmux PTY and recording DECRQM teardown state.
 PTY_RUNNER_SCRIPT = """import fcntl, json, os, select, struct, subprocess, sys, termios, time, tty
 
-spec = json.loads(open(sys.argv[1], encoding="utf-8").read())
-if spec.get("wait_cc_attach", False):
+launch_spec = json.loads(open(sys.argv[1], encoding="utf-8").read())
+if launch_spec.get("wait_cc_attach", False):
     try:
         tty_fd = os.open("/dev/tty", os.O_RDWR)
-        old_attr = termios.tcgetattr(tty_fd)
+        saved_attributes = termios.tcgetattr(tty_fd)
         try:
             tty.setraw(tty_fd)
             deadline = time.monotonic() + 5.0
@@ -55,40 +58,40 @@ if spec.get("wait_cc_attach", False):
                         break
             termios.tcflush(tty_fd, termios.TCIFLUSH)
         finally:
-            termios.tcsetattr(tty_fd, termios.TCSADRAIN, old_attr)
+            termios.tcsetattr(tty_fd, termios.TCSADRAIN, saved_attributes)
             os.close(tty_fd)
     except OSError:
         pass
 
-if spec.get("pre_banner"):
-    sys.stdout.write(spec["pre_banner"])
+if launch_spec.get("pre_banner"):
+    sys.stdout.write(launch_spec["pre_banner"])
     sys.stdout.flush()
 
-rows, cols = 30, 100
+row_count, column_count = 30, 100
 try:
-    packed = fcntl.ioctl(0, termios.TIOCGWINSZ, struct.pack("HHHH", 0, 0, 0, 0))
-    rows, cols, _, _ = struct.unpack("HHHH", packed)
+    packed_window_size = fcntl.ioctl(0, termios.TIOCGWINSZ, struct.pack("HHHH", 0, 0, 0, 0))
+    row_count, column_count, _, _ = struct.unpack("HHHH", packed_window_size)
 except OSError:
     pass
 
 tmux_version = None
-if spec.get("tmux_sock"):
-    version_proc = subprocess.run([spec["tmux_bin"], "-S", spec["tmux_sock"], "display-message", "-p", "tmux #{version}"], capture_output=True, text=True)
-    if version_proc.returncode == 0:
-        tmux_version = version_proc.stdout.strip()
+if launch_spec.get("tmux_sock"):
+    version_process = subprocess.run([launch_spec["tmux_bin"], "-S", launch_spec["tmux_sock"], "display-message", "-p", "tmux #{version}"], capture_output=True, text=True)
+    if version_process.returncode == 0:
+        tmux_version = version_process.stdout.strip()
 
-with open(spec["meta_path"], "w", encoding="utf-8") as meta_file:
-    json.dump({"rows": rows or 30, "cols": cols or 100, "tmuxVersion": tmux_version}, meta_file)
+with open(launch_spec["meta_path"], "w", encoding="utf-8") as metadata_file:
+    json.dump({"rows": row_count or 30, "cols": column_count or 100, "tmuxVersion": tmux_version}, metadata_file)
 
-proc = subprocess.run([spec["program_path"], *spec["program_args"]])
-exit_code = proc.returncode if proc.returncode >= 0 else 128 + (-proc.returncode)
-sig_num = -proc.returncode if proc.returncode < 0 else 0
+child_process = subprocess.run([launch_spec["program_path"], *launch_spec["program_args"]])
+exit_code = child_process.returncode if child_process.returncode >= 0 else 128 + (-child_process.returncode)
+signal_number = -child_process.returncode if child_process.returncode < 0 else 0
 
-decrqm_raw = ""
-if spec.get("query_decrqm", True):
+raw_decrqm_reply = ""
+if launch_spec.get("query_decrqm", True):
     try:
         tty_fd = os.open("/dev/tty", os.O_RDWR)
-        old_attr = termios.tcgetattr(tty_fd)
+        saved_attributes = termios.tcgetattr(tty_fd)
         try:
             tty.setraw(tty_fd)
             os.write(tty_fd, b"\\x1b[?1000$p\\x1b[?1002$p\\x1b[?1003$p\\x1b[?1006$p\\x1b[?2004$p\\x1b[?1004$p\\x1b[c")
@@ -100,23 +103,24 @@ if spec.get("query_decrqm", True):
                     reply_buffer += os.read(tty_fd, 1024)
                     if reply_buffer.endswith(b"c") and b"$y" in reply_buffer:
                         break
-            decrqm_raw = reply_buffer.decode("latin1")
+            raw_decrqm_reply = reply_buffer.decode("latin1")
         finally:
-            termios.tcsetattr(tty_fd, termios.TCSADRAIN, old_attr)
+            termios.tcsetattr(tty_fd, termios.TCSADRAIN, saved_attributes)
             os.close(tty_fd)
     except OSError:
         pass
 
 tmux_buffer = None
-if spec.get("tmux_sock"):
-    buffer_proc = subprocess.run([spec["tmux_bin"], "-S", spec["tmux_sock"], "show-buffer"], capture_output=True, text=True)
-    tmux_buffer = buffer_proc.stdout if buffer_proc.returncode == 0 else None
+if launch_spec.get("tmux_sock"):
+    buffer_process = subprocess.run([launch_spec["tmux_bin"], "-S", launch_spec["tmux_sock"], "show-buffer"], capture_output=True, text=True)
+    tmux_buffer = buffer_process.stdout if buffer_process.returncode == 0 else None
 
-with open(spec["exit_path"], "w", encoding="utf-8") as exit_file:
-    json.dump({"exitCode": exit_code, "signal": sig_num, "decrqm": decrqm_raw, "tmuxBuffer": tmux_buffer}, exit_file)
+with open(launch_spec["exit_path"], "w", encoding="utf-8") as exit_file:
+    json.dump({"exitCode": exit_code, "signal": signal_number, "decrqm": raw_decrqm_reply, "tmuxBuffer": tmux_buffer}, exit_file)
 """
 
-ITERM_PREFS_UPDATER_SCRIPT = f"""import json, os, plistlib
+# Guest Python script updating iTerm2 user preferences before opening a session.
+ITERM_PREFERENCES_UPDATER_SCRIPT = f"""import json, os, plistlib
 config = json.load(open("{GUEST_SHARED_ROOT}/_iterm_prefs_cfg.json", encoding="utf-8"))
 plist_path = os.path.expanduser("~/Library/Preferences/com.googlecode.iterm2.plist")
 with open(plist_path, "rb") as plist_file:

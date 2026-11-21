@@ -1,6 +1,6 @@
 /**
- * Pure report normalizer converting Layer 3/4 (`rig/xterm`), Layer 5 (`rig/orca` JSONL),
- * and Layer 6 (`rig/iterm2`) capability probe outputs into the canonical `rig/expected` schema.
+ * Pure report normalizer converting raw JSON and JSONL capability probe outputs
+ * across terminal runners into a host-portable capability baseline object.
  */
 
 const TOOLKIT_GLYPH_SAMPLE_ORDER = [
@@ -39,23 +39,20 @@ function createInvalidInputError(messageText, recoveryHint) {
 }
 
 function parseJsonLines(rawText) {
-  const rawLines = rawText.split(/\r?\n/);
-  const parsedRecords = [];
-  for (let lineIndex = 0; lineIndex < rawLines.length; lineIndex += 1) {
-    const trimmedLine = rawLines[lineIndex].trim();
+  return rawText.split(/\r?\n/).flatMap((rawLine, lineIndex) => {
+    const trimmedLine = rawLine.trim();
     if (trimmedLine.length === 0) {
-      continue;
+      return [];
     }
     try {
-      parsedRecords.push(JSON.parse(trimmedLine));
+      return [JSON.parse(trimmedLine)];
     } catch (lineError) {
       throw createInvalidInputError(
         `Invalid JSON on line ${lineIndex + 1}: ${lineError.message}`,
         'Ensure the input file contains valid JSON or newline-delimited JSONL records.',
       );
     }
-  }
-  return parsedRecords;
+  });
 }
 
 function parseTextInput(rawText) {
@@ -94,18 +91,14 @@ function requirePlainSection(sectionValue, sectionName, recoveryHint = 'Verify p
 }
 
 function orderKeysDeterministically(sourceObject, preferredOrder) {
-  const orderedKeys = [];
-  const seenKeys = new Set();
-  for (const preferredKey of preferredOrder) {
-    if (Object.hasOwn(sourceObject, preferredKey)) {
-      orderedKeys.push(preferredKey);
-      seenKeys.add(preferredKey);
-    }
-  }
+  const presentPreferredKeys = preferredOrder.filter((preferredKey) =>
+    Object.hasOwn(sourceObject, preferredKey),
+  );
+  const seenKeys = new Set(presentPreferredKeys);
   const extraKeys = Object.keys(sourceObject)
     .filter((keyName) => !seenKeys.has(keyName))
     .sort();
-  return [...orderedKeys, ...extraKeys];
+  return [...presentPreferredKeys, ...extraKeys];
 }
 
 function normalizeIdentitySection(identityRecord) {
@@ -149,41 +142,32 @@ function normalizeKittySection(kittyRecord) {
 
 function normalizeModesSection(modesSection) {
   requirePlainSection(modesSection, 'modes');
-  const sourceByModeName = {};
-  if (Array.isArray(modesSection.modes)) {
-    for (const modeItem of modesSection.modes) {
-      sourceByModeName[modeItem.name] = modeItem;
-    }
-  } else {
-    Object.assign(sourceByModeName, modesSection);
-  }
-  const normalizedModes = {};
-  for (const modeName of ['bracketed_paste', 'focus_events', 'synchronized_output']) {
-    const modeData = sourceByModeName[modeName] ?? {};
-    normalizedModes[modeName] = {
-      after_enable: modeData.after_enable ?? null,
-      after_disable: modeData.after_disable ?? null,
-    };
-  }
-  return normalizedModes;
+  const sourceByModeName = Array.isArray(modesSection.modes)
+    ? Object.fromEntries(modesSection.modes.map((modeItem) => [modeItem.name, modeItem]))
+    : modesSection;
+  return Object.fromEntries(
+    ['bracketed_paste', 'focus_events', 'synchronized_output'].map((modeName) => {
+      const modeData = sourceByModeName[modeName] ?? {};
+      return [
+        modeName,
+        { after_enable: modeData.after_enable ?? null, after_disable: modeData.after_disable ?? null },
+      ];
+    }),
+  );
 }
 
 function normalizeWidthsSection(widthsSection) {
   requirePlainSection(widthsSection, 'widths');
-  const rawSamplesMap = {};
-  if (Array.isArray(widthsSection.samples)) {
-    for (const sampleItem of widthsSection.samples) {
-      rawSamplesMap[sampleItem.name] = sampleItem.cells ?? null;
-    }
-  } else if (isPlainObject(widthsSection.samples)) {
-    Object.assign(rawSamplesMap, widthsSection.samples);
-  }
+  const rawSamplesMap = Array.isArray(widthsSection.samples)
+    ? Object.fromEntries(widthsSection.samples.map((item) => [item.name, item.cells ?? null]))
+    : isPlainObject(widthsSection.samples)
+      ? widthsSection.samples
+      : {};
   const orderedNames = orderKeysDeterministically(rawSamplesMap, CANONICAL_WIDTH_SAMPLE_ORDER);
-  const canonicalSamples = {};
-  for (const sampleName of orderedNames) {
-    canonicalSamples[sampleName] = rawSamplesMap[sampleName] ?? null;
-  }
-  const presentToolkitNames = orderedNames.filter((sampleName) => TOOLKIT_GLYPH_NAMES.has(sampleName));
+  const canonicalSamples = Object.fromEntries(
+    orderedNames.map((sampleName) => [sampleName, rawSamplesMap[sampleName] ?? null]),
+  );
+  const presentToolkitNames = orderedNames.filter((name) => TOOLKIT_GLYPH_NAMES.has(name));
   const areAllToolkitSingleCell =
     presentToolkitNames.length > 0 &&
     presentToolkitNames.every((sampleName) => canonicalSamples[sampleName] === 1);
@@ -247,20 +231,20 @@ function summarizePointerStepValue(stepValue) {
 
 function summarizeKeyboardMap(stepsObject, preferredSteps) {
   const sourceSteps = stepsObject ?? {};
-  const normalizedKeyboard = {};
   const isKeyPressItem = (item) =>
     isPlainObject(item) &&
     (!('event_type' in item) || (item.event_type === 'key' && item.key_kind === 'press'));
-  for (const stepName of orderKeysDeterministically(sourceSteps, preferredSteps)) {
-    const rawItems = sourceSteps[stepName] ?? [];
-    normalizedKeyboard[stepName] = rawItems.filter(isKeyPressItem).map((item) => ({
-      code: String(item.code),
-      shift: Boolean(item.shift),
-      alt: Boolean(item.alt),
-      ctrl: Boolean(item.ctrl),
-    }));
-  }
-  return normalizedKeyboard;
+  return Object.fromEntries(
+    orderKeysDeterministically(sourceSteps, preferredSteps).map((stepName) => [
+      stepName,
+      (sourceSteps[stepName] ?? []).filter(isKeyPressItem).map((item) => ({
+        code: String(item.code),
+        shift: Boolean(item.shift),
+        alt: Boolean(item.alt),
+        ctrl: Boolean(item.ctrl),
+      })),
+    ]),
+  );
 }
 
 function summarizePasteSection(interactiveSection) {
@@ -323,10 +307,12 @@ function normalizeInteractiveSection(interactiveSection, batchSection, panicSect
     return null;
   }
   const rawPointer = interactiveSection.pointer ?? interactiveSection.pointerSteps ?? {};
-  const pointer = {};
-  for (const stepName of orderKeysDeterministically(rawPointer, CANONICAL_POINTER_STEPS)) {
-    pointer[stepName] = summarizePointerStepValue(rawPointer[stepName]);
-  }
+  const pointer = Object.fromEntries(
+    orderKeysDeterministically(rawPointer, CANONICAL_POINTER_STEPS).map((stepName) => [
+      stepName,
+      summarizePointerStepValue(rawPointer[stepName]),
+    ]),
+  );
   const keyboard = summarizeKeyboardMap(interactiveSection.keyboard ?? interactiveSection.keyboardSteps, CANONICAL_KEYBOARD_STEPS);
   const kittyEnter = summarizeKeyboardMap(interactiveSection.kitty_enter ?? interactiveSection.kittyEnterSteps, CANONICAL_KITTY_ENTER_STEPS);
   const paste = summarizePasteSection(interactiveSection);
@@ -336,12 +322,11 @@ function normalizeInteractiveSection(interactiveSection, batchSection, panicSect
 
 function extractSectionsByName(parsedObjectOrRecords) {
   if (Array.isArray(parsedObjectOrRecords)) {
-    const sectionsMap = {};
-    for (const record of parsedObjectOrRecords) {
-      if (record?.kind === 'section' && typeof record.section === 'string') {
-        sectionsMap[record.section] = record;
-      }
-    }
+    const sectionsMap = Object.fromEntries(
+      parsedObjectOrRecords
+        .filter((record) => record?.kind === 'section' && typeof record.section === 'string')
+        .map((record) => [record.section, record]),
+    );
     return { sectionsMap, batchSection: null, osc52Input: null, interactiveSection: null, panicSection: null };
   }
   if (!isPlainObject(parsedObjectOrRecords)) {
@@ -361,8 +346,9 @@ function extractSectionsByName(parsedObjectOrRecords) {
 }
 
 /**
- * Normalizes a raw probe report (`xterm` JSON, `iterm2` JSON, `orca` JSONL text/records, or an
- * existing `rig/expected` baseline) into a canonical, host-portable capability baseline object.
+ * Normalizes a raw probe report (JSON object, JSONL text/records, or existing
+ * baseline) into a canonical, host-portable capability baseline object for
+ * `compareReportAgainstExpected` and `--normalize` CLI output.
  */
 export function normalizeProbeReport(rawInput) {
   const parsedInput = typeof rawInput === 'string' ? parseTextInput(rawInput) : rawInput;

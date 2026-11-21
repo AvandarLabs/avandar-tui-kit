@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable
 import dataclasses
 
-from driver.cli_args import DriverError
 from driver.interactive_steps import (
     finish_interactive_clean_exit,
     prepare_ready_interactive_session,
@@ -20,7 +19,7 @@ from driver.iterm_window import (
 from driver.scenarios import (
     ScenarioRuntimeContext,
     _run_single_osc52_probe,
-    capture_failure_screenshot_safe,
+    run_with_failure_screenshot,
 )
 from driver.vnc_input import (
     build_chord_tokens,
@@ -29,6 +28,7 @@ from driver.vnc_input import (
     cell_center_to_vnc_pixels,
 )
 
+# Pre-probe row-zero banner rendered to test native iTerm2 mouse text selection.
 SELECTION_BANNER = "\x1b[2J\x1b[HSELECTABLE_ROW_ZERO_TEXT_1234567890\r\n"
 
 
@@ -51,7 +51,7 @@ def _measure_wheel_under_scroll_setting(
         context.vm, context.vnc, session, f"sync_wheel_{label}", context.timeout_seconds
     )
     wheel_x, wheel_y = cell_center_to_vnc_pixels(geometry, 10, 5)
-    btn4_events = run_fenced_vnc_step(
+    button4_events = run_fenced_vnc_step(
         context.vm,
         context.vnc,
         session,
@@ -59,7 +59,7 @@ def _measure_wheel_under_scroll_setting(
         lambda: context.vnc.run_tokens(build_wheel_tokens(wheel_x, wheel_y, "down")),
         context.timeout_seconds,
     )
-    btn5_events = run_fenced_vnc_step(
+    button5_events = run_fenced_vnc_step(
         context.vm,
         context.vnc,
         session,
@@ -70,8 +70,8 @@ def _measure_wheel_under_scroll_setting(
     finish_interactive_clean_exit(context.vnc, session, context.timeout_seconds)
     return {
         "naturalScrolling": is_natural_scrolling,
-        "vncButton4Events": btn4_events,
-        "vncButton5Events": btn5_events,
+        "vncButton4Events": button4_events,
+        "vncButton5Events": button5_events,
     }
 
 
@@ -112,15 +112,15 @@ def _measure_single_selection_drag(
         lambda: context.vnc.run_tokens(build_chord_tokens("c", (command_key,))),
         context.timeout_seconds,
     )
-    cmd_c_clipboard = context.vm.read_guest_clipboard()
+    command_c_clipboard = context.vm.read_guest_clipboard()
     return {
         "modifiers": list(modifiers),
         "ptyMouseEventCount": sum(1 for record in pty_events if record.get("event_type") == "mouse"),
         "ptyEvents": pty_events,
         "autoClipboard": auto_clipboard,
-        "afterCmdCClipboard": cmd_c_clipboard,
+        "afterCmdCClipboard": command_c_clipboard,
         "bypassedMouseCapture": not any(record.get("event_type") == "mouse" for record in pty_events),
-        "copiedBannerPrefix": "SELECTABLE_ROW" in cmd_c_clipboard or "SELECTABLE_ROW" in auto_clipboard,
+        "copiedBannerPrefix": "SELECTABLE_ROW" in command_c_clipboard or "SELECTABLE_ROW" in auto_clipboard,
     }
 
 
@@ -257,16 +257,9 @@ def run_iterm2_matrix(
     restore_callback: Callable[[], None],
     probe_runner: Callable[[ScenarioRuntimeContext], dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    """Runs the full Milestone 0 iTerm2 matrix and restores guest defaults in `finally`."""
+    """Runs the full Milestone 0 iTerm2 matrix and guarantees guest defaults are restored afterward."""
     active_runner = _run_default_matrix_sweeps if probe_runner is None else probe_runner
     try:
-        return active_runner(context)
-    except Exception as exc:
-        screenshot_path = capture_failure_screenshot_safe(
-            getattr(context, "vnc", None), getattr(context, "artifact_dir", None)
-        )
-        if screenshot_path is not None and isinstance(exc, DriverError):
-            exc.recovery_hint = f"{exc.recovery_hint} (Screenshot saved to {screenshot_path})"
-        raise
+        return run_with_failure_screenshot(context, lambda: active_runner(context))
     finally:
         restore_callback()

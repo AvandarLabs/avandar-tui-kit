@@ -253,9 +253,9 @@ import json, sys
 try: parsed = json.load(sys.stdin)
 except Exception: sys.exit(1)
 if not isinstance(parsed, dict) or parsed.get("ok") is False: sys.exit(1)
-res = parsed.get("result") if isinstance(parsed.get("result"), dict) else parsed
-term = res.get("terminal") if isinstance(res.get("terminal"), dict) else res
-handle = term.get("handle", "")
+result_payload = parsed.get("result") if isinstance(parsed.get("result"), dict) else parsed
+terminal_payload = result_payload.get("terminal") if isinstance(result_payload.get("terminal"), dict) else result_payload
+handle = terminal_payload.get("handle", "")
 if not isinstance(handle, str) or not handle: sys.exit(1)
 print(handle)
 '
@@ -275,8 +275,8 @@ import json, sys
 try: parsed = json.load(sys.stdin)
 except Exception: sys.exit(1)
 if not isinstance(parsed, dict) or parsed.get("ok") is False: sys.exit(1)
-res = parsed.get("result") if isinstance(parsed.get("result"), dict) else parsed
-wait = res.get("wait") if isinstance(res.get("wait"), dict) else res
+result_payload = parsed.get("result") if isinstance(parsed.get("result"), dict) else parsed
+wait = result_payload.get("wait") if isinstance(result_payload.get("wait"), dict) else result_payload
 if wait.get("satisfied") is False: sys.exit(1)
 '
     return $?

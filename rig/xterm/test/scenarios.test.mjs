@@ -78,48 +78,33 @@ function createFakePlaywrightPage(recordedActions, options = {}) {
   };
 }
 
+function hasMouseEvent(records, mouseKind, column = null, row = null) {
+  return records.some(
+    (record) =>
+      record.mouse_kind === mouseKind &&
+      (column === null || record.column === column) &&
+      (row === null || record.row === row),
+  );
+}
+
 function assertInteractiveMouseSteps(interactiveReport) {
   const pointerSteps = interactiveReport.pointerSteps;
   if (process.platform !== 'win32') {
-    assert.equal(
-      pointerSteps.hover.filter((record) => record.mouse_kind === 'moved').length,
-      0,
-    );
+    assert.equal(pointerSteps.hover.filter((record) => record.mouse_kind === 'moved').length, 0);
   }
-  assert.ok(
-    pointerSteps.left_click.some(
-      (record) => record.mouse_kind === 'down:left' && record.column === 10 && record.row === 5,
-    ),
+  assert.ok(hasMouseEvent(pointerSteps.left_click, 'down:left', 10, 5));
+  assert.ok(hasMouseEvent(pointerSteps.left_click, 'up:left', 10, 5));
+  assert.ok(hasMouseEvent(pointerSteps.left_drag, 'down:left', 12, 6));
+  assert.ok(hasMouseEvent(pointerSteps.left_drag, 'drag:left'));
+  assert.ok(hasMouseEvent(pointerSteps.left_drag, 'up:left', 18, 6));
+  assert.ok(hasMouseEvent(pointerSteps.wheel_down, 'scroll_down', 10, 5));
+  assert.ok(hasMouseEvent(pointerSteps.wheel_up, 'scroll_up', 10, 5));
+  assert.equal(
+    pointerSteps.shift_click.some((record) => record.mouse_kind === 'down:left' && record.shift),
+    process.platform === 'darwin',
   );
-  assert.ok(
-    pointerSteps.left_click.some(
-      (record) => record.mouse_kind === 'up:left' && record.column === 10 && record.row === 5,
-    ),
-  );
-  assert.ok(
-    pointerSteps.left_drag.some(
-      (record) => record.mouse_kind === 'down:left' && record.column === 12 && record.row === 6,
-    ),
-  );
-  assert.ok(pointerSteps.left_drag.some((record) => record.mouse_kind === 'drag:left'));
-  assert.ok(
-    pointerSteps.left_drag.some(
-      (record) => record.mouse_kind === 'up:left' && record.column === 18 && record.row === 6,
-    ),
-  );
-  assert.ok(
-    pointerSteps.wheel_down.some(
-      (record) => record.mouse_kind === 'scroll_down' && record.column === 10 && record.row === 5,
-    ),
-  );
-  assert.ok(
-    pointerSteps.wheel_up.some(
-      (record) => record.mouse_kind === 'scroll_up' && record.column === 10 && record.row === 5,
-    ),
-  );
-  assert.ok(Array.isArray(pointerSteps.shift_click));
-  assert.ok(Array.isArray(pointerSteps.alt_click));
-  assert.ok(Array.isArray(pointerSteps.alt_drag));
+  assert.ok(pointerSteps.alt_click.some((record) => record.mouse_kind === 'down:left' && record.alt));
+  assert.ok(pointerSteps.alt_drag.some((record) => record.mouse_kind === 'drag:left' && record.alt));
 }
 
 function assertInteractiveKeyboardPasteAndFocus(interactiveReport) {
@@ -127,9 +112,10 @@ function assertInteractiveKeyboardPasteAndFocus(interactiveReport) {
   assert.ok(keySteps.arrow_up.some((record) => record.code === 'up'));
   assert.ok(keySteps.f1.some((record) => record.code === 'f1'));
   assert.ok(keySteps.ctrl_a.some((record) => record.code === 'char:a' && record.ctrl === true));
-  assert.ok(Array.isArray(interactiveReport.kittyEnterSteps.alt_enter));
-  assert.ok(Array.isArray(interactiveReport.kittyEnterSteps.shift_enter));
-  assert.ok(Array.isArray(interactiveReport.kittyEnterSteps.ctrl_enter));
+  const kittyEnter = interactiveReport.kittyEnterSteps;
+  assert.ok(kittyEnter.alt_enter.some((record) => record.code === 'enter' && record.alt === true));
+  assert.ok(kittyEnter.shift_enter.some((record) => record.code === 'enter' && !record.shift));
+  assert.ok(kittyEnter.ctrl_enter.some((record) => record.code === 'enter' && !record.ctrl));
 
   if (process.platform !== 'win32') {
     assert.ok(
@@ -173,7 +159,7 @@ test('cellCenterToViewportPx maps cell indices to pixel centers and rejects inva
   }
 });
 
-test('pointer helpers drive Playwright mouse and release modifiers in reverse order on error', async () => {
+test('pointer helpers emit click, drag, hover-move, and wheel sequences at cell centers', async () => {
   const recordedActions = [];
   const fakePage = createFakePlaywrightPage(recordedActions);
   await clickCell(fakePage, SAMPLE_TERMINAL_STATE, 10, 5, {
@@ -196,14 +182,26 @@ test('pointer helpers drive Playwright mouse and release modifiers in reverse or
     { steps: 2 },
   );
   await wheelAtCell(fakePage, SAMPLE_TERMINAL_STATE, 4, 1, 0, 100);
-  assert.deepEqual(recordedActions.slice(0, 5), [
+  assert.deepEqual(recordedActions, [
     'keyDown:Shift',
     'keyDown:Alt',
     'click:106.5,119:right:2',
     'keyUp:Alt',
     'keyUp:Shift',
+    'move:25.5,65:1',
+    'keyDown:Alt',
+    'down:left',
+    'move:43.5,65:3',
+    'up:left',
+    'keyUp:Alt',
+    'move:16.5,29:1',
+    'move:34.5,29:2',
+    'move:52.5,47:1',
+    'wheel:0,100',
   ]);
+});
 
+test('clickCell releases held modifiers in reverse order when Playwright click throws', async () => {
   const failureActions = [];
   const failingPage = createFakePlaywrightPage(failureActions, { shouldFailClick: true });
   await assert.rejects(() =>
@@ -284,7 +282,7 @@ function assertBatchSectionRecords(batchReport) {
   }
 }
 
-test('bridge_server exposes blur/focus helpers and fails flush fast if browser socket closes', async () => {
+test('startBrowserBridge blurTerminal and focusTerminal toggle active xterm helper focus', async () => {
   const bridge = await startBrowserBridge({ cols: 100, rows: 30 });
   try {
     await bridge.writeAndFlush('\x1b[?1004h');
@@ -297,7 +295,9 @@ test('bridge_server exposes blur/focus helpers and fails flush fast if browser s
   } finally {
     await bridge.close();
   }
+});
 
+test('flushTerminalWrites rejects immediately when the browser WebSocket closes mid-write', async () => {
   const rawBridge = await createBridgeServer({ cols: 100, rows: 30 });
   try {
     const mockSocket = new WebSocket(`ws://127.0.0.1:${rawBridge.port}/bridge`);
@@ -324,13 +324,7 @@ test('run.sh --help prints structured plain help to stdout and exits 0 outside r
   assert.equal(helpResult.stderr, '');
   assert.ok(!helpResult.stdout.includes('\x1b['));
   for (const requiredHeading of [
-    'Usage:',
-    'Purpose:',
-    'Arguments:',
-    'Scenarios:',
-    'Options:',
-    'Streams:',
-    'Examples:',
+    'Usage:', 'Purpose:', 'Arguments:', 'Scenarios:', 'Options:', 'Streams:', 'Examples:',
   ]) {
     assert.ok(helpResult.stdout.includes(requiredHeading), `missing ${requiredHeading}`);
   }
@@ -349,8 +343,8 @@ test('run.sh rejects invalid CLI arguments with exit code 2, empty stdout, and r
     assert.equal(failedResult.status, 2, `expected exit 2 for ${JSON.stringify(cliArgs)}`);
     assert.equal(failedResult.stdout, '');
     assert.match(failedResult.stderr, /Usage:/);
-    assert.match(failedResult.stderr, /❌/);
-    assert.match(failedResult.stderr, /\n {2}⚠️ /);
+    assert.match(failedResult.stderr, /\u274c/);
+    assert.match(failedResult.stderr, /\n {2}\u26a0\ufe0f /);
   }
 });
 
@@ -360,7 +354,7 @@ test('run.sh executes capability_probe all scenario with clean JSON stdout and v
   });
   assert.equal(probeResult.status, 0, `stderr:\n${probeResult.stderr}`);
   assert.match(probeResult.stderr, /==>/);
-  assert.match(probeResult.stderr, /✅/);
+  assert.match(probeResult.stderr, /\u2705/);
 
   const stdoutLines = probeResult.stdout.trim().split('\n');
   assert.equal(stdoutLines.length, 1);

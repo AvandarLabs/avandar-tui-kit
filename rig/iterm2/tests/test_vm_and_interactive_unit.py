@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 import json
 from pathlib import Path
 import subprocess
@@ -10,6 +11,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+# Parent directory (`rig/iterm2`) added to `sys.path` for `driver` imports.
 DRIVER_PARENT = Path(__file__).resolve().parents[1]
 if str(DRIVER_PARENT) not in sys.path:
     sys.path.insert(0, str(DRIVER_PARENT))
@@ -30,15 +32,17 @@ from driver.vnc_input import VncController, WindowGeometry  # noqa: E402
 
 
 class StubHungProcess:
-    """Simulates a stubborn `tart run` child process that times out on wait."""
+    """Simulates a `tart run` child process that announces VNC and hangs on wait."""
 
-    def __init__(self) -> None:
+    def __init__(self, lines: tuple[str, ...] = ("vnc://:pw@127.0.0.1:59001\n",)) -> None:
+        self.stdout: Iterator[str] = iter(lines)
+        self.returncode: int | None = None
         self.was_terminated = False
         self.was_killed = False
         self.wait_calls: list[float | None] = []
 
     def poll(self) -> int | None:
-        return None
+        return self.returncode
 
     def terminate(self) -> None:
         self.was_terminated = True
@@ -49,6 +53,41 @@ class StubHungProcess:
     def wait(self, timeout: float | None = None) -> int:
         self.wait_calls.append(timeout)
         raise subprocess.TimeoutExpired(cmd=["tart", "run"], timeout=timeout or 1.0)
+
+
+class StubPrematureExitProcess:
+    """Simulates a `tart run` child process that emits diagnostic lines and exits."""
+
+    def __init__(self, lines: tuple[str, ...], exit_code: int = 1) -> None:
+        self._lines = lines
+        self._has_drained_stdout = False
+        self.stdout = self._iter_stdout()
+        self.returncode = exit_code
+        self.was_terminated = False
+
+    def _iter_stdout(self) -> Iterator[str]:
+        yield from self._lines
+        self._has_drained_stdout = True
+
+    def poll(self) -> int | None:
+        return self.returncode if self._has_drained_stdout else None
+
+    def terminate(self) -> None:
+        self.was_terminated = True
+
+    def kill(self) -> None:
+        pass
+
+    def wait(self, timeout: float | None = None) -> int:
+        _ = timeout
+        return self.returncode
+
+
+def _fake_tart_run_dispatch(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+    if command[1:3] == ["list", "--format"]:
+        payload = json.dumps([{"Name": "tuikit-macos", "State": "stopped"}])
+        return subprocess.CompletedProcess(command, 0, payload, "")
+    return subprocess.CompletedProcess(command, 0, "", "")
 
 
 def build_valid_pointer_steps() -> dict[str, list[dict[str, object]]]:
@@ -70,13 +109,18 @@ def build_valid_pointer_steps() -> dict[str, list[dict[str, object]]]:
 
 
 class TartVmLifecycleAndSubprocessTests(unittest.TestCase):
-    def test_stop_kills_proc_and_removes_shared_dir_when_tart_stop_times_out(self) -> None:
+    def test_stop_terminates_and_kills_hung_tart_process_when_tart_stop_times_out(self) -> None:
         vm = TartVmSession("/usr/local/bin/tart", vm_name="tuikit-macos", env={"HOME": "/nonexistent"})
         shared_dir = vm.shared_dir
         (shared_dir / "payload.txt").write_text("staged", encoding="utf-8")
-        hung_proc = StubHungProcess()
-        vm._proc = hung_proc  # type: ignore[assignment]
-        vm._has_started_vm = True
+        hung_process = StubHungProcess()
+        with (
+            mock.patch("driver.tart_vm.subprocess.Popen", return_value=hung_process),
+            mock.patch("driver.tart_vm.subprocess.run", side_effect=_fake_tart_run_dispatch),
+            mock.patch("driver.tart_vm.check_rfb_port_ready", return_value=True),
+        ):
+            endpoint = vm.boot(timeout_seconds=5.0)
+        self.assertEqual(endpoint, VncEndpoint(host="127.0.0.1", port=59001, password="pw"))
 
         with mock.patch(
             "driver.tart_vm.subprocess.run",
@@ -84,8 +128,8 @@ class TartVmLifecycleAndSubprocessTests(unittest.TestCase):
         ):
             vm.stop()
 
-        self.assertTrue(hung_proc.was_terminated)
-        self.assertTrue(hung_proc.was_killed)
+        self.assertTrue(hung_process.was_terminated)
+        self.assertTrue(hung_process.was_killed)
         self.assertFalse(shared_dir.exists())
 
     def test_stop_skips_tart_stop_when_boot_never_started_vm(self) -> None:
@@ -99,34 +143,19 @@ class TartVmLifecycleAndSubprocessTests(unittest.TestCase):
         run_mock.assert_not_called()
         self.assertFalse(shared_dir.exists())
 
-    def test_boot_reaps_previous_proc_before_retrying_spawn(self) -> None:
+    def test_boot_retries_transient_vz_error_and_reaps_failed_process(self) -> None:
         vm = TartVmSession("/usr/local/bin/tart", vm_name="tuikit-macos", env={"HOME": "/nonexistent"})
-        first_proc = StubHungProcess()
-        expected_endpoint = VncEndpoint(host="127.0.0.1", port=59001, password="pw")
-        spawn_count = 0
-
-        def fake_spawn() -> None:
-            nonlocal spawn_count
-            spawn_count += 1
-            if spawn_count == 1:
-                vm._proc = first_proc  # type: ignore[assignment]
-            else:
-                self.assertIsNone(vm._proc)
-
+        failed_process = StubPrematureExitProcess(("Error Domain=VZErrorDomain Code=2\n",), exit_code=1)
+        ready_process = StubHungProcess(("vnc://:pw@127.0.0.1:59001\n",))
         with (
-            mock.patch("driver.tart_vm.ensure_vm_present_and_cold"),
-            mock.patch("driver.tart_vm.wait_until_vm_fully_stopped"),
-            mock.patch.object(vm, "_spawn_tart_run", side_effect=fake_spawn),
-            mock.patch.object(
-                vm,
-                "_wait_until_boot_ready",
-                side_effect=[DriverRuntimeError("VZErrorDomain transient", "retry"), expected_endpoint],
-            ),
+            mock.patch("driver.tart_vm.subprocess.Popen", side_effect=[failed_process, ready_process]) as popen_mock,
+            mock.patch("driver.tart_vm.subprocess.run", side_effect=_fake_tart_run_dispatch),
+            mock.patch("driver.tart_vm.check_rfb_port_ready", return_value=True),
         ):
             endpoint = vm.boot(timeout_seconds=10.0)
-        self.assertEqual(endpoint, expected_endpoint)
-        self.assertTrue(first_proc.was_terminated)
-        vm.stop()
+            self.assertEqual(endpoint, VncEndpoint(host="127.0.0.1", port=59001, password="pw"))
+            self.assertEqual(popen_mock.call_count, 2)
+            vm.stop()
 
     def test_subprocess_timeouts_and_oserrors_raise_driver_runtime_error(self) -> None:
         endpoint = VncEndpoint(host="127.0.0.1", port=59000, password="secret")
@@ -213,6 +242,7 @@ class TeardownAndPointerAssertionTests(unittest.TestCase):
             log_path = Path(temp_dir) / "focus.jsonl"
             log_path.write_text("", encoding="utf-8")
             fake_vm, fake_vnc = mock.MagicMock(), mock.MagicMock()
+
             def append_fence() -> None:
                 with log_path.open("a", encoding="utf-8") as handle:
                     handle.write('{"kind":"event","event_type":"key","key_kind":"press","code":"f2"}\n')
@@ -243,10 +273,16 @@ class TeardownAndPointerAssertionTests(unittest.TestCase):
         try:
             with mock.patch.object(vm, "exec_guest"):
                 full_session = launch_iterm_session(
-                    vm, SessionLaunchSpec("s_full", "/tmp/probe", ["--batch"], tmux_mode="full", guest_tmux_conf_path="/tmp/f.conf"),
+                    vm,
+                    SessionLaunchSpec(
+                        "s_full", "/tmp/probe", ["--batch"], tmux_mode="full", guest_tmux_conf_path="/tmp/f.conf"
+                    ),
                 )
                 cc_session = launch_iterm_session(
-                    vm, SessionLaunchSpec("s_cc", "/tmp/probe", ["--batch"], tmux_mode="cc-full", guest_tmux_conf_path="/tmp/f.conf"),
+                    vm,
+                    SessionLaunchSpec(
+                        "s_cc", "/tmp/probe", ["--batch"], tmux_mode="cc-full", guest_tmux_conf_path="/tmp/f.conf"
+                    ),
                 )
             full_spec = json.loads((vm.shared_dir / f"{full_session.session_id}.spec.json").read_text(encoding="utf-8"))
             cc_spec = json.loads((vm.shared_dir / f"{cc_session.session_id}.spec.json").read_text(encoding="utf-8"))
@@ -258,5 +294,3 @@ class TeardownAndPointerAssertionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-

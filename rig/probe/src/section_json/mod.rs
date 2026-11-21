@@ -1,13 +1,9 @@
 //! Pure JSONL record formatters for `capability_probe` writes, sections, and summaries.
 
-use std::fmt::Write as _;
-
 use crate::color_reply::ColorReply;
 use crate::environment::EnvironmentSnapshot;
-use crate::json_log::escape_json_string;
+use crate::json_log::{escape_json_string, push_lowercase_hex_byte};
 use crate::parsers::{CellPixelSize, ModeReport, ModeReportState, latest_mode_state};
-
-const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
 
 /// Outcome of enabling and disabling a single DEC private mode with `DECRPM` verification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,8 +32,7 @@ pub struct MeasuredWidthSample {
 fn encode_lowercase_hex(bytes: &[u8]) -> String {
     let mut hex_output = String::with_capacity(bytes.len() * 2);
     for &byte in bytes {
-        hex_output.push(char::from(HEX_DIGITS[usize::from(byte >> 4)]));
-        hex_output.push(char::from(HEX_DIGITS[usize::from(byte & 0x0f)]));
+        push_lowercase_hex_byte(&mut hex_output, byte);
     }
     hex_output
 }
@@ -53,21 +48,22 @@ fn json_optional_u16(value: Option<u16>) -> String {
     value.map_or_else(|| "null".to_owned(), |number| number.to_string())
 }
 
+fn format_json_array<T, F>(items: &[T], format_item: F) -> String
+where
+    F: FnMut(&T) -> String,
+{
+    let joined = items.iter().map(format_item).collect::<Vec<_>>().join(",");
+    format!("[{joined}]")
+}
+
 fn format_mode_report_array(reports: &[ModeReport]) -> String {
-    let mut output = String::from("[");
-    for (index, report) in reports.iter().enumerate() {
-        if index > 0 {
-            output.push(',');
-        }
-        let _ = write!(
-            output,
+    format_json_array(reports, |report| {
+        format!(
             "{{\"mode\":{},\"state\":\"{}\"}}",
             report.mode,
             report.state.as_str()
-        );
-    }
-    output.push(']');
-    output
+        )
+    })
 }
 
 /// Formats a `{"kind":"write",...}` JSONL record for raw bytes written to the terminal.
@@ -168,23 +164,18 @@ pub fn format_kitty_section(
 /// Formats the `modes` section JSONL record for bracketed paste, focus, and synchronized output.
 #[must_use]
 pub fn format_modes_section(entries: &[SingleModeProbe], has_timed_out: bool) -> String {
-    let mut modes_array = String::from("[");
-    for (index, entry) in entries.iter().enumerate() {
-        if index > 0 {
-            modes_array.push(',');
-        }
-        let enable_str = json_optional_str(entry.after_enable.map(ModeReportState::as_str));
-        let disable_str = json_optional_str(entry.after_disable.map(ModeReportState::as_str));
-        let _ = write!(
-            modes_array,
+    let modes_array = format_json_array(entries, |entry| {
+        let after_enable_json = json_optional_str(entry.after_enable.map(ModeReportState::as_str));
+        let after_disable_json =
+            json_optional_str(entry.after_disable.map(ModeReportState::as_str));
+        format!(
             "{{\"mode\":{},\"name\":\"{}\",\"after_enable\":{},\"after_disable\":{}}}",
             entry.mode,
             escape_json_string(entry.name),
-            enable_str,
-            disable_str
-        );
-    }
-    modes_array.push(']');
+            after_enable_json,
+            after_disable_json
+        )
+    });
     format!(
         "{{\"kind\":\"section\",\"section\":\"modes\",\"timed_out\":{has_timed_out},\"modes\":{modes_array}}}"
     )
@@ -208,20 +199,14 @@ pub fn format_cell_size_section(cell_size: Option<CellPixelSize>, has_timed_out:
 /// Formats the `widths` section JSONL record containing all measured width samples.
 #[must_use]
 pub fn format_widths_section(measurements: &[MeasuredWidthSample], has_timed_out: bool) -> String {
-    let mut samples_array = String::from("[");
-    for (index, sample) in measurements.iter().enumerate() {
-        if index > 0 {
-            samples_array.push(',');
-        }
-        let _ = write!(
-            samples_array,
+    let samples_array = format_json_array(measurements, |sample| {
+        format!(
             "{{\"name\":\"{}\",\"category\":\"{}\",\"cells\":{}}}",
             escape_json_string(sample.name),
             escape_json_string(sample.category),
             json_optional_u16(sample.cells)
-        );
-    }
-    samples_array.push(']');
+        )
+    });
     format!(
         "{{\"kind\":\"section\",\"section\":\"widths\",\"timed_out\":{has_timed_out},\"samples\":{samples_array}}}"
     )
@@ -291,128 +276,4 @@ pub fn format_summary_record(mode: &str, exit_chord: &str, panic_key: &str) -> S
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn formats_write_and_identity_section_records() {
-        let write_line = format_write_record("identity:xtversion", b"\x1b[>0q\x1b[c");
-        assert_eq!(
-            write_line,
-            r#"{"kind":"write","label":"identity:xtversion","hex":"1b5b3e30711b5b63"}"#
-        );
-        let snapshot = EnvironmentSnapshot {
-            os: "macos",
-            arch: "aarch64",
-            term: Some("xterm-256color".to_owned()),
-            term_program: Some("Orca".to_owned()),
-            term_program_version: Some("1.4.0".to_owned()),
-            is_tmux: false,
-            is_ssh: false,
-            has_no_color: true,
-            orca_version: Some("1.4.0".to_owned()),
-            is_stdin_tty: true,
-            is_stdout_tty: true,
-        };
-        let identity_line =
-            format_identity_section(&snapshot, true, Some("xterm.js(6.0.0)"), false);
-        assert!(identity_line.contains(r#""section":"identity""#));
-        assert!(identity_line.contains(r#""xtversion":"xterm.js(6.0.0)""#));
-    }
-
-    #[test]
-    fn formats_mouse_modes_and_kitty_section_records() {
-        let after_m1 = [
-            ModeReport {
-                mode: 1000,
-                state: ModeReportState::Reset,
-            },
-            ModeReport {
-                mode: 1002,
-                state: ModeReportState::Set,
-            },
-            ModeReport {
-                mode: 1003,
-                state: ModeReportState::Reset,
-            },
-            ModeReport {
-                mode: 1006,
-                state: ModeReportState::Set,
-            },
-        ];
-        let after_m5 = [1000, 1002, 1003, 1006].map(|mode| ModeReport {
-            mode,
-            state: ModeReportState::Reset,
-        });
-        let mouse_line = format_mouse_modes_section(&[], &after_m1, &after_m5, false);
-        assert!(mouse_line.contains(r#""is_m1_expected":true,"is_m5_reset":true"#));
-
-        let kitty_line = format_kitty_section(Some(0), Some(1), Some(0), false);
-        assert!(kitty_line.contains(r#""answered":true,"initial_flags":0,"pushed_flags":1"#));
-    }
-
-    #[test]
-    fn formats_modes_cell_size_widths_and_osc52_records() {
-        let mode_line = format_modes_section(
-            &[SingleModeProbe {
-                mode: 2004,
-                name: "bracketed_paste",
-                after_enable: Some(ModeReportState::Set),
-                after_disable: Some(ModeReportState::Reset),
-            }],
-            false,
-        );
-        assert!(mode_line.contains(r#""name":"bracketed_paste","after_enable":"set""#));
-
-        let cell_line = format_cell_size_section(
-            Some(CellPixelSize {
-                height_px: 18,
-                width_px: 9,
-            }),
-            false,
-        );
-        assert!(cell_line.contains(r#""answered":true,"height_px":18,"width_px":9"#));
-        assert!(format_cell_size_section(None, false).contains(r#""answered":false"#));
-
-        let widths_line = format_widths_section(
-            &[MeasuredWidthSample {
-                name: "ascii_a",
-                category: "ascii_and_accents",
-                cells: Some(1),
-            }],
-            false,
-        );
-        assert!(
-            widths_line.contains(r#"{"name":"ascii_a","category":"ascii_and_accents","cells":1}"#)
-        );
-
-        let osc52_line = format_osc52_section(true, true, false);
-        assert!(osc52_line.contains(r#""emitted":true,"plain_sent":true,"tmux_sent":false"#));
-    }
-
-    #[test]
-    fn formats_background_color_and_summary_records() {
-        let color_reply = ColorReply {
-            r: 26,
-            g: 27,
-            b: 38,
-            channels: ["1a1a".to_owned(), "1b1b".to_owned(), "2626".to_owned()],
-            luminance: 0.012_345,
-            is_dark: true,
-        };
-        let color_line =
-            format_background_color_section("background_color", "initial", 14, Some(&color_reply));
-        assert!(color_line.contains(r#""answered":true,"phase":"initial","elapsed_ms":14"#));
-        assert!(color_line.contains(r#""is_dark":true"#));
-
-        let timeout_line =
-            format_background_color_section("background_color", "timeout", 2_000, None);
-        assert!(timeout_line.contains(r#""answered":false,"phase":"timeout","elapsed_ms":2000"#));
-
-        let summary_line = format_summary_record("batch", "Ctrl+C", "F12");
-        assert_eq!(
-            summary_line,
-            r#"{"kind":"summary","mode":"batch","exit_chord":"Ctrl+C","panic_key":"F12"}"#
-        );
-    }
-}
+mod tests;

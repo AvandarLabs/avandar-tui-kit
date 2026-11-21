@@ -6,7 +6,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import re
 
+# Supported private tmux configuration modes accepted by `--tmux`.
 VALID_TMUX_MODES: tuple[str, ...] = ("stock", "full", "cc-stock", "cc-full")
+
+# Supported scenario names accepted by the Layer 6 CLI.
 VALID_SCENARIOS: tuple[str, ...] = (
     "all",
     "batch",
@@ -16,11 +19,21 @@ VALID_SCENARIOS: tuple[str, ...] = (
     "matrix",
     "passthrough",
 )
+
+# Default bounded per-phase condition timeout in milliseconds.
 DEFAULT_TIMEOUT_MS = 45000
+
+# Boolean `capability_probe` flags deduplicated during managed argument merging.
 BOOLEAN_PROBE_FLAGS = frozenset({"--batch", "--push-kitty"})
+
+# Value-taking `capability_probe` flags deduplicated during managed argument merging.
 VALUE_PROBE_FLAGS = frozenset({"--log", "--osc52", "--osc52-form"})
+
+# Allowed Cargo example binary name characters.
 VALID_PROGRAM_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
-POSITIVE_INT_PATTERN = re.compile(r"^[1-9][0-9]*$")
+
+# Pattern matching strictly positive decimal integer strings.
+POSITIVE_INTEGER_PATTERN = re.compile(r"^[1-9][0-9]*$")
 
 
 class DriverError(Exception):
@@ -59,9 +72,9 @@ class ParsedCliArgs:
     extra_args: list[str]
 
 
-def create_cli_theme(is_tty: bool, env: Mapping[str, str]) -> dict[str, str]:
+def create_cli_theme(is_tty: bool, environment: Mapping[str, str]) -> dict[str, str]:
     """Builds ANSI color tokens while honoring NO_COLOR, TERM=dumb, and non-TTY streams."""
-    if not is_tty or bool(env.get("NO_COLOR")) or env.get("TERM") == "dumb":
+    if not is_tty or bool(environment.get("NO_COLOR")) or environment.get("TERM") == "dumb":
         return {
             key: ""
             for key in ("reset", "bold", "heading", "accent", "muted", "success", "warn", "error")
@@ -138,7 +151,7 @@ def build_help_text(theme: Mapping[str, str]) -> str:
 
 
 def _parse_positive_timeout(raw_value: str | None) -> int:
-    if raw_value is None or not POSITIVE_INT_PATTERN.match(raw_value):
+    if raw_value is None or not POSITIVE_INTEGER_PATTERN.match(raw_value):
         raise CliUsageError(
             f"Option '--timeout-ms' requires a positive integer in milliseconds, got '{raw_value or ''}'.",
             "Pass a positive integer, for example: --timeout-ms 45000",

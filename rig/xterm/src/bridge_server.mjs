@@ -1,5 +1,6 @@
 /**
- * Local HTTP + WebSocket bridge driving browser `@xterm/xterm@6.0.0` via Playwright Chromium.
+ * Local HTTP and WebSocket bridge driving browser `@xterm/xterm@6.0.0` via
+ * headless Playwright Chromium for PTY session and scenario runners.
  */
 
 import fs from 'node:fs';
@@ -92,21 +93,21 @@ function chunkToBase64(chunk) {
 }
 
 function resolveSatisfiedAckWaiters(bridgeState) {
-  for (const waiter of [...bridgeState.ackWaiters]) {
+  [...bridgeState.ackWaiters].forEach((waiter) => {
     if (bridgeState.lastAckedSequence >= waiter.targetSequence) {
       clearTimeout(waiter.failureTimer);
       bridgeState.ackWaiters.delete(waiter);
       waiter.resolve();
     }
-  }
+  });
 }
 
 function rejectAllAckWaiters(bridgeState, reasonError) {
-  for (const waiter of [...bridgeState.ackWaiters]) {
+  [...bridgeState.ackWaiters].forEach((waiter) => {
     clearTimeout(waiter.failureTimer);
     bridgeState.ackWaiters.delete(waiter);
     waiter.reject(reasonError);
-  }
+  });
 }
 
 function clearPendingReadyWaiter(bridgeState, rejectionError = null) {
@@ -139,16 +140,12 @@ function handleSocketMessage(bridgeState, rawMessage) {
     return;
   }
   if (message.type === 'term_input' && typeof message.data === 'string') {
-    for (const listener of bridgeState.inputListeners) {
-      listener(message.data);
-    }
+    bridgeState.inputListeners.forEach((listener) => listener(message.data));
     return;
   }
   if (message.type === 'term_binary' && typeof message.binaryLatin1 === 'string') {
     const binaryBuffer = Buffer.from(message.binaryLatin1, 'latin1');
-    for (const listener of bridgeState.inputListeners) {
-      listener(binaryBuffer);
-    }
+    bridgeState.inputListeners.forEach((listener) => listener(binaryBuffer));
   }
 }
 
@@ -233,9 +230,7 @@ async function teardownBridgeResources(bridgeState, httpServer, socketServer) {
   rejectAllAckWaiters(bridgeState, new Error('Bridge closed before write_ack completed'));
   bridgeState.activeSocket?.close();
   bridgeState.activeSocket = null;
-  for (const clientSocket of socketServer.clients) {
-    clientSocket.terminate();
-  }
+  socketServer.clients.forEach((clientSocket) => clientSocket.terminate());
   socketServer.close();
   if (bridgeState.browser) {
     await bridgeState.browser.close();
@@ -287,7 +282,8 @@ function createBridgeController(bridgeState, httpServer, socketServer, port, col
 }
 
 /**
- * Starts the local HTTP and WebSocket bridge server on `127.0.0.1:0` without launching Chromium yet.
+ * Starts the local HTTP and WebSocket bridge server on `127.0.0.1:0` without
+ * launching Chromium, returning a bridge controller for tests and `startBrowserBridge`.
  */
 export async function createBridgeServer({ cols = 100, rows = 30 } = {}) {
   const httpServer = http.createServer(serveStaticAsset);
@@ -325,8 +321,9 @@ export async function createBridgeServer({ cols = 100, rows = 30 } = {}) {
 }
 
 /**
- * Starts the HTTP/WebSocket bridge, launches headless Playwright Chromium, and resolves
- * only after `@xterm/xterm@6.0.0` reports `terminal_ready` with non-zero cell metrics.
+ * Starts the local HTTP/WebSocket bridge, launches headless Playwright Chromium,
+ * and resolves the ready bridge controller once `@xterm/xterm@6.0.0` reports
+ * `terminal_ready` with measured cell dimensions (closing all handles on error).
  */
 export async function startBrowserBridge({
   cols = 100,

@@ -1,5 +1,6 @@
 /**
- * Zero-based terminal cell coordinate math and Playwright pointer interaction helpers.
+ * Zero-based terminal cell coordinate math and Playwright pointer interaction
+ * helpers used by interactive xterm.js scenarios.
  */
 
 function assertValidTerminalMetrics(terminalState) {
@@ -23,7 +24,7 @@ function assertValidTerminalMetrics(terminalState) {
   }
 }
 
-function resolveCellCoordinates(cellPoint) {
+function normalizeCellCoordinates(cellPoint) {
   if (Array.isArray(cellPoint) && cellPoint.length === 2) {
     return { column: cellPoint[0], row: cellPoint[1] };
   }
@@ -50,7 +51,8 @@ async function withHeldModifiers(page, modifiers, performPointerAction) {
 }
 
 /**
- * Converts zero-based `(columnZeroBased, rowZeroBased)` cell indices into viewport pixel center `{ x, y }`.
+ * Converts zero-based `(columnZeroBased, rowZeroBased)` cell indices into
+ * viewport pixel center `{ x, y }` for Playwright pointer dispatch.
  */
 export function cellCenterToViewportPx(terminalState, columnZeroBased, rowZeroBased) {
   assertValidTerminalMetrics(terminalState);
@@ -75,7 +77,8 @@ export function cellCenterToViewportPx(terminalState, columnZeroBased, rowZeroBa
 }
 
 /**
- * Clicks the center of `(columnZeroBased, rowZeroBased)` while holding optional keyboard `modifiers`.
+ * Clicks the center of `(columnZeroBased, rowZeroBased)` on `page` while
+ * holding optional keyboard `modifiers`, resolving once keys are released.
  */
 export async function clickCell(
   page,
@@ -91,7 +94,8 @@ export async function clickCell(
 }
 
 /**
- * Drags the mouse from `startCell` center to `endCell` center while holding optional `modifiers`.
+ * Drags the pointer from `startCell` center to `endCell` center on `page` while
+ * holding optional `modifiers`, guaranteeing button and modifier release.
  */
 export async function dragAcrossCells(
   page,
@@ -100,10 +104,14 @@ export async function dragAcrossCells(
   endCell,
   { button = 'left', modifiers = [], steps = 4 } = {},
 ) {
-  const resolvedStart = resolveCellCoordinates(startCell);
-  const resolvedEnd = resolveCellCoordinates(endCell);
-  const startPoint = cellCenterToViewportPx(terminalState, resolvedStart.column, resolvedStart.row);
-  const endPoint = cellCenterToViewportPx(terminalState, resolvedEnd.column, resolvedEnd.row);
+  const startCellCoords = normalizeCellCoordinates(startCell);
+  const endCellCoords = normalizeCellCoordinates(endCell);
+  const startPoint = cellCenterToViewportPx(
+    terminalState,
+    startCellCoords.column,
+    startCellCoords.row,
+  );
+  const endPoint = cellCenterToViewportPx(terminalState, endCellCoords.column, endCellCoords.row);
 
   await page.mouse.move(startPoint.x, startPoint.y);
   await withHeldModifiers(page, modifiers, async () => {
@@ -117,21 +125,40 @@ export async function dragAcrossCells(
 }
 
 /**
- * Moves the pointer from `startCell` center to `endCell` center with no mouse button pressed.
+ * Moves the pointer from `startCell` center to `endCell` center on `page` with
+ * no mouse button pressed to verify hover motion reporting.
  */
-export async function movePointerAcrossCells(page, terminalState, startCell, endCell, { steps = 4 } = {}) {
-  const resolvedStart = resolveCellCoordinates(startCell);
-  const resolvedEnd = resolveCellCoordinates(endCell);
-  const startPoint = cellCenterToViewportPx(terminalState, resolvedStart.column, resolvedStart.row);
-  const endPoint = cellCenterToViewportPx(terminalState, resolvedEnd.column, resolvedEnd.row);
+export async function movePointerAcrossCells(
+  page,
+  terminalState,
+  startCell,
+  endCell,
+  { steps = 4 } = {},
+) {
+  const startCellCoords = normalizeCellCoordinates(startCell);
+  const endCellCoords = normalizeCellCoordinates(endCell);
+  const startPoint = cellCenterToViewportPx(
+    terminalState,
+    startCellCoords.column,
+    startCellCoords.row,
+  );
+  const endPoint = cellCenterToViewportPx(terminalState, endCellCoords.column, endCellCoords.row);
   await page.mouse.move(startPoint.x, startPoint.y);
   await page.mouse.move(endPoint.x, endPoint.y, { steps });
 }
 
 /**
- * Moves the pointer to `(columnZeroBased, rowZeroBased)` center and scrolls by `(deltaX, deltaY)`.
+ * Moves the pointer to `(columnZeroBased, rowZeroBased)` center on `page` and
+ * dispatches a mouse wheel event with `(deltaX, deltaY)`.
  */
-export async function wheelAtCell(page, terminalState, columnZeroBased, rowZeroBased, deltaX, deltaY) {
+export async function wheelAtCell(
+  page,
+  terminalState,
+  columnZeroBased,
+  rowZeroBased,
+  deltaX,
+  deltaY,
+) {
   const center = cellCenterToViewportPx(terminalState, columnZeroBased, rowZeroBased);
   await page.mouse.move(center.x, center.y);
   await page.mouse.wheel(deltaX, deltaY);

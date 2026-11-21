@@ -27,12 +27,14 @@
     <script src="/vendor/xterm.js"></script>
     <script src="/vendor/addon-unicode11.js"></script>
     <script type="module">
-      import { decodeOsc52Payload } from '/src/osc52.mjs';
+      import { decodeOsc52Payload, makeUint8ArrayFromBase64 } from '/src/osc52.mjs';
 
-      function parseDimensionParam(searchParams, keyName, fallbackValue) {
-        const rawParam = searchParams.get(keyName);
-        const parsedInt = rawParam ? Number.parseInt(rawParam, 10) : Number.NaN;
-        return Number.isInteger(parsedInt) && parsedInt > 0 ? parsedInt : fallbackValue;
+      function parseDimensionParameter(searchParams, keyName, fallbackValue) {
+        const rawParameter = searchParams.get(keyName);
+        const parsedInteger = rawParameter ? Number.parseInt(rawParameter, 10) : Number.NaN;
+        return Number.isInteger(parsedInteger) && parsedInteger > 0
+          ? parsedInteger
+          : fallbackValue;
       }
 
       function createConfiguredTerminal(cols, rows) {
@@ -62,11 +64,15 @@
         const screenElement =
           containerElement.querySelector('.xterm-screen') ?? containerElement;
         const screenBounds = screenElement.getBoundingClientRect();
-        const coreCellDims = terminal._core?._renderService?.dimensions?.css?.cell;
+        const coreCellDimensions = terminal._core?._renderService?.dimensions?.css?.cell;
         const cellWidthPx =
-          coreCellDims?.width > 0 ? coreCellDims.width : screenBounds.width / terminal.cols;
+          coreCellDimensions?.width > 0
+            ? coreCellDimensions.width
+            : screenBounds.width / terminal.cols;
         const cellHeightPx =
-          coreCellDims?.height > 0 ? coreCellDims.height : screenBounds.height / terminal.rows;
+          coreCellDimensions?.height > 0
+            ? coreCellDimensions.height
+            : screenBounds.height / terminal.rows;
         return {
           cellWidthPx,
           cellHeightPx,
@@ -91,15 +97,6 @@
           };
           window.requestAnimationFrame(checkNextFrame);
         });
-      }
-
-      function base64ToUint8Array(dataBase64) {
-        const binaryString = window.atob(dataBase64);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let byteIndex = 0; byteIndex < binaryString.length; byteIndex += 1) {
-          bytes[byteIndex] = binaryString.charCodeAt(byteIndex);
-        }
-        return bytes;
       }
 
       function sendSocketJson(socket, payloadObject) {
@@ -159,7 +156,7 @@
         socket.addEventListener('message', (messageEvent) => {
           const parsedMessage = JSON.parse(String(messageEvent.data));
           if (parsedMessage.type === 'pty_output') {
-            const outputBytes = base64ToUint8Array(parsedMessage.dataBase64);
+            const outputBytes = makeUint8ArrayFromBase64(parsedMessage.dataBase64);
             terminal.write(outputBytes, () => {
               sendSocketJson(socket, {
                 type: 'write_ack',
@@ -179,8 +176,8 @@
 
       async function bootBrowserTerminal() {
         const searchParams = new URLSearchParams(window.location.search);
-        const cols = parseDimensionParam(searchParams, 'cols', 100);
-        const rows = parseDimensionParam(searchParams, 'rows', 30);
+        const cols = parseDimensionParameter(searchParams, 'cols', 100);
+        const rows = parseDimensionParameter(searchParams, 'rows', 30);
         const containerElement = document.getElementById('terminal-container');
         const terminal = createConfiguredTerminal(cols, rows);
         installWindowHelpers(terminal, containerElement);

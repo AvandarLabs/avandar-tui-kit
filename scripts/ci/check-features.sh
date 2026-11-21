@@ -85,7 +85,7 @@ import os
 
 metadata = json.loads(os.environ["METADATA_JSON"])
 crates_prefix = os.path.realpath(os.environ["WORKSPACE_DIR"]).replace("\\", "/") + "/crates/"
-packages = sorted(metadata.get("packages", []), key=lambda pkg: pkg.get("name", ""))
+packages = sorted(metadata.get("packages", []), key=lambda package: package.get("name", ""))
 
 for package in packages:
     manifest = os.path.realpath(package.get("manifest_path", "")).replace("\\", "/")
@@ -94,12 +94,12 @@ for package in packages:
     name = package["name"]
     features = package.get("features") or {}
     print(f"{name}\tcheck\t-p\t{name}\t--no-default-features\t--all-targets")
-    for feat_name in sorted(features.keys()):
-        if feat_name.startswith("dep:"):
+    for feature_name in sorted(features.keys()):
+        if feature_name.startswith("dep:"):
             continue
-        if feat_name == "default" and not features.get("default"):
+        if feature_name == "default" and not features.get("default"):
             continue
-        print(f"{name}\tcheck\t-p\t{name}\t--no-default-features\t--features\t{feat_name}\t--all-targets")
+        print(f"{name}\tcheck\t-p\t{name}\t--no-default-features\t--features\t{feature_name}\t--all-targets")
     print(f"{name}\tcheck\t-p\t{name}\t--all-features\t--all-targets")
 PY
 }

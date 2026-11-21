@@ -168,7 +168,7 @@ impl TerminalSessionGuard {
         ))?;
         if writer.is_tty_available() {
             // On Windows, `EnableMouseCapture` sets console `ENABLE_MOUSE_INPUT` so ConPTY asks
-            // the outer terminal for mouse tracking (M0 row 14).
+            // the outer terminal for mouse tracking.
             crossterm::execute!(io::stdout(), crossterm::event::EnableMouseCapture)?;
             self.state
                 .is_windows_mouse_captured

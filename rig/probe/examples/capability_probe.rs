@@ -1,4 +1,4 @@
-//! Terminal capability probe binary driven by the Milestone 0 test harnesses.
+//! Terminal capability probe binary driven by the cross-terminal test harnesses.
 
 use std::process::ExitCode;
 

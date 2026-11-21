@@ -6,6 +6,11 @@ use std::path::{Path, PathBuf};
 
 const LOWERCASE_HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
 
+pub(crate) fn push_lowercase_hex_byte(output: &mut String, byte: u8) {
+    output.push(char::from(LOWERCASE_HEX_DIGITS[usize::from(byte >> 4)]));
+    output.push(char::from(LOWERCASE_HEX_DIGITS[usize::from(byte & 0x0f)]));
+}
+
 /// Escapes `input` for safe inclusion inside a double-quoted JSON string literal.
 #[must_use]
 pub fn escape_json_string(input: &str) -> String {
@@ -21,11 +26,8 @@ pub fn escape_json_string(input: &str) -> String {
             '\x0c' => escaped.push_str("\\f"),
             control_char if control_char < '\x20' => {
                 if let Ok(control_byte) = u8::try_from(control_char) {
-                    let high_nibble = usize::from(control_byte >> 4);
-                    let low_nibble = usize::from(control_byte & 0x0f);
                     escaped.push_str("\\u00");
-                    escaped.push(char::from(LOWERCASE_HEX_DIGITS[high_nibble]));
-                    escaped.push(char::from(LOWERCASE_HEX_DIGITS[low_nibble]));
+                    push_lowercase_hex_byte(&mut escaped, control_byte);
                 }
             }
             plain_char => escaped.push(plain_char),

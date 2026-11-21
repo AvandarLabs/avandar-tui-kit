@@ -8,12 +8,12 @@ import json
 from pathlib import Path
 import shlex
 
-from driver import DEFAULT_CELL_HEIGHT_PT, DEFAULT_CELL_WIDTH_PT, DEFAULT_COLS, DEFAULT_ROWS
+from driver import DEFAULT_CELL_HEIGHT_PT, DEFAULT_CELL_WIDTH_PT, DEFAULT_COLUMNS, DEFAULT_ROWS
 from driver.cli_args import DriverRuntimeError
 from driver.guest_scripts import (
-    ACTIVATE_SETTINGS_BIN,
+    ACTIVATE_SETTINGS_BINARY,
     CG_WINDOWS_SCRIPT,
-    ITERM_PREFS_UPDATER_SCRIPT,
+    ITERM_PREFERENCES_UPDATER_SCRIPT,
     PTY_RUNNER_SCRIPT,
 )
 from driver.tart_vm import GUEST_SHARED_ROOT, TartVmSession
@@ -42,7 +42,7 @@ class SessionLaunchSpec:
     tmux_mode: str | None = None
     guest_tmux_conf_path: str | None = None
     pre_banner: str | None = None
-    cols: int = DEFAULT_COLS
+    cols: int = DEFAULT_COLUMNS
     rows: int = DEFAULT_ROWS
     option_sends: int = 0
     should_allow_clipboard_access: bool = False
@@ -75,24 +75,24 @@ def backup_guest_defaults(vm: TartVmSession) -> GuestDefaultsBackup:
     """Snapshots iTerm2 plist, scroll direction, and Sequoia wallpaper-click setting."""
     backup_path = "/tmp/tuikit_iterm2_plist_backup.plist"
     vm.exec_guest(f"cp ~/Library/Preferences/com.googlecode.iterm2.plist {backup_path}")
-    swipe_proc = vm.exec_guest("defaults read -g com.apple.swipescrolldirection", should_check=False)
-    had_swipe_direction = swipe_proc.returncode == 0
+    swipe_process = vm.exec_guest("defaults read -g com.apple.swipescrolldirection", should_check=False)
+    had_swipe_direction = swipe_process.returncode == 0
     is_natural_swipe_direction = (
-        swipe_proc.stdout.strip() in ("1", "true", "TRUE", "YES") if had_swipe_direction else True
+        swipe_process.stdout.strip() in ("1", "true", "TRUE", "YES") if had_swipe_direction else True
     )
-    desktop_proc = vm.exec_guest(
+    desktop_process = vm.exec_guest(
         "defaults read com.apple.WindowManager EnableStandardClickToShowDesktop",
         should_check=False,
     )
-    had_click_show_desktop = desktop_proc.returncode == 0
+    had_click_show_desktop = desktop_process.returncode == 0
     is_click_show_desktop_enabled = (
-        desktop_proc.stdout.strip() in ("1", "true", "TRUE", "YES")
+        desktop_process.stdout.strip() in ("1", "true", "TRUE", "YES")
         if had_click_show_desktop
         else True
     )
     vm.exec_guest(
         f"defaults write com.apple.WindowManager EnableStandardClickToShowDesktop -bool false && "
-        f"{ACTIVATE_SETTINGS_BIN} -u 2>/dev/null || true",
+        f"{ACTIVATE_SETTINGS_BINARY} -u 2>/dev/null || true",
         should_check=False,
     )
     return GuestDefaultsBackup(
@@ -128,7 +128,7 @@ def restore_guest_defaults(vm: TartVmSession, backup: GuestDefaultsBackup) -> No
             swipe_restore,
             desktop_restore,
             "killall cfprefsd 2>/dev/null || true",
-            f"{ACTIVATE_SETTINGS_BIN} -u 2>/dev/null || true",
+            f"{ACTIVATE_SETTINGS_BINARY} -u 2>/dev/null || true",
         ]
     )
     vm.exec_guest(restore_command, should_check=False)
@@ -137,20 +137,22 @@ def restore_guest_defaults(vm: TartVmSession, backup: GuestDefaultsBackup) -> No
 def set_guest_natural_scrolling(vm: TartVmSession, is_enabled: bool) -> None:
     """Sets macOS global `com.apple.swipescrolldirection` and activates it immediately."""
     flag = "true" if is_enabled else "false"
-    vm.exec_guest(f"defaults write -g com.apple.swipescrolldirection -bool {flag} && {ACTIVATE_SETTINGS_BIN} -u")
+    vm.exec_guest(f"defaults write -g com.apple.swipescrolldirection -bool {flag} && {ACTIVATE_SETTINGS_BINARY} -u")
 
 
 def configure_iterm_preferences(vm: TartVmSession, spec: SessionLaunchSpec) -> None:
     """Terminates stale iTerm2 processes and writes deterministic session preferences."""
-    (vm.shared_dir / "_iterm_prefs_updater.py").write_text(ITERM_PREFS_UPDATER_SCRIPT, encoding="utf-8")
-    prefs_config = {
+    (vm.shared_dir / "_iterm_prefs_updater.py").write_text(
+        ITERM_PREFERENCES_UPDATER_SCRIPT, encoding="utf-8"
+    )
+    preferences_config = {
         "cols": spec.cols,
         "rows": spec.rows,
         "option_sends": spec.option_sends,
         "allow_clipboard": spec.should_allow_clipboard_access,
         "copy_selection": spec.should_copy_selection,
     }
-    (vm.shared_dir / "_iterm_prefs_cfg.json").write_text(json.dumps(prefs_config), encoding="utf-8")
+    (vm.shared_dir / "_iterm_prefs_cfg.json").write_text(json.dumps(preferences_config), encoding="utf-8")
     vm.exec_guest(
         "\n".join(
             [
@@ -176,12 +178,12 @@ def _build_launch_command_body(
     assert guest_socket is not None and spec.guest_tmux_conf_path is not None
     cc_flag = "-CC " if spec.tmux_mode.startswith("cc-") else ""
     quoted_runner = shlex.quote(runner_invocation)
-    quoted_conf = shlex.quote(spec.guest_tmux_conf_path)
+    quoted_config_path = shlex.quote(spec.guest_tmux_conf_path)
     return "\n".join(
         [
             "#!/bin/bash",
             "export LANG=en_US.UTF-8",
-            f"/opt/homebrew/bin/tmux -S {shlex.quote(guest_socket)} -f {quoted_conf} {cc_flag}new-session -x {spec.cols} -y {spec.rows} {quoted_runner}",
+            f"/opt/homebrew/bin/tmux -S {shlex.quote(guest_socket)} -f {quoted_config_path} {cc_flag}new-session -x {spec.cols} -y {spec.rows} {quoted_runner}",
             f"/opt/homebrew/bin/tmux -S {shlex.quote(guest_socket)} kill-server 2>/dev/null || true",
             "",
         ]
@@ -290,25 +292,26 @@ def query_frontmost_app_name(vm: TartVmSession) -> str:
 def _resolve_live_pane_grid(
     vm: TartVmSession, session: GuestItermSession, records: Sequence[dict[str, object]]
 ) -> tuple[int, int]:
-    cols, rows = DEFAULT_COLS, DEFAULT_ROWS
+    columns, rows = DEFAULT_COLUMNS, DEFAULT_ROWS
     if session.host_meta_path.is_file():
-        meta = json.loads(session.host_meta_path.read_text(encoding="utf-8"))
-        cols, rows = int(meta.get("cols", DEFAULT_COLS)), int(meta.get("rows", DEFAULT_ROWS))
+        session_metadata = json.loads(session.host_meta_path.read_text(encoding="utf-8"))
+        columns = int(session_metadata.get("cols", DEFAULT_COLUMNS))
+        rows = int(session_metadata.get("rows", DEFAULT_ROWS))
     for record in records:
         if record.get("kind") == "event" and record.get("event_type") == "resize":
-            cols = int(record.get("columns", cols))  # type: ignore[arg-type]
+            columns = int(record.get("columns", columns))  # type: ignore[arg-type]
             rows = int(record.get("rows", rows))  # type: ignore[arg-type]
     if session.guest_tmux_socket:
-        quoted_sock = shlex.quote(session.guest_tmux_socket)
+        quoted_socket_path = shlex.quote(session.guest_tmux_socket)
         pane_output = vm.exec_guest(
-            f"/opt/homebrew/bin/tmux -S {quoted_sock} display-message -p '#{{pane_width}}:#{{pane_height}}'",
+            f"/opt/homebrew/bin/tmux -S {quoted_socket_path} display-message -p '#{{pane_width}}:#{{pane_height}}'",
             timeout_seconds=5.0,
             should_check=False,
         ).stdout.strip()
         if ":" in pane_output and all(part.isdigit() and int(part) > 0 for part in pane_output.split(":", 1)):
             pane_width, pane_height = pane_output.split(":", 1)
-            cols, rows = int(pane_width), int(pane_height)
-    return cols, rows
+            columns, rows = int(pane_width), int(pane_height)
+    return columns, rows
 
 
 def resolve_session_geometry(
@@ -327,7 +330,7 @@ def resolve_session_geometry(
     )
     bounds = active_window["kCGWindowBounds"]  # type: ignore[index]
     records = read_complete_jsonl_records(session.host_log_path)
-    cols, inner_rows = _resolve_live_pane_grid(vm, session, records)
+    columns, inner_rows = _resolve_live_pane_grid(vm, session, records)
     outer_rows = inner_rows + (1 if session.tmux_mode in ("stock", "full") else 0)
     cell_width, cell_height = DEFAULT_CELL_WIDTH_PT, DEFAULT_CELL_HEIGHT_PT
     for record in records:
@@ -337,8 +340,8 @@ def resolve_session_geometry(
     window_x, window_y = float(bounds["X"]), float(bounds["Y"])  # type: ignore[index]
     window_width, window_height = float(bounds["Width"]), float(bounds["Height"])  # type: ignore[index]
     cell_width, cell_height = normalize_cell_size_pt(
-        cell_width, cell_height, window_width, window_height, cols, outer_rows, 2.0
+        cell_width, cell_height, window_width, window_height, columns, outer_rows, 2.0
     )
     return WindowGeometry(
-        window_x, window_y, window_width, window_height, cols, outer_rows, cell_width, cell_height, 2.0
+        window_x, window_y, window_width, window_height, columns, outer_rows, cell_width, cell_height, 2.0
     )

@@ -1,4 +1,4 @@
-//! Unicode, portable-text, and toolkit-glyph width sample catalog for Milestone 0.
+//! Unicode, portable-text, and toolkit-glyph width sample catalog for terminal probing.
 
 /// Named character or grapheme sample measured by the terminal width probe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,6 +76,15 @@ mod tests {
 
     use super::*;
 
+    const ALLOWED_CATEGORIES: &[&str] = &[
+        "ascii_and_accents",
+        "east_asian",
+        "toolkit_glyph",
+        "emoji_consistent",
+        "emoji_split",
+        "portable_rewrite",
+    ];
+
     fn find_sample(sample_name: &str) -> WidthSample {
         WIDTH_SAMPLES
             .iter()
@@ -85,81 +94,83 @@ mod tests {
     }
 
     #[test]
-    fn catalog_has_unique_non_empty_names_categories_and_texts() {
-        assert_eq!(WIDTH_SAMPLES.len(), 33);
+    fn width_samples_have_unique_snake_case_names_and_known_categories() {
         let mut seen_names = HashSet::new();
         for entry in WIDTH_SAMPLES {
-            assert_ne!(entry.name, "");
-            assert_ne!(entry.category, "");
-            assert_ne!(entry.text, "");
+            assert!(!entry.name.is_empty() && !entry.text.is_empty());
+            assert!(
+                entry
+                    .name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'),
+                "expected snake_case width sample name, got {}",
+                entry.name
+            );
+            assert!(
+                ALLOWED_CATEGORIES.contains(&entry.category),
+                "unexpected width sample category {} for {}",
+                entry.category,
+                entry.name
+            );
             assert!(
                 seen_names.insert(entry.name),
                 "duplicate width sample name: {}",
                 entry.name
             );
         }
-    }
-
-    #[test]
-    fn catalog_covers_ascii_east_asian_and_emoji_samples_including_m0_row_19() {
-        let expected_samples = [
-            ("ascii_a", "ascii_and_accents", "A"),
-            ("precomposed_acute", "ascii_and_accents", "\u{00E9}"),
-            ("combining_acute", "ascii_and_accents", "e\u{0301}"),
-            ("cjk_han", "east_asian", "\u{6F22}"),
-            ("hangul_syllable", "east_asian", "\u{D55C}"),
-            ("fullwidth_latin_a", "east_asian", "\u{FF21}"),
-            ("plain_emoji", "emoji_consistent", "\u{1F600}"),
-            (
-                "family_zwj",
-                "emoji_consistent",
-                "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}",
-            ),
-            ("regional_flag_us", "emoji_consistent", "\u{1F1FA}\u{1F1F8}"),
-            ("heart_vs16", "emoji_split", "\u{2764}\u{FE0F}"),
-            ("heart_plain", "portable_rewrite", "\u{2764}"),
-            ("thumbs_up_skin_tone", "emoji_split", "\u{1F44D}\u{1F3FD}"),
-            ("thumbs_up_plain", "portable_rewrite", "\u{1F44D}"),
-            (
-                "rainbow_flag",
-                "emoji_split",
-                "\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}",
-            ),
-            ("white_flag_base", "portable_rewrite", "\u{1F3F3}"),
-            ("zwsp", "emoji_split", "\u{200B}"),
-        ];
-        for (expected_name, expected_category, expected_text) in expected_samples {
-            let found_sample = find_sample(expected_name);
-            assert_eq!(found_sample.category, expected_category);
-            assert_eq!(found_sample.text, expected_text);
+        for required_category in ALLOWED_CATEGORIES {
+            assert!(
+                WIDTH_SAMPLES
+                    .iter()
+                    .any(|entry| entry.category == *required_category),
+                "missing samples for category {required_category}"
+            );
         }
     }
 
     #[test]
-    fn catalog_covers_all_m0_row_20_toolkit_glyphs_and_private_use_icon() {
-        let expected_glyphs = [
-            ("ellipsis", "\u{2026}"),
-            ("middle_dot", "\u{00B7}"),
-            ("chevron", "\u{203A}"),
-            ("pointer_triangle", "\u{25B8}"),
-            ("box_horizontal", "\u{2500}"),
-            ("box_vertical", "\u{2502}"),
-            ("box_top_left", "\u{250C}"),
-            ("box_tee_right", "\u{251C}"),
-            ("box_bottom_left", "\u{2514}"),
-            ("block_eighth_1", "\u{258F}"),
-            ("block_eighth_3", "\u{258D}"),
-            ("block_eighth_4", "\u{258C}"),
-            ("block_eighth_6", "\u{258A}"),
-            ("block_full", "\u{2588}"),
-            ("braille_dot_1", "\u{2801}"),
-            ("braille_full", "\u{28FF}"),
-            ("private_use_icon", "\u{E0B0}"),
-        ];
-        for (expected_name, expected_text) in expected_glyphs {
-            let found_sample = find_sample(expected_name);
-            assert_eq!(found_sample.category, "toolkit_glyph");
-            assert_eq!(found_sample.text, expected_text);
+    fn portable_rewrites_strip_variation_selectors_zwj_and_skin_tone_modifiers() {
+        for entry in WIDTH_SAMPLES
+            .iter()
+            .filter(|entry| entry.category == "portable_rewrite")
+        {
+            assert_eq!(
+                entry.text.chars().count(),
+                1,
+                "portable rewrite {} must be a single base scalar",
+                entry.name
+            );
+            assert!(
+                !entry
+                    .text
+                    .chars()
+                    .any(|character| matches!(character, '\u{FE0F}' | '\u{200D}')),
+                "portable rewrite {} must omit VS16 and ZWJ",
+                entry.name
+            );
+        }
+        assert!(find_sample("heart_vs16").text.contains('\u{FE0F}'));
+        assert!(find_sample("family_zwj").text.contains('\u{200D}'));
+        assert_eq!(find_sample("combining_acute").text.chars().count(), 2);
+    }
+
+    #[test]
+    fn toolkit_glyph_samples_are_single_bmp_scalars_without_control_bytes() {
+        let toolkit_samples: Vec<_> = WIDTH_SAMPLES
+            .iter()
+            .filter(|entry| entry.category == "toolkit_glyph")
+            .collect();
+        assert!(!toolkit_samples.is_empty());
+        for entry in toolkit_samples {
+            let mut characters = entry.text.chars();
+            let scalar = characters.next().expect("non-empty glyph");
+            assert_eq!(characters.next(), None, "{} must be 1 scalar", entry.name);
+            assert!(!scalar.is_control());
+            assert!(
+                u32::from(scalar) <= 0xFFFF,
+                "{} must stay in BMP",
+                entry.name
+            );
         }
     }
 

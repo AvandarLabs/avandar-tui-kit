@@ -22,9 +22,13 @@ from driver import DEFAULT_VM_NAME
 from driver.cli_args import DriverRuntimeError
 from driver.wait_helpers import poll_until
 
+# Pattern matching Tart's `vnc://:<password>@<host>:<port>` loopback VNC line.
 VNC_URL_PATTERN = re.compile(r"vnc://:([^@\s]+)@([^:\s]+):(\d+)")
+
+# Guest mount point for the `tuikit` VirtioFS shared folder.
 GUEST_SHARED_ROOT = "/Volumes/My Shared Files/tuikit"
 
+# Recovery installation hints for required host tools on macOS.
 TOOL_INSTALL_HINTS: dict[str, str] = {
     "tart": "Install Tart via 'brew install cirruslabs/cli/tart' and ensure 'tart' is in PATH.",
     "vncdo": "Install vncdotool via 'uv tool install vncdotool' and ensure 'vncdo' is in PATH.",
@@ -194,7 +198,7 @@ class TartVmSession:
         self.vm_name = vm_name
         self.env = dict(os.environ if env is None else env)
         self.shared_dir = Path(os.path.realpath(tempfile.mkdtemp(prefix="tuikit-iterm2-")))
-        self._proc: subprocess.Popen[str] | None = None
+        self._process: subprocess.Popen[str] | None = None
         self._endpoint: VncEndpoint | None = None
         self._boot_lines: list[str] = []
         self._is_stopped = False
@@ -239,25 +243,25 @@ class TartVmSession:
                 self._endpoint = parsed
 
     def _reap_tart_process(self, should_terminate_immediately: bool = False) -> None:
-        proc = self._proc
-        self._proc = None
-        if proc is None:
+        process = self._process
+        self._process = None
+        if process is None:
             return
         if not should_terminate_immediately:
             try:
-                proc.wait(timeout=5)
+                process.wait(timeout=5)
                 return
             except subprocess.TimeoutExpired:
                 pass
         try:
-            proc.terminate()
-            proc.wait(timeout=2)
+            process.terminate()
+            process.wait(timeout=2)
             return
         except (subprocess.TimeoutExpired, OSError):
             pass
         try:
-            proc.kill()
-            proc.wait(timeout=5)
+            process.kill()
+            process.wait(timeout=5)
         except (subprocess.TimeoutExpired, OSError):
             pass
 
@@ -270,14 +274,16 @@ class TartVmSession:
             "--vnc-experimental", f"--dir=tuikit:{self.shared_dir}", self.vm_name,
         ]
         try:
-            self._proc = subprocess.Popen(
+            self._process = subprocess.Popen(
                 command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=self.env
             )
         except OSError as os_error:
             raise DriverRuntimeError(
                 f"Failed to start 'tart run': {os_error}", "Verify Tart is installed and executable."
             ) from os_error
-        threading.Thread(target=self._consume_tart_stdout, args=(self._proc.stdout,), daemon=True).start()
+        threading.Thread(
+            target=self._consume_tart_stdout, args=(self._process.stdout,), daemon=True
+        ).start()
 
     def boot(self, timeout_seconds: float) -> VncEndpoint:
         """Cold-boots `vm_name` headless and waits for both RFB and VirtioFS/GUI readiness."""
@@ -306,10 +312,10 @@ class TartVmSession:
         )
 
         def _is_ready() -> VncEndpoint | None:
-            if self._proc is not None and self._proc.poll() is not None:
+            if self._process is not None and self._process.poll() is not None:
                 tail = " | ".join(self._boot_lines[-5:])
                 raise DriverRuntimeError(
-                    f"'tart run' exited prematurely (code {self._proc.returncode}): {tail}",
+                    f"'tart run' exited prematurely (code {self._process.returncode}): {tail}",
                     "Ensure macOS Virtualization entitlements are available and at most 2 macOS VMs run.",
                 )
             if self._endpoint is None or not check_rfb_port_ready(self._endpoint):
@@ -356,8 +362,8 @@ class TartVmSession:
 
     def write_guest_clipboard(self, content: str) -> None:
         """Writes UTF-8 `content` into the macOS guest pasteboard via a shared file."""
-        clip_file = self.shared_dir / "_guest_clipboard_payload.txt"
-        clip_file.write_text(content, encoding="utf-8")
+        clipboard_file = self.shared_dir / "_guest_clipboard_payload.txt"
+        clipboard_file.write_text(content, encoding="utf-8")
         self.exec_guest(f'LANG=en_US.UTF-8 pbcopy < "{GUEST_SHARED_ROOT}/_guest_clipboard_payload.txt"', 10.0)
 
     def _stop_active_vm(self) -> None:
@@ -385,7 +391,7 @@ class TartVmSession:
         atexit.unregister(self.stop)
         self._restore_signal_handlers()
         try:
-            if self._has_started_vm or self._proc is not None:
+            if self._has_started_vm or self._process is not None:
                 self._stop_active_vm()
         finally:
             shutil.rmtree(self.shared_dir, ignore_errors=True)

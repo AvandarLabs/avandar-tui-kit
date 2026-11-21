@@ -1,5 +1,6 @@
 /**
- * CLI entrypoint for Layer 3 (`rig/xterm/run.sh`) and reusable runner for Layer 4 (`run-tmux.sh`).
+ * CLI entrypoint and shared runner building Cargo workspace examples, executing
+ * headless xterm.js scenarios, and emitting structured JSON reports on stdout.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -17,7 +18,8 @@ const REPOSITORY_ROOT = path.resolve(MODULE_DIRECTORY, '..', '..', '..');
 const VALID_PROGRAM_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 /**
- * Builds semantic ANSI color tokens for `stream`, honoring `NO_COLOR`, `TERM=dumb`, and TTY state.
+ * Builds semantic ANSI escape tokens for `stream`, returning empty strings when
+ * `NO_COLOR`, `TERM=dumb`, or a non-TTY stream is detected.
  */
 export function createCliTheme(stream, env = process.env) {
   const isPlain = !stream?.isTTY || Boolean(env.NO_COLOR) || env.TERM === 'dumb';
@@ -87,7 +89,8 @@ function createModeHelpMetadata(theme, isTmux) {
 }
 
 /**
- * Builds the structured `--help` text for `rig/xterm/run.sh` or `rig/xterm/run-tmux.sh`.
+ * Formats structured `--help` text for the direct xterm.js or tmux harness CLI,
+ * returning the multi-section help string written to stdout or usage errors.
  */
 export function buildHarnessHelpText(theme, { isTmux = false } = {}) {
   const modeHelp = createModeHelpMetadata(theme, isTmux);
@@ -129,12 +132,12 @@ function logProgress(theme, messageText) {
 }
 
 function logSuccess(theme, messageText) {
-  process.stderr.write(`${theme.success}✅ ${messageText}${theme.reset}\n`);
+  process.stderr.write(`${theme.success}\u2705 ${messageText}${theme.reset}\n`);
 }
 
 function writeErrorWithHint(theme, scriptName, errorMessage, recoveryHint) {
-  process.stderr.write(`${theme.error}❌ ${scriptName}: ${errorMessage}${theme.reset}\n`);
-  process.stderr.write(`  ${theme.warn}⚠️ ${recoveryHint}${theme.reset}\n`);
+  process.stderr.write(`${theme.error}\u274c ${scriptName}: ${errorMessage}${theme.reset}\n`);
+  process.stderr.write(`  ${theme.warn}\u26a0\ufe0f ${recoveryHint}${theme.reset}\n`);
 }
 
 function validateProgramAndExtraArgs(parsedArgs) {
@@ -176,16 +179,19 @@ function invokeCargoExampleBuild(programName, stderrTheme) {
   }
 }
 
-function resolveCompiledProgramBinary(programName, stderrTheme) {
+function ensureCompiledProgramBinary(programName, stderrTheme) {
   const overrideBinary = process.env.RIG_XTERM_PROGRAM_BIN ?? '';
   if (overrideBinary.length > 0) {
-    const resolvedOverride = path.resolve(overrideBinary);
-    if (!fs.existsSync(resolvedOverride)) {
-      const missingError = new Error(`RIG_XTERM_PROGRAM_BIN does not exist at '${resolvedOverride}'.`);
-      missingError.recoveryHint = 'Unset RIG_XTERM_PROGRAM_BIN or point it to an executable binary.';
+    const overrideBinaryPath = path.resolve(overrideBinary);
+    if (!fs.existsSync(overrideBinaryPath)) {
+      const missingError = new Error(
+        `RIG_XTERM_PROGRAM_BIN does not exist at '${overrideBinaryPath}'.`,
+      );
+      missingError.recoveryHint =
+        'Unset RIG_XTERM_PROGRAM_BIN or point it to an executable binary.';
       throw missingError;
     }
-    return resolvedOverride;
+    return overrideBinaryPath;
   }
   invokeCargoExampleBuild(programName, stderrTheme);
   const targetDirectory = process.env.CARGO_TARGET_DIR
@@ -249,7 +255,8 @@ async function executeAndArchiveScenario({
 }
 
 /**
- * Parses CLI flags, builds `<program>`, executes the scenario, and writes JSON to `stdout`.
+ * Parses CLI flags, builds `<program>`, executes the requested scenario, writes
+ * the JSON report to `stdout`, and returns the numeric CLI exit status.
  */
 export async function runHarnessCliMain({
   argv = process.argv.slice(2),
@@ -267,7 +274,7 @@ export async function runHarnessCliMain({
       return 0;
     }
     validateProgramAndExtraArgs(parsedArgs);
-    const programPath = resolveCompiledProgramBinary(parsedArgs.program, stderrTheme);
+    const programPath = ensureCompiledProgramBinary(parsedArgs.program, stderrTheme);
     const layerNumber = parsedArgs.tmuxConfig === null ? 3 : 4;
     const modeSuffix = parsedArgs.tmuxConfig ? ` [tmux=${parsedArgs.tmuxConfig}]` : '';
     logProgress(
@@ -291,20 +298,31 @@ export async function runHarnessCliMain({
   }
 }
 
-function resolveCanonicalFilePath(targetPath) {
+function canonicalizeExistingPath(targetPath) {
   if (!targetPath) {
     return '';
   }
-  const resolvedPath = path.resolve(targetPath);
-  const resolveRealPath = fs.realpathSync.native ?? fs.realpathSync;
+  const absolutePath = path.resolve(targetPath);
+  const readRealPath = fs.realpathSync.native ?? fs.realpathSync;
   try {
-    return resolveRealPath(resolvedPath);
+    return readRealPath(absolutePath);
   } catch {
-    return resolvedPath;
+    return absolutePath;
   }
 }
 
-if (resolveCanonicalFilePath(process.argv[1]) === resolveCanonicalFilePath(MODULE_FILE_PATH)) {
+/**
+ * Checks whether Node was invoked directly on `moduleFilePath` (following
+ * symlinks) rather than importing the module from a test or peer script.
+ */
+export function isDirectCliExecution(moduleFilePath, entryPath = process.argv[1]) {
+  return (
+    Boolean(entryPath) &&
+    canonicalizeExistingPath(entryPath) === canonicalizeExistingPath(moduleFilePath)
+  );
+}
+
+if (isDirectCliExecution(MODULE_FILE_PATH)) {
   const exitStatus = await runHarnessCliMain();
   process.exit(exitStatus);
 }

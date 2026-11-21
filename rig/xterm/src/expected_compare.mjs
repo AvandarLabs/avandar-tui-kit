@@ -1,22 +1,24 @@
 /**
- * Baseline comparator and CLI (`expected_compare.mjs`) verifying live probe outputs against
- * `rig/expected/<config>.json` across Layers 3, 4, 5, 6, and 7.
+ * Baseline comparator and CLI verifying live capability probe outputs against
+ * committed JSON capability baselines with human-readable dot-path diffs.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { CliUsageError } from './args.mjs';
+import { CliUsageError, hasHelpFlagBeforeDoubleDash } from './args.mjs';
 import { normalizeProbeReport } from './expected_normalize.mjs';
-import { createCliTheme } from './harness.mjs';
+import { createCliTheme, isDirectCliExecution } from './harness.mjs';
 
 export { normalizeProbeReport } from './expected_normalize.mjs';
 
 const MODULE_FILE_PATH = fileURLToPath(import.meta.url);
 
 function isPlainObject(candidateValue) {
-  return candidateValue !== null && typeof candidateValue === 'object' && !Array.isArray(candidateValue);
+  return (
+    candidateValue !== null && typeof candidateValue === 'object' && !Array.isArray(candidateValue)
+  );
 }
 
 function appendValueDiff(diffs, pathLabel, expectedValue, actualValue) {
@@ -34,38 +36,42 @@ function collectStructuralDiffs(expectedValue, actualValue, currentPath, diffs) 
       appendValueDiff(diffs, `${currentPath}.length`, expectedValue.length, actualValue.length);
       return;
     }
-    for (let itemIndex = 0; itemIndex < expectedValue.length; itemIndex += 1) {
+    expectedValue.forEach((expectedItem, itemIndex) => {
       collectStructuralDiffs(
-        expectedValue[itemIndex],
+        expectedItem,
         actualValue[itemIndex],
         `${currentPath}[${itemIndex}]`,
         diffs,
       );
-    }
+    });
     return;
   }
   if (isPlainObject(expectedValue) && isPlainObject(actualValue)) {
     const mergedKeys = [
       ...new Set([...Object.keys(expectedValue), ...Object.keys(actualValue)]),
     ].sort();
-    for (const keyName of mergedKeys) {
+    mergedKeys.forEach((keyName) => {
       const childPath = currentPath.length > 0 ? `${currentPath}.${keyName}` : keyName;
       if (!Object.hasOwn(expectedValue, keyName)) {
-        diffs.push(`${childPath}: unexpected key with value ${JSON.stringify(actualValue[keyName])}`);
+        diffs.push(
+          `${childPath}: unexpected key with value ${JSON.stringify(actualValue[keyName])}`,
+        );
       } else if (!Object.hasOwn(actualValue, keyName)) {
-        diffs.push(`${childPath}: missing expected key (${JSON.stringify(expectedValue[keyName])})`);
+        diffs.push(
+          `${childPath}: missing expected key (${JSON.stringify(expectedValue[keyName])})`,
+        );
       } else {
         collectStructuralDiffs(expectedValue[keyName], actualValue[keyName], childPath, diffs);
       }
-    }
+    });
     return;
   }
   appendValueDiff(diffs, currentPath || '<root>', expectedValue, actualValue);
 }
 
 /**
- * Normalizes `liveReport` and `expectedBaseline` and returns structural parity results with
- * human-readable dot-path `diffs`.
+ * Normalizes `liveReport` and `expectedBaseline` and returns `{ isMatch, diffs,
+ * normalizedActual, normalizedExpected }` for baseline parity checks.
  */
 export function compareReportAgainstExpected(liveReport, expectedBaseline) {
   const normalizedActual = normalizeProbeReport(liveReport);
@@ -81,7 +87,8 @@ export function compareReportAgainstExpected(liveReport, expectedBaseline) {
 }
 
 /**
- * Builds `--help` output for `expected_compare.mjs` following `cli-command-conventions`.
+ * Formats the structured `--help` text for the baseline comparison CLI,
+ * returning the multi-section usage string written to stdout or stderr.
  */
 export function buildExpectedCompareHelpText(theme) {
   return [
@@ -112,28 +119,16 @@ export function buildExpectedCompareHelpText(theme) {
   ].join('\n');
 }
 
-function hasHelpFlagBeforeDoubleDash(argv) {
-  for (const token of argv) {
-    if (token === '--') {
-      return false;
-    }
-    if (token === '-h' || token === '--help') {
-      return true;
-    }
-  }
-  return false;
-}
-
-function consumeNormalizeOption(argv, argumentIndex, token) {
+function consumeNormalizeOption(preDashArgs, argumentIndex, token) {
   if (token === '--normalize') {
-    const valueToken = argv[argumentIndex + 1] ?? '';
+    const valueToken = preDashArgs[argumentIndex + 1] ?? '';
     if (valueToken.length === 0 || (valueToken.startsWith('-') && valueToken !== '-')) {
       throw new CliUsageError(
         "Option '--normalize' requires an <input> file path or '-'.",
         'Usage: node rig/xterm/src/expected_compare.mjs --normalize <input-report-or-->',
       );
     }
-    return { targetPath: valueToken, nextIndex: argumentIndex + 1 };
+    return { targetPath: valueToken, shouldSkipNext: true };
   }
   const inlinePath = token.slice('--normalize='.length);
   if (inlinePath.length === 0) {
@@ -142,26 +137,32 @@ function consumeNormalizeOption(argv, argumentIndex, token) {
       'Usage: node rig/xterm/src/expected_compare.mjs --normalize <input-report-or-->',
     );
   }
-  return { targetPath: inlinePath, nextIndex: argumentIndex };
+  return { targetPath: inlinePath, shouldSkipNext: false };
 }
 
 function collectCompareTokens(argv) {
-  const positionalArguments = [];
-  let normalizeTarget = null;
-  for (let argumentIndex = 0; argumentIndex < argv.length; argumentIndex += 1) {
-    const token = argv[argumentIndex];
-    if (token === '--') {
-      positionalArguments.push(...argv.slice(argumentIndex + 1));
-      break;
+  const doubleDashIndex = argv.indexOf('--');
+  const preDashArgs = doubleDashIndex === -1 ? argv : argv.slice(0, doubleDashIndex);
+  const postDashArgs = doubleDashIndex === -1 ? [] : argv.slice(doubleDashIndex + 1);
+  const initialState = {
+    positionalArguments: [],
+    normalizeTarget: null,
+    shouldSkipNext: false,
+  };
+  const reduced = preDashArgs.reduce((state, token, argumentIndex) => {
+    if (state.shouldSkipNext) {
+      return { ...state, shouldSkipNext: false };
     }
     if (token === '--normalize' || token.startsWith('--normalize=')) {
-      if (normalizeTarget !== null) {
+      if (state.normalizeTarget !== null) {
         throw new CliUsageError("Duplicate '--normalize' option.", "Pass '--normalize' at most once.");
       }
-      const consumed = consumeNormalizeOption(argv, argumentIndex, token);
-      normalizeTarget = consumed.targetPath;
-      argumentIndex = consumed.nextIndex;
-      continue;
+      const consumed = consumeNormalizeOption(preDashArgs, argumentIndex, token);
+      return {
+        ...state,
+        normalizeTarget: consumed.targetPath,
+        shouldSkipNext: consumed.shouldSkipNext,
+      };
     }
     if (token !== '-' && token.startsWith('-')) {
       throw new CliUsageError(
@@ -169,13 +170,20 @@ function collectCompareTokens(argv) {
         "Run with '--help' to see valid options, or place '--' before file paths starting with '-'.",
       );
     }
-    positionalArguments.push(token);
-  }
-  return { positionalArguments, normalizeTarget };
+    return {
+      ...state,
+      positionalArguments: [...state.positionalArguments, token],
+    };
+  }, initialState);
+  return {
+    positionalArguments: [...reduced.positionalArguments, ...postDashArgs],
+    normalizeTarget: reduced.normalizeTarget,
+  };
 }
 
 /**
- * Parses CLI tokens for `expected_compare.mjs`, throwing `CliUsageError` on invalid usage.
+ * Parses CLI tokens for the baseline comparator, returning `{ isHelp,
+ * isNormalizeOnly, actualPath, expectedPath }` or throwing `CliUsageError`.
  */
 export function parseExpectedCompareArgs(argv) {
   if (hasHelpFlagBeforeDoubleDash(argv)) {
@@ -189,7 +197,12 @@ export function parseExpectedCompareArgs(argv) {
         'Usage: node rig/xterm/src/expected_compare.mjs --normalize <input-report-or-->',
       );
     }
-    return { isHelp: false, isNormalizeOnly: true, actualPath: normalizeTarget, expectedPath: null };
+    return {
+      isHelp: false,
+      isNormalizeOnly: true,
+      actualPath: normalizeTarget,
+      expectedPath: null,
+    };
   }
   if (positionalArguments.length !== 2) {
     throw new CliUsageError(
@@ -234,9 +247,9 @@ function reportComparisonOutcome(comparison, expectedPath, stderr, stderrTheme) 
     );
     return 0;
   }
-  for (const diffLine of comparison.diffs) {
+  comparison.diffs.forEach((diffLine) => {
     stderr.write(`  ${stderrTheme.error}-${stderrTheme.reset} ${diffLine}\n`);
-  }
+  });
   writeCliFailure(
     stderr,
     stderrTheme,
@@ -247,7 +260,8 @@ function reportComparisonOutcome(comparison, expectedPath, stderr, stderrTheme) 
 }
 
 /**
- * Executes the `expected_compare.mjs` CLI and returns the exit status (`0`, `1`, or `2`).
+ * Executes the baseline comparison or `--normalize` CLI workflow against I/O
+ * streams and returns the numeric exit status (`0`, `1`, or `2`).
  */
 export function runExpectedCompareCli({
   argv = process.argv.slice(2),
@@ -286,18 +300,6 @@ export function runExpectedCompareCli({
   }
 }
 
-function resolveRealFilePath(targetPath) {
-  if (!targetPath) {
-    return '';
-  }
-  const resolved = path.resolve(targetPath);
-  try {
-    return (fs.realpathSync.native ?? fs.realpathSync)(resolved);
-  } catch {
-    return resolved;
-  }
-}
-
-if (resolveRealFilePath(process.argv[1]) === resolveRealFilePath(MODULE_FILE_PATH)) {
+if (isDirectCliExecution(MODULE_FILE_PATH)) {
   process.exit(runExpectedCompareCli());
 }

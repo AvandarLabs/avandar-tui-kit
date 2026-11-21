@@ -312,7 +312,7 @@ esac
     }
 
     #[test]
-    fn mock_orca_runs_default_batch_probe_and_cleans_up_scratch_dir() {
+    fn default_batch_probe_emits_jsonl_stdout_with_clean_scratch_directory() {
         let fixture = MockOrcaFixture::create("mock-default");
         let output = fixture.run(&["capability_probe"], &[]);
         assert_run_succeeded(&output);

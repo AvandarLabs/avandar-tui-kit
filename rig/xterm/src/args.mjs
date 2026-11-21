@@ -1,11 +1,18 @@
 /**
- * Pure CLI argument parser for `rig/xterm/run.sh` and `rig/xterm/run-tmux.sh`.
+ * Pure CLI argument parser for the headless xterm.js and tmux harness runners,
+ * validating configuration profiles, scenarios, timeouts, and `--` passthrough.
  */
 
-/** Allowed private tmux configuration names for Layer 4 runs. */
+/**
+ * Allowed private tmux configuration names accepted by the tmux harness CLI
+ * (`'stock'` empty baseline or `'full'` capability-enabled profile).
+ */
 export const VALID_TMUX_CONFIGS = Object.freeze(['stock', 'full']);
 
-/** Allowed harness scenario names for Layer 3 and Layer 4 runs. */
+/**
+ * Allowed scenario names accepted by the xterm.js and tmux harness CLIs to
+ * select which capability checks execute and appear in the JSON stdout report.
+ */
 export const VALID_SCENARIOS = Object.freeze([
   'all',
   'batch',
@@ -15,13 +22,17 @@ export const VALID_SCENARIOS = Object.freeze([
   'passthrough',
 ]);
 
-/** Default bounded scenario timeout in milliseconds. */
+/**
+ * Default bounded per-condition timeout in milliseconds returned by
+ * `parseHarnessArgs` when `--timeout-ms` is omitted on the command line.
+ */
 export const DEFAULT_TIMEOUT_MS = 20000;
 
 const POSITIVE_INTEGER_PATTERN = /^[1-9][0-9]*$/;
 
 /**
- * Typed CLI usage error carrying an actionable recovery hint for stderr diagnostics.
+ * Typed CLI usage error carrying an actionable `recoveryHint` string so CLI
+ * entrypoints can format usage diagnostics and exit with code `2`.
  */
 export class CliUsageError extends Error {
   constructor(message, recoveryHint) {
@@ -31,16 +42,15 @@ export class CliUsageError extends Error {
   }
 }
 
-function hasHelpFlagBeforeDoubleDash(argv) {
-  for (const token of argv) {
-    if (token === '--') {
-      return false;
-    }
-    if (token === '-h' || token === '--help') {
-      return true;
-    }
-  }
-  return false;
+/**
+ * Checks whether `-h` or `--help` appears before `--` in `argv`, returning a
+ * boolean so CLI entrypoints can short-circuit validation and print help text.
+ */
+export function hasHelpFlagBeforeDoubleDash(argv) {
+  const firstMatch = argv.find(
+    (token) => token === '--' || token === '-h' || token === '--help',
+  );
+  return firstMatch === '-h' || firstMatch === '--help';
 }
 
 function parsePositiveTimeoutMs(rawTimeoutValue) {
@@ -54,30 +64,36 @@ function parsePositiveTimeoutMs(rawTimeoutValue) {
 }
 
 function splitTokensAndOptions(argv) {
-  const positionalArgs = [];
-  const extraArgs = [];
-  let timeoutMs = DEFAULT_TIMEOUT_MS;
-
-  for (let argIndex = 0; argIndex < argv.length; argIndex += 1) {
-    const token = argv[argIndex];
-    if (token === '--') {
-      extraArgs.push(...argv.slice(argIndex + 1));
-      break;
+  const doubleDashIndex = argv.indexOf('--');
+  const preDashArgs = doubleDashIndex === -1 ? argv : argv.slice(0, doubleDashIndex);
+  const extraArgs = doubleDashIndex === -1 ? [] : argv.slice(doubleDashIndex + 1);
+  const initialState = {
+    positionalArgs: [],
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+    shouldSkipNext: false,
+  };
+  const finalState = preDashArgs.reduce((state, token, argIndex) => {
+    if (state.shouldSkipNext) {
+      return { ...state, shouldSkipNext: false };
     }
     if (token === '--timeout-ms') {
-      if (argIndex + 1 >= argv.length || argv[argIndex + 1] === '--') {
+      if (argIndex + 1 >= preDashArgs.length) {
         throw new CliUsageError(
           "Option '--timeout-ms' is missing its millisecond value.",
           'Pass a positive integer after --timeout-ms, for example: --timeout-ms 20000',
         );
       }
-      timeoutMs = parsePositiveTimeoutMs(argv[argIndex + 1]);
-      argIndex += 1;
-      continue;
+      return {
+        ...state,
+        timeoutMs: parsePositiveTimeoutMs(preDashArgs[argIndex + 1]),
+        shouldSkipNext: true,
+      };
     }
     if (token.startsWith('--timeout-ms=')) {
-      timeoutMs = parsePositiveTimeoutMs(token.slice('--timeout-ms='.length));
-      continue;
+      return {
+        ...state,
+        timeoutMs: parsePositiveTimeoutMs(token.slice('--timeout-ms='.length)),
+      };
     }
     if (token.startsWith('-')) {
       throw new CliUsageError(
@@ -85,10 +101,14 @@ function splitTokensAndOptions(argv) {
         "Run with '--help' to see harness options, or place '--' before flags meant for <program>.",
       );
     }
-    positionalArgs.push(token);
-  }
+    return { ...state, positionalArgs: [...state.positionalArgs, token] };
+  }, initialState);
 
-  return { positionalArgs, extraArgs, timeoutMs };
+  return {
+    positionalArgs: finalState.positionalArgs,
+    extraArgs,
+    timeoutMs: finalState.timeoutMs,
+  };
 }
 
 function consumeTmuxConfigArg(positionalArgs, shouldRequireTmuxConfig) {
@@ -139,8 +159,10 @@ function validatePositionals(positionalArgs, shouldRequireTmuxConfig) {
 }
 
 /**
- * Parses CLI tokens for `rig/xterm/run.sh` (`requireTmuxConfig: false`) and
- * `rig/xterm/run-tmux.sh` (`requireTmuxConfig: true`).
+ * Parses CLI tokens for the direct xterm.js runner (`requireTmuxConfig: false`)
+ * or tmux runner (`requireTmuxConfig: true`), returning normalized `{ isHelp,
+ * tmuxConfig, program, scenario, timeoutMs, extraArgs }` or throwing
+ * `CliUsageError`.
  */
 export function parseHarnessArgs(argv, { requireTmuxConfig = false } = {}) {
   if (!Array.isArray(argv)) {

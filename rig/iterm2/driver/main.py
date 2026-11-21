@@ -26,8 +26,11 @@ from driver.scenarios import ScenarioRuntimeContext, run_named_scenario
 from driver.tart_vm import GUEST_SHARED_ROOT, TartVmSession, resolve_host_binary
 from driver.vnc_input import VncController
 
-DRIVER_DIR = Path(__file__).resolve().parent
-REPOSITORY_ROOT = DRIVER_DIR.parents[2]
+# Directory containing the `driver` Python package.
+DRIVER_DIRECTORY = Path(__file__).resolve().parent
+
+# Repository root resolved two levels above `rig/iterm2/driver`.
+REPOSITORY_ROOT = DRIVER_DIRECTORY.parents[2]
 
 
 def log_progress(theme: Mapping[str, str], message: str) -> None:
@@ -50,9 +53,9 @@ def log_error_with_hint(theme: Mapping[str, str], message: str, recovery_hint: s
 
 
 def _build_workspace_example(
-    program_name: str, env: Mapping[str, str], theme: Mapping[str, str]
+    program_name: str, environment: Mapping[str, str], theme: Mapping[str, str]
 ) -> Path:
-    cargo_bin = resolve_host_binary("cargo", env)
+    cargo_binary = resolve_host_binary("cargo", environment)
     manifest_path = REPOSITORY_ROOT / "Cargo.toml"
     if not manifest_path.is_file():
         raise DriverRuntimeError(
@@ -62,15 +65,15 @@ def _build_workspace_example(
     log_progress(theme, f"Building workspace example '{program_name}'...")
     try:
         completed = subprocess.run(
-            [cargo_bin, "build", "--manifest-path", str(manifest_path), "--workspace", "--example", program_name],
+            [cargo_binary, "build", "--manifest-path", str(manifest_path), "--workspace", "--example", program_name],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
-            env=dict(env),
+            env=dict(environment),
             check=False,
         )
     except OSError as os_error:
         raise DriverRuntimeError(
-            f"Failed to execute cargo at '{cargo_bin}': {os_error}",
+            f"Failed to execute cargo at '{cargo_binary}': {os_error}",
             "Verify Rust and cargo are installed via rustup.",
         ) from os_error
     if completed.returncode != 0:
@@ -79,8 +82,8 @@ def _build_workspace_example(
             "Check available example names under rig/probe/examples/ and fix any compile errors above.",
         )
     target_root = (
-        Path(env["CARGO_TARGET_DIR"]).resolve()
-        if env.get("CARGO_TARGET_DIR")
+        Path(environment["CARGO_TARGET_DIR"]).resolve()
+        if environment.get("CARGO_TARGET_DIR")
         else REPOSITORY_ROOT / "target"
     )
     binary_path = target_root / "debug" / "examples" / program_name
@@ -98,14 +101,14 @@ def resolve_or_build_program_binary(
     theme: Mapping[str, str],
 ) -> Path:
     """Resolves `RIG_ITERM2_PROGRAM_BIN` or builds the workspace example via `cargo build`."""
-    override_bin = env.get("RIG_ITERM2_PROGRAM_BIN", "").strip()
-    if not override_bin:
+    override_binary = env.get("RIG_ITERM2_PROGRAM_BIN", "").strip()
+    if not override_binary:
         return _build_workspace_example(program_name, env, theme)
-    resolved = Path(override_bin).expanduser().resolve()
+    resolved = Path(override_binary).expanduser().resolve()
     if resolved.is_file() and os.access(resolved, os.X_OK):
         return resolved
     raise DriverRuntimeError(
-        f"RIG_ITERM2_PROGRAM_BIN does not exist or is not executable: '{override_bin}'.",
+        f"RIG_ITERM2_PROGRAM_BIN does not exist or is not executable: '{override_binary}'.",
         "Unset RIG_ITERM2_PROGRAM_BIN or point it to an executable binary.",
     )
 
@@ -116,13 +119,13 @@ def _stage_guest_binaries_and_configs(
     program_name: str,
 ) -> tuple[str, dict[str, str]]:
     vm.stage_host_file(binary_path, program_name, is_executable=True)
-    for conf_name in ("stock", "full"):
-        conf_src = REPOSITORY_ROOT / "rig" / "tmux" / f"{conf_name}.conf"
-        if conf_src.is_file():
-            vm.stage_host_file(conf_src, f"tmux_{conf_name}.conf", is_executable=False)
-    guest_bin = f"/tmp/{program_name}"
-    vm.exec_guest(f'cp "{GUEST_SHARED_ROOT}/{program_name}" {guest_bin} && chmod +x {guest_bin}')
-    return guest_bin, {
+    for config_name in ("stock", "full"):
+        config_source = REPOSITORY_ROOT / "rig" / "tmux" / f"{config_name}.conf"
+        if config_source.is_file():
+            vm.stage_host_file(config_source, f"tmux_{config_name}.conf", is_executable=False)
+    guest_binary = f"/tmp/{program_name}"
+    vm.exec_guest(f'cp "{GUEST_SHARED_ROOT}/{program_name}" {guest_binary} && chmod +x {guest_binary}')
+    return guest_binary, {
         "stock": f"{GUEST_SHARED_ROOT}/tmux_stock.conf",
         "full": f"{GUEST_SHARED_ROOT}/tmux_full.conf",
     }
@@ -137,19 +140,19 @@ def _run_booted_vm_payload(
     theme: Mapping[str, str],
 ) -> dict[str, object]:
     assert parsed.program is not None and parsed.scenario is not None
-    artifact_dir = Path(env["RIG_ITERM2_LOG_DIR"]).resolve() if env.get("RIG_ITERM2_LOG_DIR") else None
-    guest_bin, guest_confs = _stage_guest_binaries_and_configs(vm, binary_path, parsed.program)
+    artifact_directory = Path(env["RIG_ITERM2_LOG_DIR"]).resolve() if env.get("RIG_ITERM2_LOG_DIR") else None
+    guest_binary, guest_configs = _stage_guest_binaries_and_configs(vm, binary_path, parsed.program)
     backup = backup_guest_defaults(vm)
     context = ScenarioRuntimeContext(
         vm=vm,
         vnc=vnc,
         program=parsed.program,
-        guest_program_path=guest_bin,
+        guest_program_path=guest_binary,
         tmux_mode=parsed.tmux_mode,
-        guest_tmux_stocks=guest_confs,
+        guest_tmux_stocks=guest_configs,
         timeout_ms=parsed.timeout_ms,
         extra_args=parsed.extra_args,
-        artifact_dir=artifact_dir,
+        artifact_dir=artifact_directory,
         is_initial_natural_scrolling=backup.is_natural_swipe_direction,
     )
     is_defaults_restored = False
@@ -173,19 +176,19 @@ def _run_booted_vm_payload(
 
 def _execute_with_vm(
     parsed: ParsedCliArgs,
-    tart_bin: str,
-    vncdo_bin: str,
+    tart_binary: str,
+    vncdo_binary: str,
     binary_path: Path,
     env: Mapping[str, str],
     theme: Mapping[str, str],
 ) -> dict[str, object]:
     assert parsed.program is not None and parsed.scenario is not None
     vm_name = env.get("RIG_ITERM2_VM_NAME", DEFAULT_VM_NAME)
-    vm = TartVmSession(tart_bin=tart_bin, vm_name=vm_name, env=env)
+    vm = TartVmSession(tart_bin=tart_binary, vm_name=vm_name, env=env)
     log_progress(theme, f"Cold-booting headless Tart VM '{vm_name}' with loopback VNC...")
     try:
         endpoint = vm.boot(timeout_seconds=max(parsed.timeout_ms / 1000.0, 60.0))
-        vnc = VncController(vncdo_bin=vncdo_bin, endpoint=endpoint, env=env)
+        vnc = VncController(vncdo_bin=vncdo_binary, endpoint=endpoint, env=env)
         payload = _run_booted_vm_payload(vm, vnc, parsed, binary_path, env, theme)
         return {
             "layer": 6,
@@ -203,9 +206,9 @@ def _execute_with_vm(
 
 def run_cli(argv: Sequence[str], env: Mapping[str, str] | None = None) -> int:
     """Main CLI execution returning process exit status."""
-    active_env = dict(os.environ if env is None else env)
-    stdout_theme = create_cli_theme(sys.stdout.isatty(), active_env)
-    stderr_theme = create_cli_theme(sys.stderr.isatty(), active_env)
+    active_environment = dict(os.environ if env is None else env)
+    stdout_theme = create_cli_theme(sys.stdout.isatty(), active_environment)
+    stderr_theme = create_cli_theme(sys.stderr.isatty(), active_environment)
     try:
         parsed = parse_cli_args(argv)
         if parsed.is_help:
@@ -213,14 +216,16 @@ def run_cli(argv: Sequence[str], env: Mapping[str, str] | None = None) -> int:
             sys.stdout.flush()
             return 0
         assert parsed.program is not None and parsed.scenario is not None
-        tart_bin = resolve_host_binary("tart", active_env)
-        vncdo_bin = resolve_host_binary("vncdo", active_env)
-        binary_path = resolve_or_build_program_binary(parsed.program, active_env, stderr_theme)
-        report = _execute_with_vm(parsed, tart_bin, vncdo_bin, binary_path, active_env, stderr_theme)
-        if active_env.get("RIG_ITERM2_LOG_DIR"):
-            output_dir = Path(active_env["RIG_ITERM2_LOG_DIR"]).resolve()
-            output_dir.mkdir(parents=True, exist_ok=True)
-            (output_dir / f"iterm2-{parsed.program}-{parsed.scenario}-report.json").write_text(
+        tart_binary = resolve_host_binary("tart", active_environment)
+        vncdo_binary = resolve_host_binary("vncdo", active_environment)
+        program_binary = resolve_or_build_program_binary(parsed.program, active_environment, stderr_theme)
+        report = _execute_with_vm(
+            parsed, tart_binary, vncdo_binary, program_binary, active_environment, stderr_theme
+        )
+        if active_environment.get("RIG_ITERM2_LOG_DIR"):
+            output_directory = Path(active_environment["RIG_ITERM2_LOG_DIR"]).resolve()
+            output_directory.mkdir(parents=True, exist_ok=True)
+            (output_directory / f"iterm2-{parsed.program}-{parsed.scenario}-report.json").write_text(
                 f"{json.dumps(report, indent=2)}\n",
                 encoding="utf-8",
             )
@@ -228,13 +233,13 @@ def run_cli(argv: Sequence[str], env: Mapping[str, str] | None = None) -> int:
         sys.stdout.flush()
         log_success(stderr_theme, f"Layer 6 '{parsed.scenario}' completed cleanly.")
         return 0
-    except CliUsageError as usage_err:
+    except CliUsageError as usage_error:
         sys.stderr.write(f"{build_help_text(stderr_theme)}\n\n")
-        log_error_with_hint(stderr_theme, usage_err.message, usage_err.recovery_hint)
-        return usage_err.exit_code
-    except DriverError as driver_err:
-        log_error_with_hint(stderr_theme, driver_err.message, driver_err.recovery_hint)
-        return driver_err.exit_code
+        log_error_with_hint(stderr_theme, usage_error.message, usage_error.recovery_hint)
+        return usage_error.exit_code
+    except DriverError as driver_error:
+        log_error_with_hint(stderr_theme, driver_error.message, driver_error.recovery_hint)
+        return driver_error.exit_code
 
 
 def main() -> None:

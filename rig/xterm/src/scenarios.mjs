@@ -1,6 +1,6 @@
 /**
- * Scenario coordinator (`batch`, `osc52`, `interactive`, `panic`, `all`, `passthrough`)
- * shared by Layer 3 (`rig/xterm/run.sh`) and Layer 4 (`rig/xterm/run-tmux.sh`).
+ * Scenario coordinator (`batch`, `osc52`, `interactive`, `panic`, `all`, and
+ * `passthrough`) shared by direct xterm.js and private-socket tmux runs.
  */
 
 import assert from 'node:assert/strict';
@@ -24,47 +24,52 @@ const BOOLEAN_PROBE_FLAGS = new Set(['--batch', '--push-kitty']);
 const VALUE_PROBE_FLAGS = new Set(['--log', '--osc52', '--osc52-form']);
 
 /**
- * Merges scenario-managed flags with forwarded `extraArgs`, deduplicating known `capability_probe`
- * flags (giving `managedArgs` precedence) while preserving unknown flags for custom `<program>` runs.
+ * Merges harness-managed `capability_probe` flags with forwarded `extraArgs`,
+ * giving `managedArgs` precedence on duplicate probe flags while preserving
+ * unknown flags for custom `<program>` runs.
  */
 export function mergeProbeArgs(managedArgs = [], extraArgs = []) {
   const combinedTokens = [...managedArgs, ...extraArgs];
-  const mergedArgs = [];
-  const seenProbeFlags = new Set();
-
-  for (let index = 0; index < combinedTokens.length; index += 1) {
-    const token = combinedTokens[index];
+  const initialState = {
+    mergedArgs: [],
+    seenProbeFlags: new Set(),
+    shouldSkipNext: false,
+  };
+  const reduced = combinedTokens.reduce((state, token, index) => {
+    if (state.shouldSkipNext) {
+      return { ...state, shouldSkipNext: false };
+    }
     const equalsOffset = token.indexOf('=');
     const inlineFlag = equalsOffset > 0 ? token.slice(0, equalsOffset) : null;
     if (BOOLEAN_PROBE_FLAGS.has(token)) {
-      if (!seenProbeFlags.has(token)) {
-        seenProbeFlags.add(token);
-        mergedArgs.push(token);
+      if (!state.seenProbeFlags.has(token)) {
+        state.seenProbeFlags.add(token);
+        state.mergedArgs.push(token);
       }
-      continue;
+      return state;
     }
     if (VALUE_PROBE_FLAGS.has(token)) {
       const valueToken = combinedTokens[index + 1];
-      index += 1;
-      if (!seenProbeFlags.has(token)) {
-        seenProbeFlags.add(token);
-        mergedArgs.push(token);
+      if (!state.seenProbeFlags.has(token)) {
+        state.seenProbeFlags.add(token);
+        state.mergedArgs.push(token);
         if (valueToken !== undefined) {
-          mergedArgs.push(valueToken);
+          state.mergedArgs.push(valueToken);
         }
       }
-      continue;
+      return { ...state, shouldSkipNext: true };
     }
     if (inlineFlag !== null && VALUE_PROBE_FLAGS.has(inlineFlag)) {
-      if (!seenProbeFlags.has(inlineFlag)) {
-        seenProbeFlags.add(inlineFlag);
-        mergedArgs.push(token);
+      if (!state.seenProbeFlags.has(inlineFlag)) {
+        state.seenProbeFlags.add(inlineFlag);
+        state.mergedArgs.push(token);
       }
-      continue;
+      return state;
     }
-    mergedArgs.push(token);
-  }
-  return mergedArgs;
+    state.mergedArgs.push(token);
+    return state;
+  }, initialState);
+  return reduced.mergedArgs;
 }
 
 function createDefaultPtySession({ programPath, programArgs, cols, rows, bridge }) {
@@ -105,7 +110,8 @@ function waitBrieflyForSessionExit(exitPromise, maxWaitMs = 1500) {
 }
 
 /**
- * Disposes `session`, closes `bridge`, and deletes `scratchDir`, rethrowing the first error if any.
+ * Disposes `session`, closes `bridge`, and removes `scratchDir` across scenario
+ * teardown, rethrowing the first cleanup error if any step fails.
  */
 export async function cleanupManagedSession(session, bridge, scratchDir) {
   let firstCleanupError = null;
@@ -130,7 +136,13 @@ export async function cleanupManagedSession(session, bridge, scratchDir) {
   }
 }
 
-async function finalizeManagedSession(session, bridge, scratchDir, archiveOptions, hasPrimaryError) {
+async function finalizeManagedSession(
+  session,
+  bridge,
+  scratchDir,
+  archiveOptions,
+  hasPrimaryError,
+) {
   try {
     archiveSessionProbeLog(archiveOptions);
   } catch (archiveError) {
@@ -183,18 +195,34 @@ async function withManagedSession(runtime, managedArgs, runWithContext, sessionL
 }
 
 async function executeBatchScenario(runtime) {
-  return withManagedSession(runtime, ['--batch'], async (ctx) => {
-    await waitForProbeReady(ctx.logPath, ctx.timeoutMs, ctx.session.exitPromise);
-    const exitOutcome = await ctx.session.waitForExit(ctx.timeoutMs);
-    assert.equal(exitOutcome.exitCode, 0, `batch probe exited with ${exitOutcome.exitCode}`);
+  return withManagedSession(
+    runtime,
+    ['--batch'],
+    async (sessionContext) => {
+      await waitForProbeReady(
+        sessionContext.logPath,
+        sessionContext.timeoutMs,
+        sessionContext.session.exitPromise,
+      );
+      const exitOutcome = await sessionContext.session.waitForExit(sessionContext.timeoutMs);
+      assert.equal(exitOutcome.exitCode, 0, `batch probe exited with ${exitOutcome.exitCode}`);
 
-    const terminalStateAfterExit = await ctx.bridge.getTerminalState(ctx.timeoutMs);
-    assert.equal(terminalStateAfterExit.unicodeVersion, '11');
-    assert.equal(terminalStateAfterExit.mouseTrackingMode, 'none');
+      const terminalStateAfterExit = await sessionContext.bridge.getTerminalState(
+        sessionContext.timeoutMs,
+      );
+      assert.equal(terminalStateAfterExit.unicodeVersion, '11');
+      assert.equal(terminalStateAfterExit.mouseTrackingMode, 'none');
 
-    const records = readJsonLines(ctx.logPath);
-    return { scenario: 'batch', exitCode: exitOutcome.exitCode, terminalStateAfterExit, records };
-  }, 'batch');
+      const records = readJsonLines(sessionContext.logPath);
+      return {
+        scenario: 'batch',
+        exitCode: exitOutcome.exitCode,
+        terminalStateAfterExit,
+        records,
+      };
+    },
+    'batch',
+  );
 }
 
 async function readActiveTmuxBuffer(runtime, session) {
@@ -209,25 +237,34 @@ async function readActiveTmuxBuffer(runtime, session) {
 
 async function runSingleOsc52Probe(runtime, form, token) {
   const managedOsc52Args = ['--batch', '--osc52', token, '--osc52-form', form];
-  return withManagedSession(runtime, managedOsc52Args, async (ctx) => {
-    await waitForProbeReady(ctx.logPath, ctx.timeoutMs, ctx.session.exitPromise);
-    const exitOutcome = await ctx.session.waitForExit(ctx.timeoutMs);
-    assert.equal(exitOutcome.exitCode, 0, `osc52 (${form}) exited with ${exitOutcome.exitCode}`);
-
-    const terminalState = await ctx.bridge.getTerminalState(ctx.timeoutMs);
-    const tmuxBuffer = await readActiveTmuxBuffer(runtime, ctx.session);
-    if (runtime.tmuxMode === null) {
-      assert.ok(
-        terminalState.osc52Payloads.some((payload) => payload.decodedText === token),
-        `expected xterm.js OSC 52 payload '${token}' in Layer 3`,
+  return withManagedSession(
+    runtime,
+    managedOsc52Args,
+    async (sessionContext) => {
+      await waitForProbeReady(
+        sessionContext.logPath,
+        sessionContext.timeoutMs,
+        sessionContext.session.exitPromise,
       );
-    }
-    return { form, token, osc52Payloads: terminalState.osc52Payloads, tmuxBuffer };
-  }, `osc52-${form}`);
+      const exitOutcome = await sessionContext.session.waitForExit(sessionContext.timeoutMs);
+      assert.equal(exitOutcome.exitCode, 0, `osc52 (${form}) exited with ${exitOutcome.exitCode}`);
+
+      const terminalState = await sessionContext.bridge.getTerminalState(sessionContext.timeoutMs);
+      const tmuxBuffer = await readActiveTmuxBuffer(runtime, sessionContext.session);
+      if (runtime.tmuxMode === null) {
+        assert.ok(
+          terminalState.osc52Payloads.some((payload) => payload.decodedText === token),
+          `expected xterm.js OSC 52 payload '${token}' in direct xterm.js run`,
+        );
+      }
+      return { form, token, osc52Payloads: terminalState.osc52Payloads, tmuxBuffer };
+    },
+    `osc52-${form}`,
+  );
 }
 
 async function executeOsc52Scenario(runtime) {
-  const probeSpecs =
+  const probeConfigs =
     runtime.tmuxMode === null
       ? [{ form: 'plain', token: 'tuikit-xterm-osc52-plain' }]
       : [
@@ -236,55 +273,79 @@ async function executeOsc52Scenario(runtime) {
           { form: 'both', token: 'tuikit-tmux-osc52-both' },
         ];
   const probes = [];
-  for (const spec of probeSpecs) {
-    probes.push(await runSingleOsc52Probe(runtime, spec.form, spec.token));
+  for (const probeConfig of probeConfigs) {
+    probes.push(await runSingleOsc52Probe(runtime, probeConfig.form, probeConfig.token));
   }
   return { scenario: 'osc52', probes };
 }
 
 async function executePanicScenario(runtime) {
-  return withManagedSession(runtime, [], async (ctx) => {
-    await waitForProbeReady(ctx.logPath, ctx.timeoutMs, ctx.session.exitPromise);
-    await waitForReadyOuterTerminalModes(ctx);
-    const terminalStateBeforePanic = await ctx.bridge.getTerminalState(ctx.timeoutMs);
-    if (shouldExpectOuterMouseEvents(ctx)) {
-      assert.notEqual(
-        terminalStateBeforePanic.mouseTrackingMode,
-        'none',
-        'expected active mouse tracking before triggering F12 panic',
+  return withManagedSession(
+    runtime,
+    [],
+    async (sessionContext) => {
+      await waitForProbeReady(
+        sessionContext.logPath,
+        sessionContext.timeoutMs,
+        sessionContext.session.exitPromise,
       );
-    }
+      await waitForReadyOuterTerminalModes(sessionContext);
+      const terminalStateBeforePanic = await sessionContext.bridge.getTerminalState(
+        sessionContext.timeoutMs,
+      );
+      if (shouldExpectOuterMouseEvents(sessionContext)) {
+        assert.notEqual(
+          terminalStateBeforePanic.mouseTrackingMode,
+          'none',
+          'expected active mouse tracking before triggering F12 panic',
+        );
+      }
 
-    await ctx.bridge.page.keyboard.press('F12');
-    const exitOutcome = await ctx.session.waitForExit(ctx.timeoutMs);
-    assert.ok(
-      exitOutcome.exitCode !== 0 || exitOutcome.signal !== 0,
-      'expected non-zero exit status when F12 panic triggers',
-    );
+      await sessionContext.bridge.page.keyboard.press('F12');
+      const exitOutcome = await sessionContext.session.waitForExit(sessionContext.timeoutMs);
+      assert.ok(
+        exitOutcome.exitCode !== 0 || exitOutcome.signal !== 0,
+        'expected non-zero exit status when F12 panic triggers',
+      );
 
-    const terminalStateAfterPanic = await ctx.bridge.getTerminalState(ctx.timeoutMs);
-    assert.equal(terminalStateAfterPanic.mouseTrackingMode, 'none');
-    assert.equal(terminalStateAfterPanic.bracketedPasteMode, false);
-    // Windows ConPTY owns outer DECSET 1004 (`?1004h`) until `ClosePseudoConsole` (`dispose()`).
-    assert.equal(terminalStateAfterPanic.sendFocusMode, process.platform === 'win32');
+      const terminalStateAfterPanic = await sessionContext.bridge.getTerminalState(
+        sessionContext.timeoutMs,
+      );
+      assert.equal(terminalStateAfterPanic.mouseTrackingMode, 'none');
+      assert.equal(terminalStateAfterPanic.bracketedPasteMode, false);
+      // Windows ConPTY owns outer DECSET 1004 (`?1004h`) until `ClosePseudoConsole` (`dispose()`).
+      assert.equal(terminalStateAfterPanic.sendFocusMode, process.platform === 'win32');
 
-    return {
-      scenario: 'panic',
-      exitCode: exitOutcome.exitCode,
-      signal: exitOutcome.signal,
-      terminalStateBeforePanic,
-      terminalStateAfterPanic,
-    };
-  }, 'panic');
+      return {
+        scenario: 'panic',
+        exitCode: exitOutcome.exitCode,
+        signal: exitOutcome.signal,
+        terminalStateBeforePanic,
+        terminalStateAfterPanic,
+      };
+    },
+    'panic',
+  );
 }
 
 async function executePassthroughScenario(runtime) {
-  return withManagedSession(runtime, [], async (ctx) => {
-    const exitOutcome = await ctx.session.waitForExit(ctx.timeoutMs);
-    assert.equal(exitOutcome.exitCode, 0, `passthrough program exited with ${exitOutcome.exitCode}`);
-    const records = fs.existsSync(ctx.logPath) ? readJsonLines(ctx.logPath) : [];
-    return { scenario: 'passthrough', exitCode: exitOutcome.exitCode, records };
-  }, 'passthrough');
+  return withManagedSession(
+    runtime,
+    [],
+    async (sessionContext) => {
+      const exitOutcome = await sessionContext.session.waitForExit(sessionContext.timeoutMs);
+      assert.equal(
+        exitOutcome.exitCode,
+        0,
+        `passthrough program exited with ${exitOutcome.exitCode}`,
+      );
+      const records = fs.existsSync(sessionContext.logPath)
+        ? readJsonLines(sessionContext.logPath)
+        : [];
+      return { scenario: 'passthrough', exitCode: exitOutcome.exitCode, records };
+    },
+    'passthrough',
+  );
 }
 
 async function dispatchScenarioByName(scenarioName, runtime) {
@@ -314,8 +375,8 @@ async function dispatchScenarioByName(scenarioName, runtime) {
 }
 
 /**
- * Runs the requested harness scenario (`all`, `batch`, `osc52`, `interactive`, `panic`, or
- * `passthrough`) and wraps the result with Layer 3 / Layer 4 metadata.
+ * Executes `scenarioName` (`all`, `batch`, `osc52`, `interactive`, `panic`, or
+ * `passthrough`) and returns the structured JSON report emitted by the CLI.
  */
 export async function runScenario(scenarioName, rawRuntime) {
   const runtime = normalizeScenarioRuntime(rawRuntime);

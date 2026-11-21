@@ -10,10 +10,16 @@ import subprocess
 from driver.cli_args import DriverRuntimeError
 from driver.tart_vm import GUEST_SHARED_ROOT, TartVmSession, VncEndpoint
 
+# CoreGraphics modifier bitmask corresponding to macOS Option (`kCGEventFlagMaskAlternate`).
 CG_FLAG_OPTION = 0x80000
+
+# CoreGraphics modifier bitmask corresponding to macOS Command (`kCGEventFlagMaskCommand`).
 CG_FLAG_COMMAND = 0x100000
+
+# Candidate `vncdo` modifier key names probed during runtime modifier calibration.
 CANDIDATE_VNC_MODIFIERS: tuple[str, ...] = ("meta", "alt", "super")
 
+# Guest Python script reading live CoreGraphics modifier state (`CGEventSourceFlagsState`).
 CG_FLAGS_SCRIPT = """import ctypes
 core_graphics = ctypes.CDLL("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
 core_graphics.CGEventSourceFlagsState.argtypes = [ctypes.c_int32]
@@ -52,7 +58,7 @@ def normalize_cell_size_pt(
     raw_height: float,
     window_width_pt: float,
     window_height_pt: float,
-    cols: int,
+    columns: int,
     rows: int,
     backing_scale: float = 2.0,
 ) -> tuple[float, float]:
@@ -60,21 +66,21 @@ def normalize_cell_size_pt(
     if raw_width <= 0.0 or raw_height <= 0.0:
         return (7.0, 17.0)
     candidate_width, candidate_height = raw_width, raw_height
-    if (cols * candidate_width > window_width_pt or rows * candidate_height > window_height_pt) and backing_scale > 1.0:
+    if (columns * candidate_width > window_width_pt or rows * candidate_height > window_height_pt) and backing_scale > 1.0:
         candidate_width = raw_width / backing_scale
         candidate_height = raw_height / backing_scale
-    if cols * candidate_width > window_width_pt or rows * candidate_height > window_height_pt:
+    if columns * candidate_width > window_width_pt or rows * candidate_height > window_height_pt:
         return (7.0, 17.0)
     return (candidate_width, candidate_height)
 
 
-def cell_center_to_vnc_pixels(geometry: WindowGeometry, col: int, row: int) -> tuple[int, int]:
-    """Maps 0-indexed `(col, row)` cell coordinates to Retina VNC framebuffer pixel coordinates."""
+def cell_center_to_vnc_pixels(geometry: WindowGeometry, column: int, row: int) -> tuple[int, int]:
+    """Maps 0-indexed `(column, row)` cell coordinates to Retina VNC framebuffer pixel coordinates."""
     origin_x_pt = geometry.window_x_pt + 5.0
     origin_y_pt = geometry.window_y_pt + (
         geometry.window_height_pt - (geometry.rows * geometry.cell_height_pt) - 1.0
     )
-    center_x_pt = origin_x_pt + (col + 0.5) * geometry.cell_width_pt
+    center_x_pt = origin_x_pt + (column + 0.5) * geometry.cell_width_pt
     center_y_pt = origin_y_pt + (row + 0.5) * geometry.cell_height_pt
     return (
         int(round(center_x_pt * geometry.backing_scale)),

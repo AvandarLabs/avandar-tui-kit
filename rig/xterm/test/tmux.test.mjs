@@ -160,14 +160,8 @@ test('run-tmux.sh --help prints plain help to stdout and exits 0 even without tm
     assert.equal(helpResult.stderr, '');
     assert.ok(!helpResult.stdout.includes('\x1b['));
     for (const requiredText of [
-      'Usage:',
-      'just xterm-tmux <stock|full> <program>',
-      'Purpose:',
-      'Arguments:',
-      'Scenarios:',
-      'Options:',
-      'Streams:',
-      'Examples:',
+      'Usage:', 'just xterm-tmux <stock|full> <program>', 'Purpose:', 'Arguments:',
+      'Scenarios:', 'Options:', 'Streams:', 'Examples:',
     ]) {
       assert.ok(helpResult.stdout.includes(requiredText), `missing '${requiredText}'`);
     }
@@ -189,8 +183,8 @@ test('run-tmux.sh fails with structured recovery hints on invalid args or missin
     assert.equal(failed.status, 2, `expected exit 2 for ${JSON.stringify(cliArgs)}`);
     assert.equal(failed.stdout, '');
     assert.match(failed.stderr, /Usage:/);
-    assert.match(failed.stderr, /❌/);
-    assert.match(failed.stderr, /\n {2}⚠️ /);
+    assert.match(failed.stderr, /\u274c/);
+    assert.match(failed.stderr, /\n {2}\u26a0\ufe0f /);
   }
 
   const nodeOnlyBinDir = createNodeOnlyPathDir();
@@ -200,14 +194,14 @@ test('run-tmux.sh fails with structured recovery hints on invalid args or missin
     });
     assert.equal(missingTmux.status, 1);
     assert.equal(missingTmux.stdout, '');
-    assert.match(missingTmux.stderr, /❌ run-tmux\.sh: .*tmux/i);
-    assert.match(missingTmux.stderr, /\n {2}⚠️ /);
+    assert.match(missingTmux.stderr, /\u274c run-tmux\.sh: .*tmux/i);
+    assert.match(missingTmux.stderr, /\n {2}\u26a0\ufe0f /);
   } finally {
     fs.rmSync(nodeOnlyBinDir, { recursive: true, force: true });
   }
 });
 
-test('tmux_session helpers and pointer assertions enforce stock and tmux 3.3 contracts', () => {
+test('tmux_session socket names and config resolver preserve stock.conf and sun_path bounds', () => {
   const firstSocket = buildUniqueTmuxSocketName();
   const secondSocket = buildUniqueTmuxSocketName();
   assert.notEqual(firstSocket, secondSocket);
@@ -220,7 +214,9 @@ test('tmux_session helpers and pointer assertions enforce stock and tmux 3.3 con
   assert.equal(fullPath, path.join(REPOSITORY_ROOT, 'rig', 'tmux', 'full.conf'));
   assert.equal(fs.statSync(stockPath).size, 0, 'stock.conf must remain 0 bytes');
   assert.throws(() => resolveTmuxConfigPath('custom'), /stock|full/i);
+});
 
+test('interactive_scenario tmux 3.3 and mouse-disabled helpers reject unexpected mouse events', () => {
   assert.equal(
     shouldExpectOuterMouseEvents({
       tmuxMode: 'stock',
@@ -234,12 +230,7 @@ test('tmux_session helpers and pointer assertions enforce stock and tmux 3.3 con
   assert.equal(isTmux33Version('tmux 3.30'), false);
   assert.equal(shouldExpectOuterMouseEvents({ shouldExpectMouseEvents: false }), false);
   const emptySteps = {
-    hover: [],
-    left_click: [],
-    left_drag: [],
-    wheel_down: [],
-    wheel_up: [],
-    right_click: [],
+    hover: [], left_click: [], left_drag: [], wheel_down: [], wheel_up: [], right_click: [],
   };
   assertPointerStepResults(emptySteps, { shouldExpectMouseEvents: false });
   assert.throws(
@@ -252,7 +243,7 @@ test('tmux_session helpers and pointer assertions enforce stock and tmux 3.3 con
   );
 });
 
-test('createTmuxSession enforces Rule 5 before starting any tmux server', async () => {
+test('createTmuxSession enforces bridge readiness before starting any tmux server', async () => {
   const unreadyBridge = await createBridgeServer({ cols: 100, rows: 30 });
   try {
     await assert.rejects(
@@ -298,9 +289,7 @@ test('createTmuxSession captures child exit code, preserves args, reads buffer, 
 
     session.dispose();
     session.dispose();
-    const listAfterDispose = spawnSync('tmux', ['-L', socketName, 'list-sessions'], {
-      encoding: 'utf8',
-    });
+    const listAfterDispose = spawnSync('tmux', ['-L', socketName, 'list-sessions'], { encoding: 'utf8' });
     assert.notEqual(listAfterDispose.status, 0);
   } finally {
     await bridge.close();
@@ -308,7 +297,7 @@ test('createTmuxSession captures child exit code, preserves args, reads buffer, 
   }
 });
 
-test('run-tmux.sh stock capability_probe verifies M0 Rows 9 and 12 and clean teardown', SKIP_ON_WIN32, () => {
+test('run-tmux.sh stock capability_probe blocks OSC 52 and focus while tearing down cleanly', SKIP_ON_WIN32, () => {
   const stockResult = runTmuxCli(['stock', 'capability_probe'], { timeoutMs: 90000 });
   assert.equal(stockResult.status, 0, `stderr:\n${stockResult.stderr}`);
   const stdoutLines = stockResult.stdout.trim().split('\n');
@@ -320,12 +309,11 @@ test('run-tmux.sh stock capability_probe verifies M0 Rows 9 and 12 and clean tea
   assertTmuxBatchReport(report.batch);
   assertStockTmuxInteractive(report.interactive);
 
-  const expectedStockOsc52 = [
+  for (const [form, token] of [
     ['plain', 'tuikit-tmux-osc52-plain'],
     ['tmux', 'tuikit-tmux-osc52-wrapped'],
     ['both', 'tuikit-tmux-osc52-both'],
-  ];
-  for (const [form, token] of expectedStockOsc52) {
+  ]) {
     const probe = report.osc52.probes.find((item) => item.form === form);
     assert.equal(probe?.token, token);
     assert.equal(probe?.tmuxBuffer, null);
@@ -337,7 +325,7 @@ test('run-tmux.sh stock capability_probe verifies M0 Rows 9 and 12 and clean tea
   assert.deepEqual(listHarnessTmuxSockets(), []);
 });
 
-test('run-tmux.sh full capability_probe verifies M0 Rows 10 and 12 and clean teardown', SKIP_ON_WIN32, () => {
+test('run-tmux.sh full capability_probe forwards OSC 52, mouse, and focus with clean teardown', SKIP_ON_WIN32, () => {
   const fullResult = runTmuxCli(['full', 'capability_probe'], { timeoutMs: 90000 });
   assert.equal(fullResult.status, 0, `stderr:\n${fullResult.stderr}`);
   const stdoutLines = fullResult.stdout.trim().split('\n');
@@ -349,12 +337,11 @@ test('run-tmux.sh full capability_probe verifies M0 Rows 10 and 12 and clean tea
   assertTmuxBatchReport(report.batch);
   assertFullTmuxInteractive(report.interactive);
 
-  const expectedFullOsc52 = [
+  for (const [form, token, expectedBuffer] of [
     ['plain', 'tuikit-tmux-osc52-plain', 'tuikit-tmux-osc52-plain'],
     ['tmux', 'tuikit-tmux-osc52-wrapped', null],
     ['both', 'tuikit-tmux-osc52-both', 'tuikit-tmux-osc52-both'],
-  ];
-  for (const [form, token, expectedBuffer] of expectedFullOsc52) {
+  ]) {
     const probe = report.osc52.probes.find((item) => item.form === form);
     assert.equal(probe?.token, token);
     assert.equal(probe?.tmuxBuffer, expectedBuffer);
@@ -367,17 +354,19 @@ test('run-tmux.sh full capability_probe verifies M0 Rows 10 and 12 and clean tea
   assert.deepEqual(listHarnessTmuxSockets(), []);
 });
 
-test('waitForReadyOuterTerminalModes awaits mouse on win32 and createTmuxSession cleans scratchDir', async () => {
+test('waitForReadyOuterTerminalModes awaits mouse on win32 only when outer mouse is expected', async () => {
   let waitCalls = 0;
   const page = { async waitForFunction() { waitCalls += 1; } };
   await waitForReadyOuterTerminalModes({ tmuxMode: null, timeoutMs: 500, bridge: { page } }, 'win32');
-  assert.equal(waitCalls, 1, 'win32 must wait for ConPTY mouseTrackingMode when mouse is expected');
+  assert.equal(waitCalls, 1);
   await waitForReadyOuterTerminalModes(
     { shouldExpectMouseEvents: false, timeoutMs: 500, bridge: { page } },
     'win32',
   );
-  assert.equal(waitCalls, 1, 'win32 must skip bracketedPaste wait when outer mouse is disabled');
+  assert.equal(waitCalls, 1);
+});
 
+test('createTmuxSession removes owned temporary scratch directory when tmux startup fails', async () => {
   const beforeDirs = new Set(fs.readdirSync(os.tmpdir()).filter((entry) => entry.startsWith('tuikit-tmux-')));
   await assert.rejects(() =>
     createTmuxSession({

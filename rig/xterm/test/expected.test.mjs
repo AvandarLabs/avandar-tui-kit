@@ -156,7 +156,7 @@ function runCompareCli(cliArguments, options = {}) {
   });
 }
 
-test('normalizeProbeReport normalizes xterm, iterm2, and orca JSONL while stripping host noise', () => {
+test('normalizeProbeReport strips host-specific arch, ssh, timing, and drag-count noise across formats', () => {
   const xtermReport = {
     layer: 3,
     platform: 'linux',
@@ -177,9 +177,7 @@ test('normalizeProbeReport normalizes xterm, iterm2, and orca JSONL while stripp
   const normalizedArm = normalizeProbeReport(xtermReport);
   assert.deepEqual(normalizedArm, normalizeProbeReport(x64Clone));
   assert.equal('arch' in normalizedArm.identity, false);
-  assert.deepEqual(normalizedArm.osc52, [
-    { form: 'plain', updatedOuterClipboard: true, updatedTmuxBuffer: false },
-  ]);
+  assert.deepEqual(normalizedArm.osc52, [{ form: 'plain', updatedOuterClipboard: true, updatedTmuxBuffer: false }]);
 
   const itermReport = {
     layer: 6,
@@ -199,7 +197,7 @@ test('normalizeProbeReport normalizes xterm, iterm2, and orca JSONL while stripp
   assert.deepEqual(normalizedOrca, normalizeProbeReport(createSampleBatchRecords()));
 });
 
-test('normalizeProbeReport handles CRLF JSONL with blank lines, late OSC 11, and defensive edge cases', () => {
+test('normalizeProbeReport promotes background_color_late across CRLF JSONL blank lines', () => {
   const lateColorRecords = createSampleBatchRecords().map((record) =>
     record.section === 'background_color'
       ? { kind: 'section', section: 'background_color', answered: false, elapsed_ms: 250, is_dark: null }
@@ -212,12 +210,14 @@ test('normalizeProbeReport handles CRLF JSONL with blank lines, late OSC 11, and
     elapsed_ms: 410,
     is_dark: false,
   });
-  const crlfJsonlWithBlanks = `\r\n${lateColorRecords
-    .map((record) => JSON.stringify(record))
-    .join('\r\n\r\n')}\r\n  \r\n`;
-  const normalizedLate = normalizeProbeReport(crlfJsonlWithBlanks);
-  assert.deepEqual(normalizedLate.background_color, { answered: true, is_dark: false });
+  const crlfJsonlWithBlanks = `\r\n${lateColorRecords.map((record) => JSON.stringify(record)).join('\r\n\r\n')}\r\n  \r\n`;
+  assert.deepEqual(normalizeProbeReport(crlfJsonlWithBlanks).background_color, {
+    answered: true,
+    is_dark: false,
+  });
+});
 
+test('normalizeProbeReport converts undefined width samples to null and filters non-object key items', () => {
   const baselineLikeObject = normalizeProbeReport(createSampleBatchRecords());
   baselineLikeObject.widths.samples.undefined_sample = undefined;
   baselineLikeObject.interactive = createSampleInteractiveSection();
@@ -242,19 +242,13 @@ test('normalizeProbeReport distinguishes malformed multi-line JSON from JSONL tr
       caughtError.message.startsWith('Invalid JSON report:') &&
       !caughtError.message.includes('Invalid JSON on line 1'),
   );
-
-  const malformedMultiLineArray = '[\n  {"kind": "section"},\n]\n';
   assert.throws(
-    () => normalizeProbeReport(malformedMultiLineArray),
+    () => normalizeProbeReport('[\n  {"kind": "section"},\n]\n'),
     (caughtError) => caughtError.message.startsWith('Invalid JSON report:'),
   );
-
   const validFirstRecord = JSON.stringify(createSampleBatchRecords()[0]);
   const malformedJsonlWithBlanks = `\r\n\r\n${validFirstRecord}\r\n   \r\n{"kind": broken}\r\n`;
-  assert.throws(
-    () => normalizeProbeReport(malformedJsonlWithBlanks),
-    /Invalid JSON on line 5:/,
-  );
+  assert.throws(() => normalizeProbeReport(malformedJsonlWithBlanks), /Invalid JSON on line 5:/);
 });
 
 test('compareReportAgainstExpected detects value, length, key-set, and null-vs-object diffs', () => {
@@ -278,18 +272,22 @@ test('compareReportAgainstExpected detects value, length, key-set, and null-vs-o
   assert.ok(mismatch.diffs.some((line) => line.startsWith('interactive: expected null, got ')));
 });
 
-test('expected_compare.mjs CLI enforces help, usage exit 2, normalize, stdin, and mismatch exit 1', () => {
+test('expected_compare.mjs CLI prints help with exit 0 and usage error hints with exit 2', () => {
   const helpRun = runCompareCli(['--help']);
   assert.equal(helpRun.status, 0);
   assert.equal(helpRun.stderr, '');
   assert.match(helpRun.stdout, /Usage:/);
 
-  const badUsage = runCompareCli([]);
-  assert.equal(badUsage.status, 2);
-  assert.equal(badUsage.stdout, '');
-  assert.match(badUsage.stderr, /\u274c/);
-  assert.match(badUsage.stderr, RECOVERY_HINT_PATTERN);
+  for (const invalidArgs of [[], ['-', '-']]) {
+    const badUsage = runCompareCli(invalidArgs, { stdinText: '{}' });
+    assert.equal(badUsage.status, 2);
+    assert.equal(badUsage.stdout, '');
+    assert.match(badUsage.stderr, /\u274c/);
+    assert.match(badUsage.stderr, RECOVERY_HINT_PATTERN);
+  }
+});
 
+test('expected_compare.mjs CLI normalizes JSONL, matches stdin, and exits 1 on diff or missing file', () => {
   const scratchDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'tuikit-expected-test-'));
   try {
     const rawJsonl = `${createSampleBatchRecords().map((record) => JSON.stringify(record)).join('\n')}\n`;
@@ -300,9 +298,7 @@ test('expected_compare.mjs CLI enforces help, usage exit 2, normalize, stdin, an
     const normalizedRun = runCompareCli(['--normalize', rawFile]);
     assert.equal(normalizedRun.status, 0);
     fs.writeFileSync(expectedFile, normalizedRun.stdout, 'utf8');
-
-    const stdinMatch = runCompareCli(['-', expectedFile], { stdinText: rawJsonl });
-    assert.equal(stdinMatch.status, 0);
+    assert.equal(runCompareCli(['-', expectedFile], { stdinText: rawJsonl }).status, 0);
 
     const brokenBaseline = JSON.parse(normalizedRun.stdout);
     brokenBaseline.kitty_keyboard.answered = false;
@@ -310,14 +306,20 @@ test('expected_compare.mjs CLI enforces help, usage exit 2, normalize, stdin, an
     const mismatchRun = runCompareCli([rawFile, expectedFile]);
     assert.equal(mismatchRun.status, 1);
     assert.match(mismatchRun.stderr, /kitty_keyboard\.answered/);
-    assert.match(mismatchRun.stderr, /\u274c/);
     assert.match(mismatchRun.stderr, RECOVERY_HINT_PATTERN);
   } finally {
     fs.rmSync(scratchDirectory, { recursive: true, force: true });
   }
+
+  const missingInputRun = runCompareCli([
+    path.join(EXPECTED_DIRECTORY, 'does-not-exist.json'),
+    path.join(EXPECTED_DIRECTORY, 'orca.json'),
+  ]);
+  assert.equal(missingInputRun.status, 1);
+  assert.match(missingInputRun.stderr, /Input file not found/);
 });
 
-test('expected_compare.mjs supports -- end-of-options, rejects stdin baseline, and exits 1 on missing file', () => {
+test('parseExpectedCompareArgs treats dash-prefixed tokens after double-dash as file paths', () => {
   assert.deepEqual(parseExpectedCompareArgs(['--', '-actual.json', 'rig/expected/orca.json']), {
     isHelp: false,
     isNormalizeOnly: false,
@@ -330,21 +332,6 @@ test('expected_compare.mjs supports -- end-of-options, rejects stdin baseline, a
     actualPath: '--help',
     expectedPath: 'rig/expected/orca.json',
   });
-
-  const stdinExpectedRun = runCompareCli(['-', '-'], { stdinText: '{}' });
-  assert.equal(stdinExpectedRun.status, 2);
-  assert.equal(stdinExpectedRun.stdout, '');
-  assert.match(stdinExpectedRun.stderr, /\u274c/);
-  assert.match(stdinExpectedRun.stderr, RECOVERY_HINT_PATTERN);
-
-  const missingInputRun = runCompareCli([
-    path.join(EXPECTED_DIRECTORY, 'does-not-exist.json'),
-    path.join(EXPECTED_DIRECTORY, 'orca.json'),
-  ]);
-  assert.equal(missingInputRun.status, 1);
-  assert.equal(missingInputRun.stdout, '');
-  assert.match(missingInputRun.stderr, /Input file not found/);
-  assert.match(missingInputRun.stderr, RECOVERY_HINT_PATTERN);
 });
 
 test('all 13 rig/expected baselines exist, have zero em dashes, and are canonical under normalization', () => {

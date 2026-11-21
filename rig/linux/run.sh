@@ -175,13 +175,13 @@ ensure_writable_volumes() {
 }
 
 resolve_forwarded_log_dir() {
-  local raw_dir="$1"
-  if [ "$raw_dir" = "$repository_root" ]; then
+  local host_log_directory="$1"
+  if [ "$host_log_directory" = "$repository_root" ]; then
     printf '/workspace\n'
-  elif [[ "$raw_dir" == "$repository_root/"* ]]; then
-    printf '/workspace/%s\n' "${raw_dir#"$repository_root"/}"
+  elif [[ "$host_log_directory" == "$repository_root/"* ]]; then
+    printf '/workspace/%s\n' "${host_log_directory#"$repository_root"/}"
   else
-    printf '%s\n' "$raw_dir"
+    printf '%s\n' "$host_log_directory"
   fi
 }
 

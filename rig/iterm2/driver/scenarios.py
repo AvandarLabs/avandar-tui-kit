@@ -12,28 +12,14 @@ from typing import Protocol
 
 from driver.cli_args import DriverError, DriverRuntimeError, merge_probe_args
 from driver.interactive_steps import (
-    ensure_iterm_window_focused,
-    finish_interactive_clean_exit,
-    prepare_ready_interactive_session,
-    run_fenced_vnc_step,
-    run_focus_steps,
-    run_keyboard_steps,
-    run_paste_step,
-    run_pointer_steps,
-    wait_for_session_exit_and_teardown,
+    ensure_iterm_window_focused, finish_interactive_clean_exit, prepare_ready_interactive_session,
+    run_fenced_vnc_step, run_focus_steps, run_keyboard_steps, run_paste_step,
+    run_pointer_steps, wait_for_session_exit_and_teardown,
 )
-from driver.iterm_window import (
-    SessionLaunchSpec,
-    launch_iterm_session,
-    resolve_session_geometry,
-)
+from driver.iterm_window import SessionLaunchSpec, launch_iterm_session, resolve_session_geometry
 from driver.tart_vm import TartVmSession
 from driver.vnc_input import (
-    VncController,
-    WindowGeometry,
-    build_chord_tokens,
-    build_click_tokens,
-    cell_center_to_vnc_pixels,
+    VncController, WindowGeometry, build_chord_tokens, build_click_tokens, cell_center_to_vnc_pixels,
 )
 from driver.wait_helpers import read_all_jsonl_records, wait_for_probe_ready
 
@@ -60,7 +46,7 @@ class ScenarioRuntimeContext:
     extra_args: list[str] = field(default_factory=list)
     artifact_dir: Path | None = None
     is_initial_natural_scrolling: bool = True
-    _counter: int = 0
+    _session_counter: int = 0
 
     @property
     def timeout_seconds(self) -> float:
@@ -69,10 +55,10 @@ class ScenarioRuntimeContext:
 
     def next_session_id(self, prefix: str) -> str:
         """Allocates a monotonic session identifier prefixed with `prefix`."""
-        self._counter += 1
-        return f"{prefix}_{self._counter:02d}"
+        self._session_counter += 1
+        return f"{prefix}_{self._session_counter:02d}"
 
-    def guest_tmux_conf_for(self, mode: str | None) -> str | None:
+    def get_guest_tmux_config_path_from_mode(self, mode: str | None) -> str | None:
         """Resolves the staged guest tmux configuration path for `mode`, or None when direct."""
         if mode is None:
             return None
@@ -86,12 +72,11 @@ def capture_failure_screenshot_safe(
     """Captures `failure-screenshot.png` via `vnc` without masking the primary exception."""
     if vnc is None or not hasattr(vnc, "capture_screenshot"):
         return None
-    created_temp_dir: Path | None = None
-    if artifact_dir is None:
-        created_temp_dir = Path(tempfile.mkdtemp(prefix="tuikit-iterm2-failure-"))
-        target_dir = created_temp_dir
-    else:
-        target_dir = artifact_dir
+    created_temp_dir = (
+        Path(tempfile.mkdtemp(prefix="tuikit-iterm2-failure-")) if artifact_dir is None else None
+    )
+    target_dir = created_temp_dir if created_temp_dir is not None else artifact_dir
+    assert target_dir is not None
     screenshot_path = target_dir / "failure-screenshot.png"
     try:
         vnc.capture_screenshot(screenshot_path)
@@ -100,6 +85,23 @@ def capture_failure_screenshot_safe(
         if created_temp_dir is not None:
             shutil.rmtree(created_temp_dir, ignore_errors=True)
         return None
+
+
+def run_with_failure_screenshot(
+    context: object, action: Callable[[], dict[str, object]]
+) -> dict[str, object]:
+    """Runs `action` and captures `failure-screenshot.png` onto `DriverError` hints on failure."""
+    try:
+        return action()
+    except Exception as captured_error:
+        screenshot_path = capture_failure_screenshot_safe(
+            getattr(context, "vnc", None), getattr(context, "artifact_dir", None)
+        )
+        if screenshot_path is not None and isinstance(captured_error, DriverError):
+            captured_error.recovery_hint = (
+                f"{captured_error.recovery_hint} (Screenshot saved to {screenshot_path})"
+            )
+        raise
 
 
 def _archive_session_log_if_requested(log_path: Path, artifact_dir: Path | None, label: str) -> None:
@@ -117,7 +119,7 @@ def execute_batch_scenario(context: ScenarioRuntimeContext) -> dict[str, object]
         guest_program_path=context.guest_program_path,
         program_args=merge_probe_args(["--batch"], context.extra_args),
         tmux_mode=context.tmux_mode,
-        guest_tmux_conf_path=context.guest_tmux_conf_for(context.tmux_mode),
+        guest_tmux_conf_path=context.get_guest_tmux_config_path_from_mode(context.tmux_mode),
     )
     session = launch_iterm_session(context.vm, spec)
     try:
@@ -128,12 +130,11 @@ def execute_batch_scenario(context: ScenarioRuntimeContext) -> dict[str, object]
                 f"batch probe exited with code {exit_outcome['exitCode']}.",
                 "Inspect captured probe JSONL records for error details.",
             )
-        records = read_all_jsonl_records(session.host_log_path)
         return {
             "scenario": "batch",
             "exitCode": exit_outcome["exitCode"],
             "terminalStateAfterExit": exit_outcome["terminalStateAfterExit"],
-            "records": records,
+            "records": read_all_jsonl_records(session.host_log_path),
         }
     finally:
         _archive_session_log_if_requested(session.host_log_path, context.artifact_dir, session_id)
@@ -146,8 +147,7 @@ def _run_single_osc52_probe(
     tmux_mode: str | None,
     should_allow_clipboard_access: bool = False,
 ) -> dict[str, object]:
-    sentinel = "TUIKIT_OSC52_UNTOUCHED"
-    context.vm.write_guest_clipboard(sentinel)
+    context.vm.write_guest_clipboard("TUIKIT_OSC52_UNTOUCHED")
     session_id = context.next_session_id(f"osc52_{form}")
     spec = SessionLaunchSpec(
         session_id=session_id,
@@ -156,7 +156,7 @@ def _run_single_osc52_probe(
             ["--batch", "--osc52", token, "--osc52-form", form], context.extra_args
         ),
         tmux_mode=tmux_mode,
-        guest_tmux_conf_path=context.guest_tmux_conf_for(tmux_mode),
+        guest_tmux_conf_path=context.get_guest_tmux_config_path_from_mode(tmux_mode),
         should_allow_clipboard_access=should_allow_clipboard_access,
     )
     session = launch_iterm_session(context.vm, spec)
@@ -189,11 +189,10 @@ def execute_osc52_scenario(context: ScenarioRuntimeContext) -> dict[str, object]
             ("both", "tuikit-tmux-osc52-both"),
         ]
     )
-    probes = [
-        _run_single_osc52_probe(context, form, token, context.tmux_mode, False)
-        for form, token in specs
-    ]
-    return {"scenario": "osc52", "probes": probes}
+    return {
+        "scenario": "osc52",
+        "probes": [_run_single_osc52_probe(context, form, token, context.tmux_mode, False) for form, token in specs],
+    }
 
 
 def _run_kitty_enter_subrun(context: ScenarioRuntimeContext) -> dict[str, list[dict[str, object]]]:
@@ -204,7 +203,7 @@ def _run_kitty_enter_subrun(context: ScenarioRuntimeContext) -> dict[str, list[d
         guest_program_path=context.guest_program_path,
         program_args=merge_probe_args(["--push-kitty"], context.extra_args),
         tmux_mode=context.tmux_mode,
-        guest_tmux_conf_path=context.guest_tmux_conf_for(context.tmux_mode),
+        guest_tmux_conf_path=context.get_guest_tmux_config_path_from_mode(context.tmux_mode),
     )
     session = launch_iterm_session(context.vm, spec)
     try:
@@ -219,12 +218,8 @@ def _run_kitty_enter_subrun(context: ScenarioRuntimeContext) -> dict[str, list[d
         ):
             chord_tokens = build_chord_tokens("enter", (modifier_name,))
             kitty_steps[label] = run_fenced_vnc_step(
-                context.vm,
-                context.vnc,
-                session,
-                f"kitty_{label}",
-                lambda tokens=chord_tokens: context.vnc.run_tokens(tokens),
-                context.timeout_seconds,
+                context.vm, context.vnc, session, f"kitty_{label}",
+                lambda tokens=chord_tokens: context.vnc.run_tokens(tokens), context.timeout_seconds,
             )
         finish_interactive_clean_exit(context.vnc, session, context.timeout_seconds)
         return kitty_steps
@@ -234,14 +229,10 @@ def _run_kitty_enter_subrun(context: ScenarioRuntimeContext) -> dict[str, list[d
 
 def _format_window_geometry(geometry: WindowGeometry) -> dict[str, object]:
     return {
-        "windowXPt": geometry.window_x_pt,
-        "windowYPt": geometry.window_y_pt,
-        "windowWidthPt": geometry.window_width_pt,
-        "windowHeightPt": geometry.window_height_pt,
-        "cols": geometry.cols,
-        "rows": geometry.rows,
-        "cellWidthPt": geometry.cell_width_pt,
-        "cellHeightPt": geometry.cell_height_pt,
+        "windowXPt": geometry.window_x_pt, "windowYPt": geometry.window_y_pt,
+        "windowWidthPt": geometry.window_width_pt, "windowHeightPt": geometry.window_height_pt,
+        "cols": geometry.cols, "rows": geometry.rows,
+        "cellWidthPt": geometry.cell_width_pt, "cellHeightPt": geometry.cell_height_pt,
     }
 
 
@@ -250,19 +241,19 @@ def execute_interactive_scenario(context: ScenarioRuntimeContext) -> dict[str, o
     modifiers = context.vnc.calibrate_modifiers(context.vm)
     session_id = context.next_session_id("interactive")
     spec = SessionLaunchSpec(
-        session_id,
-        context.guest_program_path,
-        merge_probe_args([], context.extra_args),
+        session_id, context.guest_program_path, merge_probe_args([], context.extra_args),
         tmux_mode=context.tmux_mode,
-        guest_tmux_conf_path=context.guest_tmux_conf_for(context.tmux_mode),
+        guest_tmux_conf_path=context.get_guest_tmux_config_path_from_mode(context.tmux_mode),
     )
     session = launch_iterm_session(context.vm, spec)
     try:
         geometry = prepare_ready_interactive_session(
             context.vm, context.vnc, session, "sync_ready", context.timeout_seconds
         )
-        meta_path = session.host_meta_path
-        meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.is_file() else {}
+        metadata_path = session.host_meta_path
+        session_metadata = (
+            json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_path.is_file() else {}
+        )
         pointer_steps = run_pointer_steps(context.vm, context.vnc, session, geometry, modifiers, context.timeout_seconds)
         keyboard_steps = run_keyboard_steps(context.vm, context.vnc, session, modifiers, context.timeout_seconds)
         paste_events = run_paste_step(context.vm, context.vnc, session, modifiers, context.timeout_seconds)
@@ -271,11 +262,12 @@ def execute_interactive_scenario(context: ScenarioRuntimeContext) -> dict[str, o
     finally:
         _archive_session_log_if_requested(session.host_log_path, context.artifact_dir, session_id)
     kitty_enter_steps = _run_kitty_enter_subrun(context)
+    tmux_version = session_metadata.get("tmuxVersion")
     return {
         "scenario": "interactive",
         "calibratedModifiers": {"optionKey": modifiers.option_key, "commandKey": modifiers.command_key},
         "windowGeometry": _format_window_geometry(geometry),
-        "tmuxServerInfo": {"version": meta.get("tmuxVersion")} if meta.get("tmuxVersion") else None,
+        "tmuxServerInfo": {"version": tmux_version} if tmux_version else None,
         "pointerSteps": pointer_steps,
         "keyboardSteps": keyboard_steps,
         "pasteEvents": paste_events,
@@ -295,7 +287,7 @@ def execute_panic_scenario(context: ScenarioRuntimeContext) -> dict[str, object]
         guest_program_path=context.guest_program_path,
         program_args=merge_probe_args([], context.extra_args),
         tmux_mode=context.tmux_mode,
-        guest_tmux_conf_path=context.guest_tmux_conf_for(context.tmux_mode),
+        guest_tmux_conf_path=context.get_guest_tmux_config_path_from_mode(context.tmux_mode),
     )
     session = launch_iterm_session(context.vm, spec)
     try:
@@ -304,12 +296,8 @@ def execute_panic_scenario(context: ScenarioRuntimeContext) -> dict[str, object]
         ensure_iterm_window_focused(context.vm, context.vnc, geometry, context.timeout_seconds)
         click_x, click_y = cell_center_to_vnc_pixels(geometry, 10, 5)
         pre_click = run_fenced_vnc_step(
-            context.vm,
-            context.vnc,
-            session,
-            "pre_panic_click",
-            lambda: context.vnc.run_tokens(build_click_tokens(click_x, click_y, 1)),
-            context.timeout_seconds,
+            context.vm, context.vnc, session, "pre_panic_click",
+            lambda: context.vnc.run_tokens(build_click_tokens(click_x, click_y, 1)), context.timeout_seconds,
         )
         if not any(record.get("event_type") == "mouse" for record in pre_click):
             raise DriverRuntimeError("Expected active mouse tracking before F12 panic.", "Check M1 setup.")
@@ -335,7 +323,7 @@ def execute_passthrough_scenario(context: ScenarioRuntimeContext) -> dict[str, o
         guest_program_path=context.guest_program_path,
         program_args=list(context.extra_args),
         tmux_mode=context.tmux_mode,
-        guest_tmux_conf_path=context.guest_tmux_conf_for(context.tmux_mode),
+        guest_tmux_conf_path=context.get_guest_tmux_config_path_from_mode(context.tmux_mode),
     )
     session = launch_iterm_session(context.vm, spec)
     try:
@@ -365,6 +353,7 @@ def execute_all_scenarios(context: ScenarioRuntimeContext) -> dict[str, object]:
     }
 
 
+# Dispatch table mapping non-matrix scenario names to their execution functions.
 DEFAULT_SCENARIO_TABLE: dict[str, Callable[[ScenarioRuntimeContext], dict[str, object]]] = {
     "batch": execute_batch_scenario,
     "osc52": execute_osc52_scenario,
@@ -387,12 +376,4 @@ def run_named_scenario(
     runner = table.get(scenario_name)
     if runner is None:
         raise DriverRuntimeError(f"Unsupported scenario '{scenario_name}'.", "Pass --help for valid scenarios.")
-    try:
-        return runner(context)
-    except Exception as exc:
-        screenshot_path = capture_failure_screenshot_safe(
-            getattr(context, "vnc", None), getattr(context, "artifact_dir", None)
-        )
-        if screenshot_path is not None and isinstance(exc, DriverError):
-            exc.recovery_hint = f"{exc.recovery_hint} (Screenshot saved to {screenshot_path})"
-        raise
+    return run_with_failure_screenshot(context, lambda: runner(context))

@@ -24,22 +24,11 @@ fn linux_files_exist_without_sleep_or_em_dash() {
         ("run.sh", true),
     ] {
         let full_path = base_dir.join(relative_name);
-        let contents = fs::read_to_string(&full_path)
-            .unwrap_or_else(|err| panic!("{} must be readable: {err}", full_path.display()));
-        if is_shell_script {
-            assert!(
-                contents.starts_with("#!/usr/bin/env bash"),
-                "{relative_name} must start with bash shebang"
-            );
-        }
-        assert!(
-            !contents.contains("sleep"),
-            "{relative_name} must not contain sleep"
-        );
-        assert!(
-            !contents.contains('\u{2014}'),
-            "{relative_name} must not contain em dashes"
-        );
+        let contents = fs::read_to_string(&full_path).unwrap_or_else(|read_error| {
+            panic!("{} must be readable: {read_error}", full_path.display())
+        });
+        assert!(!is_shell_script || contents.starts_with("#!/usr/bin/env bash"));
+        assert!(!contents.contains("sleep") && !contents.contains('\u{2014}'));
     }
 }
 
@@ -299,7 +288,7 @@ esac
     fn assert_docker_run_contract(run_line: &str) {
         let fields: Vec<&str> = run_line.split('\t').collect();
         let workspace_mount = format!("{}:/workspace", repository_root().display());
-        for required_flag in [
+        let required_flags = [
             "--rm",
             "--init",
             "--shm-size=1g",
@@ -309,54 +298,65 @@ esac
             "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright",
             "NO_COLOR=1",
             "RIG_XTERM_LOG_DIR=/tmp/mock-logs",
-        ] {
+        ];
+        for required_flag in required_flags {
             assert!(fields.contains(&required_flag), "missing {required_flag}");
         }
-        assert!(
-            fields
-                .iter()
-                .any(|item| item.ends_with(":/var/cache/tuikit/cargo-target"))
-        );
-        assert!(
-            fields
-                .iter()
-                .any(|item| item.ends_with(":/workspace/rig/xterm/node_modules"))
-        );
+        for mount_suffix in [
+            ":/var/cache/tuikit/cargo-target",
+            ":/workspace/rig/xterm/node_modules",
+        ] {
+            assert!(fields.iter().any(|item| item.ends_with(mount_suffix)));
+        }
         assert!(run_line.ends_with("\t./rig/xterm/run.sh\t--help"));
     }
 
     #[test]
-    fn mock_docker_builds_on_miss_and_streams_clean_stdout() {
-        let fixture = MockDockerFixture::create("build-and-run");
+    fn mock_docker_builds_missing_image_and_removes_temporary_context_dir() {
+        let fixture = MockDockerFixture::create("build-on-miss");
         let output = fixture.run(
             &["./rig/xterm/run.sh", "--help"],
             &[
                 ("MOCK_DOCKER_IMAGE_MISSING", "1"),
                 ("MOCK_DOCKER_VOLUME_MISSING", "1"),
+                ("NO_COLOR", "1"),
+            ],
+        );
+        assert!(output.status.success());
+        assert!(!fixture.has_leftover_context_dirs());
+        let stderr_text = String::from_utf8(output.stderr).expect("UTF-8");
+        assert!(stderr_text.contains("FROM rust:1.88-bookworm"));
+        assert!(
+            fixture
+                .read_calls()
+                .lines()
+                .any(|line| line.starts_with("CALL\tbuild\t"))
+        );
+    }
+
+    #[test]
+    fn mock_docker_forwards_clean_stdout_and_log_dir_mount_contract() {
+        let fixture = MockDockerFixture::create("stream-stdout");
+        let output = fixture.run(
+            &["./rig/xterm/run.sh", "--help"],
+            &[
                 ("MOCK_DOCKER_STDOUT", "{\"probe\":\"ok\"}"),
                 ("NO_COLOR", "1"),
                 ("RIG_XTERM_LOG_DIR", "/tmp/mock-logs"),
             ],
         );
         assert!(output.status.success());
-        assert!(!fixture.has_leftover_context_dirs());
         assert_eq!(
             String::from_utf8(output.stdout).expect("UTF-8"),
             "{\"probe\":\"ok\"}\n"
         );
-        let stderr_text = String::from_utf8(output.stderr).expect("UTF-8");
-        assert!(stderr_text.contains("FROM rust:1.88-bookworm"));
-        let calls_text = fixture.read_calls();
-        assert!(
-            calls_text
-                .lines()
-                .any(|line| line.starts_with("CALL\tbuild\t"))
-        );
-        let main_run_line = calls_text
+        let main_run_line = fixture
+            .read_calls()
             .lines()
             .rfind(|line| line.starts_with("CALL\trun\t"))
-            .expect("expected docker run invocation");
-        assert_docker_run_contract(main_run_line);
+            .expect("expected docker run invocation")
+            .to_owned();
+        assert_docker_run_contract(&main_run_line);
     }
 
     #[test]

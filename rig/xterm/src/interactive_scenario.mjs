@@ -1,15 +1,11 @@
 /**
- * Interactive Layer 3 / Layer 4 scenario driver using condition-based FIFO `F2` key fences.
+ * Interactive scenario driver orchestrating pointer, keyboard, paste, focus,
+ * and Kitty Enter checks synchronized via FIFO `F2` key fences.
  */
 
 import assert from 'node:assert/strict';
 
-import {
-  clickCell,
-  dragAcrossCells,
-  movePointerAcrossCells,
-  wheelAtCell,
-} from './cell_coords.mjs';
+import { clickCell, dragAcrossCells, movePointerAcrossCells, wheelAtCell } from './cell_coords.mjs';
 import { readCompleteJsonLines, readJsonLines, waitForLogRecords, waitForProbeReady } from './ready_waiter.mjs';
 
 function isFenceKeyRecord(record) {
@@ -27,8 +23,10 @@ async function sendFenceKey(page, shouldPreserveBlur) {
   }
   await page.evaluate(() => {
     const helperTextarea = document.querySelector('.xterm-helper-textarea');
-    const init = { key: 'F2', code: 'F2', keyCode: 113, which: 113, bubbles: true, cancelable: true };
-    helperTextarea?.dispatchEvent(new KeyboardEvent('keydown', init));
+    const fenceKeyEventOptions = {
+      key: 'F2', code: 'F2', keyCode: 113, which: 113, bubbles: true, cancelable: true,
+    };
+    helperTextarea?.dispatchEvent(new KeyboardEvent('keydown', fenceKeyEventOptions));
   });
 }
 
@@ -36,14 +34,13 @@ function waitForFenceSlice(stepContext, startRecordCount, stepLabel) {
   return waitForLogRecords(
     stepContext.logPath,
     (records) => {
-      for (let index = startRecordCount; index < records.length; index += 1) {
-        if (isFencePressRecord(records[index])) {
-          return records
-            .slice(startRecordCount, index)
+      const trailingRecords = records.slice(startRecordCount);
+      const fenceOffset = trailingRecords.findIndex(isFencePressRecord);
+      return fenceOffset === -1
+        ? null
+        : trailingRecords
+            .slice(0, fenceOffset)
             .filter((record) => record.kind === 'event' && !isFenceKeyRecord(record));
-        }
-      }
-      return null;
     },
     {
       timeoutMs: stepContext.timeoutMs,
@@ -53,12 +50,7 @@ function waitForFenceSlice(stepContext, startRecordCount, stepLabel) {
   );
 }
 
-async function runFencedStep(
-  stepContext,
-  stepLabel,
-  performAction,
-  { shouldPreserveBlur = false } = {},
-) {
+async function runFencedStep(stepContext, stepLabel, performAction, { shouldPreserveBlur = false } = {}) {
   const startRecordCount = readCompleteJsonLines(stepContext.logPath).length;
   await performAction();
   await sendFenceKey(stepContext.bridge.page, shouldPreserveBlur);
@@ -75,17 +67,26 @@ function hasMouseRecord(records, mouseKind, column, row) {
   );
 }
 
-/** Returns `true` when `tmuxVersion` identifies a `tmux 3.3` server (`tmux 3.3`, `tmux 3.3a`). */
+/**
+ * Checks whether `tmuxVersion` identifies a `tmux 3.3` server (`tmux 3.3`,
+ * `tmux 3.3a`) so handshake and right-click assertions apply 3.3 rules.
+ */
 export function isTmux33Version(tmuxVersion) {
   return /^tmux 3\.3(?:[^0-9]|$)/.test(tmuxVersion ?? '');
 }
 
-/** Returns `true` unless the caller explicitly disables outer mouse expectations for stub tests. */
+/**
+ * Checks whether interactive pointer assertions should expect mouse events,
+ * returning `false` only when disabled explicitly by stock-tmux or stub tests.
+ */
 export function shouldExpectOuterMouseEvents(stepContext) {
   return stepContext?.shouldExpectMouseEvents !== false;
 }
 
-/** Verifies pointer step logs across direct `xterm.js`, `tmux 3.3`, `tmux 3.8`, or mouse-off stubs. */
+/**
+ * Asserts recorded pointer step events match expected hover, click, drag, and
+ * wheel invariants across direct xterm.js, tmux 3.3/3.8, or mouse-off runs.
+ */
 export function assertPointerStepResults(pointerSteps, options = {}) {
   const { shouldExpectMouseEvents = true, tmuxVersion = null } = options;
   if (process.platform !== 'win32') {
@@ -146,13 +147,7 @@ async function runModifiedPointerSteps(stepContext, terminalState) {
       clickCell(page, terminalState, 12, 5, { modifiers: ['Alt'] }),
     ),
     alt_drag: await runFencedStep(stepContext, 'alt_drag', () =>
-      dragAcrossCells(
-        page,
-        terminalState,
-        { column: 12, row: 8 },
-        { column: 16, row: 8 },
-        { modifiers: ['Alt'] },
-      ),
+      dragAcrossCells(page, terminalState, { column: 12, row: 8 }, { column: 16, row: 8 }, { modifiers: ['Alt'] }),
     ),
     ctrl_click: await runFencedStep(stepContext, 'ctrl_click', () =>
       clickCell(page, terminalState, 13, 5, { modifiers: ['Control'] }),
@@ -177,19 +172,12 @@ async function runPointerSteps(stepContext, terminalState) {
 async function runKeyboardSteps(stepContext) {
   const page = stepContext.bridge.page;
   const chordTable = [
-    ['arrow_up', 'ArrowUp'],
-    ['f1', 'F1'],
-    ['ctrl_a', 'Control+a'],
-    ['alt_a', 'Alt+a'],
-    ['alt_enter', 'Alt+Enter'],
-    ['shift_enter', 'Shift+Enter'],
-    ['ctrl_enter', 'Control+Enter'],
+    ['arrow_up', 'ArrowUp'], ['f1', 'F1'], ['ctrl_a', 'Control+a'], ['alt_a', 'Alt+a'],
+    ['alt_enter', 'Alt+Enter'], ['shift_enter', 'Shift+Enter'], ['ctrl_enter', 'Control+Enter'],
   ];
   const keyboardSteps = {};
   for (const [stepName, keyChord] of chordTable) {
-    keyboardSteps[stepName] = await runFencedStep(stepContext, stepName, () =>
-      page.keyboard.press(keyChord),
-    );
+    keyboardSteps[stepName] = await runFencedStep(stepContext, stepName, () => page.keyboard.press(keyChord));
   }
   assert.ok(keyboardSteps.arrow_up.some((record) => record.code === 'up'), 'missing ArrowUp key');
   assert.ok(keyboardSteps.f1.some((record) => record.code === 'f1'), 'missing F1 key');
@@ -205,30 +193,25 @@ const EXPECTED_PASTE_KEY_CODES = Object.freeze([
 ]);
 
 /**
- * Returns `true` once `recordsAfterStart` contains either a bracketed `paste` event or the full
- * `'alpha'` + `'beta'` key-press sequence emitted when bracketed paste mode is disabled.
+ * Checks whether `recordsAfterStart` contains a bracketed `paste` event or the
+ * full `'alpha'` + `'beta'` key-press sequence before sending the `F2` fence.
  */
 export function hasDeliveredPastePayload(recordsAfterStart) {
-  let matchedKeyCount = 0;
-  for (const record of recordsAfterStart) {
-    if (record?.kind !== 'event') {
-      continue;
+  const eventRecords = recordsAfterStart.filter((record) => record?.kind === 'event');
+  if (eventRecords.some((record) => record.event_type === 'paste')) {
+    return true;
+  }
+  const matchedKeyCount = eventRecords.reduce((matchedCount, record) => {
+    if (matchedCount === EXPECTED_PASTE_KEY_CODES.length) {
+      return matchedCount;
     }
-    if (record.event_type === 'paste') {
-      return true;
-    }
-    if (
+    const isExpectedPress =
       record.event_type === 'key' &&
       record.key_kind === 'press' &&
-      record.code === EXPECTED_PASTE_KEY_CODES[matchedKeyCount]
-    ) {
-      matchedKeyCount += 1;
-      if (matchedKeyCount === EXPECTED_PASTE_KEY_CODES.length) {
-        return true;
-      }
-    }
-  }
-  return false;
+      record.code === EXPECTED_PASTE_KEY_CODES[matchedCount];
+    return isExpectedPress ? matchedCount + 1 : matchedCount;
+  }, 0);
+  return matchedKeyCount === EXPECTED_PASTE_KEY_CODES.length;
 }
 
 async function runPasteStep(stepContext, terminalStateAtReady) {
@@ -249,8 +232,7 @@ async function runPasteStep(stepContext, terminalStateAtReady) {
     assert.ok(
       pasteEvents.some(
         (record) =>
-          record.event_type === 'paste' &&
-          (record.text === 'alpha\rbeta' || record.text === 'alpha\nbeta'),
+          record.event_type === 'paste' && (record.text === 'alpha\rbeta' || record.text === 'alpha\nbeta'),
       ),
       'expected bracketed paste event with text "alpha\\rbeta" or "alpha\\nbeta"',
     );
@@ -294,10 +276,7 @@ async function finishInteractiveCleanExit(stepContext) {
   assert.ok(
     allRecords.some(
       (record) =>
-        record.kind === 'event' &&
-        record.event_type === 'key' &&
-        record.code === 'char:c' &&
-        record.ctrl,
+        record.kind === 'event' && record.event_type === 'key' && record.code === 'char:c' && record.ctrl,
     ),
     'missing clean-exit Ctrl+C key event record',
   );
@@ -310,11 +289,11 @@ async function finishInteractiveCleanExit(stepContext) {
   return { exitCode: exitOutcome.exitCode, exitReason: 'clean_key_exit', terminalStateAfterExit };
 }
 
-/** Waits until `xterm.js` receives the outer terminal mode sequences expected after `<log>.ready`. */
-export async function waitForReadyOuterTerminalModes(
-  stepContext,
-  targetPlatform = process.platform,
-) {
+/**
+ * Waits until browser `xterm.js` enables the outer mouse or bracketed-paste
+ * mode expected after `.ready` before scenarios inject synthetic input.
+ */
+export async function waitForReadyOuterTerminalModes(stepContext, targetPlatform = process.platform) {
   const shouldExpectMouse = shouldExpectOuterMouseEvents(stepContext);
   if (!shouldExpectMouse && targetPlatform === 'win32') {
     return;
@@ -328,11 +307,7 @@ export async function waitForReadyOuterTerminalModes(
 }
 
 async function prepareInteractiveSubrun(stepContext, fenceLabel) {
-  await waitForProbeReady(
-    stepContext.logPath,
-    stepContext.timeoutMs,
-    stepContext.session.exitPromise,
-  );
+  await waitForProbeReady(stepContext.logPath, stepContext.timeoutMs, stepContext.session.exitPromise);
   await waitForReadyOuterTerminalModes(stepContext);
   const terminalStateAtReady = await stepContext.bridge.getTerminalState(stepContext.timeoutMs);
   await runFencedStep(stepContext, fenceLabel, async () => {});
@@ -374,9 +349,7 @@ async function runKittyEnterSubrun(runtime, withManagedSession) {
     const page = stepContext.bridge.page;
     const kittyEnterSteps = {};
     for (const [stepName, chord] of [
-      ['alt_enter', 'Alt+Enter'],
-      ['shift_enter', 'Shift+Enter'],
-      ['ctrl_enter', 'Control+Enter'],
+      ['alt_enter', 'Alt+Enter'], ['shift_enter', 'Shift+Enter'], ['ctrl_enter', 'Control+Enter'],
     ]) {
       kittyEnterSteps[stepName] = await runFencedStep(stepContext, `kitty_${stepName}`, () =>
         page.keyboard.press(chord),
@@ -388,8 +361,9 @@ async function runKittyEnterSubrun(runtime, withManagedSession) {
 }
 
 /**
- * Executes Sub-run A (pointer, keyboard, paste, focus, clean teardown) and Sub-run B
- * (`--push-kitty` Enter modifier check) for `capability_probe`.
+ * Executes the standard interactive pass (pointer, keyboard, paste, focus, and
+ * clean teardown) followed by the `--push-kitty` Enter-modifier pass, returning
+ * the combined `{ scenario: 'interactive', ... }` payload.
  */
 export async function executeInteractiveScenario(runtime, withManagedSession) {
   const primaryResult = await runPrimaryInteractiveSubrun(runtime, withManagedSession);

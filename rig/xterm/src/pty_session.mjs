@@ -1,6 +1,6 @@
 /**
- * Rule 5 PTY coordinator (`docs/testing.md`): refuses to spawn a child process until
- * the browser terminal is already listening, and attaches output/input handlers synchronously.
+ * PTY session coordinator refusing to spawn a child process until the browser
+ * terminal bridge is already listening and wiring bidirectional I/O streams.
  */
 
 import fs from 'node:fs';
@@ -45,41 +45,41 @@ function ensureMacOsSpawnHelperExecutable(platform) {
     path.join(NODE_PTY_ROOT, 'prebuilds', `darwin-${process.arch}`, 'spawn-helper'),
     path.join(NODE_PTY_ROOT, 'build', 'Release', 'spawn-helper'),
   ];
-  for (const helperPath of candidatePaths) {
+  candidatePaths.forEach((helperPath) => {
     if (fs.existsSync(helperPath)) {
       const currentMode = fs.statSync(helperPath).mode;
       if ((currentMode & 0o111) === 0) {
         fs.chmodSync(helperPath, 0o755);
       }
     }
-  }
+  });
 }
 
 /**
- * Builds a clean PTY environment stripping inherited multiplexer and outer-terminal variables
- * from `baseEnv`, defaulting `TERM` to `xterm-256color`, and applying explicit `envOverrides`.
+ * Strips inherited outer-terminal and multiplexer variables from `baseEnv`,
+ * sets `TERM=xterm-256color`, and applies `envOverrides` for PTY child spawns.
  */
 export function buildSanitizedPtyEnv(baseEnv = process.env, envOverrides = {}) {
   const sourceEnv = baseEnv ?? process.env;
-  const sanitizedEnv = {};
-  for (const [envKey, envValue] of Object.entries(sourceEnv)) {
-    if (
-      envValue !== undefined &&
-      envValue !== null &&
-      !STRIPPED_OUTER_ENV_KEYS.has(envKey.toUpperCase())
-    ) {
-      sanitizedEnv[envKey] = String(envValue);
-    }
-  }
+  const sanitizedEnv = Object.fromEntries(
+    Object.entries(sourceEnv)
+      .filter(
+        ([envKey, envValue]) =>
+          envValue !== undefined &&
+          envValue !== null &&
+          !STRIPPED_OUTER_ENV_KEYS.has(envKey.toUpperCase()),
+      )
+      .map(([envKey, envValue]) => [envKey, String(envValue)]),
+  );
   sanitizedEnv.TERM = 'xterm-256color';
   if (envOverrides && typeof envOverrides === 'object') {
-    for (const [overrideKey, overrideValue] of Object.entries(envOverrides)) {
+    Object.entries(envOverrides).forEach(([overrideKey, overrideValue]) => {
       if (overrideValue === undefined || overrideValue === null) {
         delete sanitizedEnv[overrideKey];
       } else {
         sanitizedEnv[overrideKey] = String(overrideValue);
       }
-    }
+    });
   }
   return sanitizedEnv;
 }
@@ -171,8 +171,8 @@ function normalizeSessionOptions(options) {
 }
 
 /**
- * Spawns `command` inside `node-pty` attached to an already-listening `bridge`.
- * Throws synchronously if `bridge.isTerminalReady !== true` (Rule 5).
+ * Spawns `options.command` inside `node-pty` wired to an already-ready browser
+ * `bridge`, returning `{ pid, exitPromise, waitForExit, dispose }`.
  */
 export function startPtySession(options) {
   const config = normalizeSessionOptions(options);
@@ -211,9 +211,9 @@ export function startPtySession(options) {
 }
 
 /**
- * Coordinates browser bridge readiness and PTY child startup (Rule 5).
- * When `bridge` is supplied, asserts `bridge.isTerminalReady === true`; when omitted,
- * launches a managed headless browser bridge and waits for `terminal_ready` before spawning.
+ * Ensures a browser `bridge` has reached `terminal_ready` (starting a managed
+ * bridge when omitted) before spawning `startPtySession`, returning a combined
+ * `{ bridge, ptySession, exitPromise, waitForExit, dispose }` handle.
  */
 export async function startBridgeAndPtySession(options) {
   const config = normalizeSessionOptions(options);
