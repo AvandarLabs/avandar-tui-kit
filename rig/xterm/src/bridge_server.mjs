@@ -280,6 +280,8 @@ function createBridgeController(bridgeState, httpServer, socketServer, port, col
     clearOsc52Payloads: () => bridgeState.page.evaluate(() => window.__clearOsc52Payloads()),
     pasteText: (textToPaste) =>
       bridgeState.page.evaluate((value) => window.__pasteText(value), textToPaste),
+    blurTerminal: () => bridgeState.page.evaluate(() => window.__blurTerminal()),
+    focusTerminal: () => bridgeState.page.evaluate(() => window.__focusTerminal()),
     close: () => teardownBridgeResources(bridgeState, httpServer, socketServer),
   };
 }
@@ -310,6 +312,10 @@ export async function createBridgeServer({ cols = 100, rows = 30 } = {}) {
     socket.on('close', () => {
       if (bridgeState.activeSocket === socket) {
         bridgeState.activeSocket = null;
+        rejectAllAckWaiters(
+          bridgeState,
+          new Error('Browser terminal WebSocket closed unexpectedly.'),
+        );
       }
     });
   });
