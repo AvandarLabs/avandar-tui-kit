@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 import { VALID_TMUX_CONFIGS } from './args.mjs';
 import { runHarnessCliMain } from './harness.mjs';
+import { isTmux33Version } from './interactive_scenario.mjs';
 import { buildSanitizedPtyEnv, startPtySession } from './pty_session.mjs';
 
 const MODULE_FILE_PATH = fileURLToPath(import.meta.url);
@@ -65,10 +66,7 @@ function removeResidualSocketFiles(socketName, sanitizedEnv) {
 function killTmuxServer(socketName, sanitizedEnv) {
   ACTIVE_TMUX_SERVERS.delete(socketName);
   syncSignalCleanupListeners();
-  spawnSync('tmux', ['-L', socketName, 'kill-server'], {
-    stdio: 'ignore',
-    env: sanitizedEnv,
-  });
+  spawnSync('tmux', ['-L', socketName, 'kill-server'], { stdio: 'ignore', env: sanitizedEnv });
   removeResidualSocketFiles(socketName, sanitizedEnv);
 }
 
@@ -87,18 +85,13 @@ function registerActiveTmuxServer(socketName, sanitizedEnv) {
   syncSignalCleanupListeners();
 }
 
-/**
- * Builds a unique private `tmux -L` socket name short enough for Unix `sun_path` limits.
- */
+/** Builds a unique private `tmux -L` socket name short enough for Unix `sun_path` limits. */
 export function buildUniqueTmuxSocketName() {
   sessionSequenceCounter += 1;
-  const timestampBase36 = Date.now().toString(36);
-  return `tuikit_xterm_${process.pid}_${timestampBase36}_${sessionSequenceCounter}`;
+  return `tuikit_xterm_${process.pid}_${Date.now().toString(36)}_${sessionSequenceCounter}`;
 }
 
-/**
- * Resolves `rig/tmux/<tmuxMode>.conf` without altering `stock.conf` or `full.conf`.
- */
+/** Resolves `rig/tmux/<tmuxMode>.conf` without altering `stock.conf` or `full.conf`. */
 export function resolveTmuxConfigPath(tmuxMode) {
   if (!VALID_TMUX_CONFIGS.includes(tmuxMode)) {
     const invalidModeError = new Error(
@@ -116,12 +109,8 @@ export function resolveTmuxConfigPath(tmuxMode) {
   return configPath;
 }
 
-function buildPosixShellToken(rawToken) {
-  return `'${String(rawToken).replaceAll("'", "'\\''")}'`;
-}
-
 function buildPosixShellCommand(tokens) {
-  return tokens.map((token) => buildPosixShellToken(token)).join(' ');
+  return tokens.map((token) => `'${String(token).replaceAll("'", "'\\''")}'`).join(' ');
 }
 
 function writePaneWrapperScript(scratchDir) {
@@ -130,11 +119,10 @@ function writePaneWrapperScript(scratchDir) {
   const paneExitPath = path.join(scratchDir, 'pane.exit');
   const scriptLines = [
     '#!/bin/sh',
-    'pane_exit_tmp=$1',
-    'pane_exit_file=$2',
-    'shift 2',
-    '"$@"',
-    'pane_status=$?',
+    'tmux_socket=$1; pane_exit_tmp=$2; pane_exit_file=$3; shift 3',
+    'tmux -L "$tmux_socket" wait-for -L __rig_client_ready',
+    'tmux -L "$tmux_socket" wait-for -U __rig_client_ready',
+    '"$@"; pane_status=$?',
     'printf "%s\\n" "$pane_status" > "$pane_exit_tmp"',
     'mv "$pane_exit_tmp" "$pane_exit_file"',
     'exit "$pane_status"',
@@ -146,25 +134,11 @@ function writePaneWrapperScript(scratchDir) {
 }
 
 function startDetachedKeeperSession({ socketName, configPath, cols, rows, sanitizedEnv }) {
-  const keeperOutcome = spawnSync(
-    'tmux',
-    [
-      '-L',
-      socketName,
-      '-f',
-      configPath,
-      'new-session',
-      '-d',
-      '-s',
-      '__rig_keeper',
-      '-x',
-      String(cols),
-      '-y',
-      String(rows),
-      'cat',
-    ],
-    { env: sanitizedEnv, encoding: 'utf8' },
-  );
+  const keeperArgs = [
+    '-L', socketName, '-f', configPath,
+    'new-session', '-d', '-s', '__rig_keeper', '-x', String(cols), '-y', String(rows), 'cat',
+  ];
+  const keeperOutcome = spawnSync('tmux', keeperArgs, { env: sanitizedEnv, encoding: 'utf8' });
   if (keeperOutcome.error) {
     killTmuxServer(socketName, sanitizedEnv);
     const missingTmuxError = new Error(`Failed to invoke tmux: ${keeperOutcome.error.message}`);
@@ -185,8 +159,7 @@ function readRecordedPaneExitCode(paneExitPath, fallbackExitCode) {
   if (!fs.existsSync(paneExitPath)) {
     return fallbackExitCode;
   }
-  const rawContent = fs.readFileSync(paneExitPath, 'utf8').trim();
-  const parsedExitCode = Number.parseInt(rawContent, 10);
+  const parsedExitCode = Number.parseInt(fs.readFileSync(paneExitPath, 'utf8').trim(), 10);
   return Number.isInteger(parsedExitCode) ? parsedExitCode : fallbackExitCode;
 }
 
@@ -198,8 +171,7 @@ function readTmuxPasteBuffer(socketName, sanitizedEnv) {
   if (showOutcome.status === 0) {
     return showOutcome.stdout;
   }
-  const stderrLower = (showOutcome.stderr ?? '').toLowerCase();
-  if (stderrLower.includes('no buffers')) {
+  if ((showOutcome.stderr ?? '').toLowerCase().includes('no buffers')) {
     return null;
   }
   throw new Error(
@@ -210,24 +182,18 @@ function readTmuxPasteBuffer(socketName, sanitizedEnv) {
 function queryTmuxServerInfo(socketName, sanitizedEnv) {
   const versionOutcome = spawnSync('tmux', ['-V'], { env: sanitizedEnv, encoding: 'utf8' });
   const versionText = (versionOutcome.stdout ?? '').trim() || 'tmux';
-  const mouseOptionOutcome = spawnSync('tmux', ['-L', socketName, 'show-options', '-g', 'mouse'], {
+  const mouseOutcome = spawnSync('tmux', ['-L', socketName, 'show-options', '-g', 'mouse'], {
     env: sanitizedEnv,
     encoding: 'utf8',
   });
-  const mouseLine = (mouseOptionOutcome.stdout ?? '').trim();
   return Object.freeze({
     version: versionText,
-    isMouseEnabled: mouseLine === 'mouse on',
+    isMouseEnabled: (mouseOutcome.stdout ?? '').trim() === 'mouse on',
   });
 }
 
 function buildTmuxSessionHandle({
-  ptySession,
-  socketName,
-  tmuxServerInfo,
-  sanitizedEnv,
-  paneExitPath,
-  ownedScratchDir,
+  ptySession, socketName, tmuxServerInfo, sanitizedEnv, paneExitPath, ownedScratchDir,
 }) {
   let hasDisposed = false;
   return {
@@ -259,58 +225,115 @@ function buildTmuxSessionHandle({
   };
 }
 
-function preparePaneLaunchPlan(options) {
+function preparePaneLaunchPlan(options, socketName) {
   const ownedScratchDir = options.scratchDir
     ? null
     : fs.mkdtempSync(path.join(os.tmpdir(), 'tuikit-tmux-'));
   const activeScratchDir = options.scratchDir ?? ownedScratchDir;
   const { wrapperPath, paneExitTmpPath, paneExitPath } = writePaneWrapperScript(activeScratchDir);
   const paneCommand = buildPosixShellCommand([
-    '/bin/sh',
-    wrapperPath,
-    paneExitTmpPath,
-    paneExitPath,
-    options.programPath,
-    ...(options.programArgs ?? []),
+    '/bin/sh', wrapperPath, socketName, paneExitTmpPath, paneExitPath,
+    options.programPath, ...(options.programArgs ?? []),
   ]);
   return { ownedScratchDir, paneExitPath, paneCommand };
 }
 
-/**
- * Starts `<programPath>` inside an isolated `tmux -L <socket>` server attached to `bridge` via `node-pty`.
- */
+function createHandshakeReplyWaiter(bridge, expectedReplyPrefix, timeoutMs) {
+  let accumulatedInput = '';
+  let resolveReply = null;
+  let rejectReply = null;
+  const replyPromise = new Promise((resolve, reject) => {
+    resolveReply = resolve;
+    rejectReply = reject;
+  });
+  const timer = setTimeout(() => {
+    cleanup();
+    rejectReply(new Error(`Timed out after ${timeoutMs}ms waiting for tmux client handshake`));
+  }, timeoutMs);
+  const unsubscribe = bridge.onTerminalInput((chunk) => {
+    accumulatedInput += chunk;
+    if (accumulatedInput.includes(expectedReplyPrefix)) {
+      cleanup();
+      resolveReply();
+    }
+  });
+  function cleanup() {
+    clearTimeout(timer);
+    unsubscribe();
+  }
+  return { replyPromise, cleanup };
+}
+
+async function completeTmuxClientHandshake({
+  bridge, ptySession, handshakeWaiter, socketName, sanitizedEnv, timeoutMs,
+}) {
+  const unexpectedExit = ptySession.exitPromise.then(({ exitCode }) => {
+    throw new Error(`tmux client exited (${exitCode}) before outer handshake completed`);
+  });
+  try {
+    await Promise.race([handshakeWaiter.replyPromise, unexpectedExit]);
+    await bridge.flushTerminalWrites(timeoutMs);
+    spawnSync('tmux', ['-L', socketName, 'wait-for', '-U', '__rig_client_ready'], {
+      env: sanitizedEnv,
+      stdio: 'ignore',
+    });
+  } finally {
+    handshakeWaiter.cleanup();
+  }
+}
+
+async function attachGatedTmuxClient({
+  options, socketName, paneCommand, tmuxServerInfo, sanitizedEnv, cols, rows, timeoutMs,
+}) {
+  spawnSync('tmux', ['-L', socketName, 'wait-for', '-L', '__rig_client_ready'], {
+    env: sanitizedEnv,
+    stdio: 'ignore',
+  });
+  const ptySession = startPtySession({
+    command: 'tmux',
+    args: ['-L', socketName, 'new-session', '-s', 'probe', paneCommand],
+    cols,
+    rows,
+    cwd: options.cwd ?? process.cwd(),
+    env: options.env ?? process.env,
+    envOverrides: options.envOverrides ?? {},
+    bridge: options.bridge,
+    timeoutMs,
+  });
+  const expectedPrefix = isTmux33Version(tmuxServerInfo.version) ? '\x1b[>' : '\x1b]11;rgb:';
+  const handshakeWaiter = createHandshakeReplyWaiter(options.bridge, expectedPrefix, timeoutMs);
+  try {
+    await completeTmuxClientHandshake({
+      bridge: options.bridge, ptySession, handshakeWaiter, socketName, sanitizedEnv, timeoutMs,
+    });
+    return ptySession;
+  } catch (handshakeError) {
+    ptySession.dispose();
+    throw handshakeError;
+  }
+}
+
+/** Starts `<programPath>` inside an isolated `tmux -L <socket>` server attached to `bridge`. */
 export async function createTmuxSession(options) {
   if (!options?.bridge || options.bridge.isTerminalReady !== true) {
     throw new Error(RULE_5_ERROR_MESSAGE);
   }
   const cols = options.cols ?? 100;
   const rows = options.rows ?? 30;
+  const timeoutMs = options.timeoutMs ?? 20000;
   const configPath = resolveTmuxConfigPath(options.tmuxMode);
   const sanitizedEnv = buildSanitizedPtyEnv(options.env ?? process.env, options.envOverrides ?? {});
-  const { ownedScratchDir, paneExitPath, paneCommand } = preparePaneLaunchPlan(options);
   const socketName = buildUniqueTmuxSocketName();
+  const { ownedScratchDir, paneExitPath, paneCommand } = preparePaneLaunchPlan(options, socketName);
   try {
     registerActiveTmuxServer(socketName, sanitizedEnv);
     startDetachedKeeperSession({ socketName, configPath, cols, rows, sanitizedEnv });
     const tmuxServerInfo = queryTmuxServerInfo(socketName, sanitizedEnv);
-    const ptySession = startPtySession({
-      command: 'tmux',
-      args: ['-L', socketName, 'new-session', '-s', 'probe', paneCommand],
-      cols,
-      rows,
-      cwd: options.cwd ?? process.cwd(),
-      env: options.env ?? process.env,
-      envOverrides: options.envOverrides ?? {},
-      bridge: options.bridge,
-      timeoutMs: options.timeoutMs ?? 20000,
+    const ptySession = await attachGatedTmuxClient({
+      options, socketName, paneCommand, tmuxServerInfo, sanitizedEnv, cols, rows, timeoutMs,
     });
     return buildTmuxSessionHandle({
-      ptySession,
-      socketName,
-      tmuxServerInfo,
-      sanitizedEnv,
-      paneExitPath,
-      ownedScratchDir,
+      ptySession, socketName, tmuxServerInfo, sanitizedEnv, paneExitPath, ownedScratchDir,
     });
   } catch (startupError) {
     killTmuxServer(socketName, sanitizedEnv);
