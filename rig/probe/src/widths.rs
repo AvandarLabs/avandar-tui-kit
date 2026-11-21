@@ -160,7 +160,7 @@ mod tests {
             .iter()
             .filter(|entry| entry.category == "toolkit_glyph")
             .collect();
-        assert!(!toolkit_samples.is_empty());
+        assert_eq!(toolkit_samples.len(), 17);
         for entry in toolkit_samples {
             let mut characters = entry.text.chars();
             let scalar = characters.next().expect("non-empty glyph");
