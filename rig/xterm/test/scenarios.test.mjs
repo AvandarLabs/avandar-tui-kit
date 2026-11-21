@@ -23,6 +23,7 @@ import { cleanupManagedSession, mergeProbeArgs } from '../src/scenarios.mjs';
 const TEST_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const XTERM_ROOT = path.resolve(TEST_DIRECTORY, '..');
 const RUN_SCRIPT_PATH = path.join(XTERM_ROOT, 'run.sh');
+const HARNESS_SCRIPT_PATH = path.join(XTERM_ROOT, 'src', 'harness.mjs');
 
 const SAMPLE_TERMINAL_STATE = Object.freeze({
   cols: 100,
@@ -34,7 +35,9 @@ const SAMPLE_TERMINAL_STATE = Object.freeze({
 });
 
 function runHarnessCli(cliArgs, options = {}) {
-  return spawnSync('bash', [RUN_SCRIPT_PATH, ...cliArgs], {
+  const isWin = process.platform === 'win32';
+  const cliTarget = isWin ? [HARNESS_SCRIPT_PATH, ...cliArgs] : [RUN_SCRIPT_PATH, ...cliArgs];
+  return spawnSync(isWin ? process.execPath : 'bash', cliTarget, {
     cwd: options.cwd ?? XTERM_ROOT,
     env: { ...process.env, ...options.envOverrides },
     encoding: 'utf8',

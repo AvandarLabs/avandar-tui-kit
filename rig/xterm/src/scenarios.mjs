@@ -233,6 +233,7 @@ async function executeOsc52Scenario(runtime) {
       : [
           { form: 'plain', token: 'tuikit-tmux-osc52-plain' },
           { form: 'tmux', token: 'tuikit-tmux-osc52-wrapped' },
+          { form: 'both', token: 'tuikit-tmux-osc52-both' },
         ];
   const probes = [];
   for (const spec of probeSpecs) {

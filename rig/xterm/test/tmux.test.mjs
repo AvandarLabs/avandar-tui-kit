@@ -22,6 +22,7 @@ const TEST_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const XTERM_ROOT = path.resolve(TEST_DIRECTORY, '..');
 const REPOSITORY_ROOT = path.resolve(XTERM_ROOT, '..', '..');
 const RUN_TMUX_SCRIPT_PATH = path.join(XTERM_ROOT, 'run-tmux.sh');
+const SKIP_ON_WIN32 = { skip: process.platform === 'win32' };
 
 function runTmuxCli(cliArgs, options = {}) {
   return spawnSync('bash', [RUN_TMUX_SCRIPT_PATH, ...cliArgs], {
@@ -37,12 +38,14 @@ function listHarnessTmuxSockets() {
   if (uid === null) {
     return [];
   }
-  const candidateDirs = [
-    path.join('/tmp', `tmux-${uid}`),
-    process.env.TMUX_TMPDIR ? path.join(process.env.TMUX_TMPDIR, `tmux-${uid}`) : null,
-  ].filter(Boolean);
+  const baseDirs = new Set(
+    ['/tmp', process.env.TMUX_TMPDIR, process.env.TMPDIR, os.tmpdir()]
+      .filter(Boolean)
+      .map((dir) => dir.replace(/\/+$/, '') || '/'),
+  );
   const matchingSockets = new Set();
-  for (const socketDir of candidateDirs) {
+  for (const baseDir of baseDirs) {
+    const socketDir = path.join(baseDir, `tmux-${uid}`);
     if (!fs.existsSync(socketDir)) {
       continue;
     }
@@ -64,43 +67,21 @@ function createNodeOnlyPathDir() {
   return binDir;
 }
 
+function hasMouseCell(records, kind, column, row) {
+  return records.some(
+    (record) => record.mouse_kind === kind && record.column === column && record.row === row,
+  );
+}
+
 function assertExactForwardedMouseCells(pointerSteps) {
-  assert.ok(
-    pointerSteps.left_click.some(
-      (record) => record.mouse_kind === 'down:left' && record.column === 10 && record.row === 5,
-    ),
-  );
-  assert.ok(
-    pointerSteps.left_click.some(
-      (record) => record.mouse_kind === 'up:left' && record.column === 10 && record.row === 5,
-    ),
-  );
-  assert.ok(
-    pointerSteps.left_drag.some(
-      (record) => record.mouse_kind === 'down:left' && record.column === 12 && record.row === 6,
-    ),
-  );
+  assert.ok(hasMouseCell(pointerSteps.left_click, 'down:left', 10, 5));
+  assert.ok(hasMouseCell(pointerSteps.left_click, 'up:left', 10, 5));
+  assert.ok(hasMouseCell(pointerSteps.left_drag, 'down:left', 12, 6));
   assert.ok(pointerSteps.left_drag.some((record) => record.mouse_kind === 'drag:left'));
-  assert.ok(
-    pointerSteps.left_drag.some(
-      (record) => record.mouse_kind === 'up:left' && record.column === 18 && record.row === 6,
-    ),
-  );
-  assert.ok(
-    pointerSteps.wheel_down.some(
-      (record) => record.mouse_kind === 'scroll_down' && record.column === 10 && record.row === 5,
-    ),
-  );
-  assert.ok(
-    pointerSteps.wheel_up.some(
-      (record) => record.mouse_kind === 'scroll_up' && record.column === 10 && record.row === 5,
-    ),
-  );
-  assert.ok(
-    pointerSteps.right_click.some(
-      (record) => record.mouse_kind === 'down:right' && record.column === 15 && record.row === 7,
-    ),
-  );
+  assert.ok(hasMouseCell(pointerSteps.left_drag, 'up:left', 18, 6));
+  assert.ok(hasMouseCell(pointerSteps.wheel_down, 'scroll_down', 10, 5));
+  assert.ok(hasMouseCell(pointerSteps.wheel_up, 'scroll_up', 10, 5));
+  assert.ok(hasMouseCell(pointerSteps.right_click, 'down:right', 15, 7));
 }
 
 function assertStockTmuxInteractive(interactiveReport) {
@@ -163,7 +144,7 @@ function assertTmuxBatchReport(batchReport) {
   assert.equal(colorRecord?.is_dark, true);
 }
 
-test('run-tmux.sh --help prints plain help to stdout and exits 0 even without tmux in PATH', () => {
+test('run-tmux.sh --help prints plain help to stdout and exits 0 even without tmux in PATH', SKIP_ON_WIN32, () => {
   const nodeOnlyBinDir = createNodeOnlyPathDir();
   try {
     const helpResult = runTmuxCli(['--help'], {
@@ -190,7 +171,7 @@ test('run-tmux.sh --help prints plain help to stdout and exits 0 even without tm
   }
 });
 
-test('run-tmux.sh fails with structured recovery hints on invalid args or missing tmux', () => {
+test('run-tmux.sh fails with structured recovery hints on invalid args or missing tmux', SKIP_ON_WIN32, () => {
   const invalidCases = [
     [],
     ['invalid_mode', 'capability_probe'],
@@ -280,7 +261,7 @@ test('createTmuxSession enforces Rule 5 before starting any tmux server', async 
   }
 });
 
-test('createTmuxSession captures child exit code, preserves args, reads buffer, and kills server', async () => {
+test('createTmuxSession captures child exit code, preserves args, reads buffer, and kills server', SKIP_ON_WIN32, async () => {
   const bridge = await startBrowserBridge({ cols: 100, rows: 30 });
   const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tuikit-tmux-unit-'));
   try {
@@ -317,7 +298,7 @@ test('createTmuxSession captures child exit code, preserves args, reads buffer, 
   }
 });
 
-test('run-tmux.sh stock capability_probe verifies M0 Rows 9 and 12 and clean teardown', () => {
+test('run-tmux.sh stock capability_probe verifies M0 Rows 9 and 12 and clean teardown', SKIP_ON_WIN32, () => {
   const stockResult = runTmuxCli(['stock', 'capability_probe'], { timeoutMs: 90000 });
   assert.equal(stockResult.status, 0, `stderr:\n${stockResult.stderr}`);
   const stdoutLines = stockResult.stdout.trim().split('\n');
@@ -329,21 +310,24 @@ test('run-tmux.sh stock capability_probe verifies M0 Rows 9 and 12 and clean tea
   assertTmuxBatchReport(report.batch);
   assertStockTmuxInteractive(report.interactive);
 
-  const plainProbe = report.osc52.probes.find((probe) => probe.form === 'plain');
-  const wrappedProbe = report.osc52.probes.find((probe) => probe.form === 'tmux');
-  assert.equal(plainProbe?.token, 'tuikit-tmux-osc52-plain');
-  assert.equal(plainProbe?.tmuxBuffer, null);
-  assert.equal(plainProbe?.osc52Payloads.length, 0);
-  assert.equal(wrappedProbe?.token, 'tuikit-tmux-osc52-wrapped');
-  assert.equal(wrappedProbe?.tmuxBuffer, null);
-  assert.equal(wrappedProbe?.osc52Payloads.length, 0);
+  const expectedStockOsc52 = [
+    ['plain', 'tuikit-tmux-osc52-plain'],
+    ['tmux', 'tuikit-tmux-osc52-wrapped'],
+    ['both', 'tuikit-tmux-osc52-both'],
+  ];
+  for (const [form, token] of expectedStockOsc52) {
+    const probe = report.osc52.probes.find((item) => item.form === form);
+    assert.equal(probe?.token, token);
+    assert.equal(probe?.tmuxBuffer, null);
+    assert.equal(probe?.osc52Payloads.length, 0);
+  }
 
   assert.notEqual(report.panic.exitCode, 0);
   assert.equal(report.panic.terminalStateAfterPanic.mouseTrackingMode, 'none');
   assert.deepEqual(listHarnessTmuxSockets(), []);
 });
 
-test('run-tmux.sh full capability_probe verifies M0 Rows 10 and 12 and clean teardown', () => {
+test('run-tmux.sh full capability_probe verifies M0 Rows 10 and 12 and clean teardown', SKIP_ON_WIN32, () => {
   const fullResult = runTmuxCli(['full', 'capability_probe'], { timeoutMs: 90000 });
   assert.equal(fullResult.status, 0, `stderr:\n${fullResult.stderr}`);
   const stdoutLines = fullResult.stdout.trim().split('\n');
@@ -355,16 +339,17 @@ test('run-tmux.sh full capability_probe verifies M0 Rows 10 and 12 and clean tea
   assertTmuxBatchReport(report.batch);
   assertFullTmuxInteractive(report.interactive);
 
-  const plainProbe = report.osc52.probes.find((probe) => probe.form === 'plain');
-  const wrappedProbe = report.osc52.probes.find((probe) => probe.form === 'tmux');
-  assert.equal(plainProbe?.tmuxBuffer, 'tuikit-tmux-osc52-plain');
-  assert.ok(
-    plainProbe?.osc52Payloads.some((item) => item.decodedText === 'tuikit-tmux-osc52-plain'),
-  );
-  assert.equal(wrappedProbe?.tmuxBuffer, null);
-  assert.ok(
-    wrappedProbe?.osc52Payloads.some((item) => item.decodedText === 'tuikit-tmux-osc52-wrapped'),
-  );
+  const expectedFullOsc52 = [
+    ['plain', 'tuikit-tmux-osc52-plain', 'tuikit-tmux-osc52-plain'],
+    ['tmux', 'tuikit-tmux-osc52-wrapped', null],
+    ['both', 'tuikit-tmux-osc52-both', 'tuikit-tmux-osc52-both'],
+  ];
+  for (const [form, token, expectedBuffer] of expectedFullOsc52) {
+    const probe = report.osc52.probes.find((item) => item.form === form);
+    assert.equal(probe?.token, token);
+    assert.equal(probe?.tmuxBuffer, expectedBuffer);
+    assert.ok(probe?.osc52Payloads.some((item) => item.decodedText === token));
+  }
 
   assert.notEqual(report.panic.terminalStateBeforePanic.mouseTrackingMode, 'none');
   assert.notEqual(report.panic.exitCode, 0);

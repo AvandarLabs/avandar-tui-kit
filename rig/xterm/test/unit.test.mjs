@@ -336,7 +336,10 @@ test('browser bridge loads xterm.js 6.0.0 + Unicode11, preserves binary >= 0x80,
   }
 });
 
-test('startPtySession round-trips binary bytes >= 0x80 and Unicode11 CPR width without UTF-8 expansion', async () => {
+test(
+  'startPtySession round-trips binary bytes >= 0x80 and Unicode11 CPR width without UTF-8 expansion',
+  { skip: process.platform === 'win32' },
+  async () => {
   const bridge = await startBrowserBridge({ cols: 100, rows: 30 });
   try {
     const childScript = [

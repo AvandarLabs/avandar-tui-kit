@@ -48,10 +48,10 @@ function removeResidualSocketFiles(socketName, sanitizedEnv) {
     return;
   }
   const uid = process.getuid();
-  const baseDirectories = new Set(['/tmp']);
-  if (sanitizedEnv?.TMUX_TMPDIR) {
-    baseDirectories.add(sanitizedEnv.TMUX_TMPDIR);
-  }
+  const candidateRoots = ['/tmp', sanitizedEnv?.TMUX_TMPDIR, sanitizedEnv?.TMPDIR, os.tmpdir()];
+  const baseDirectories = new Set(
+    candidateRoots.filter(Boolean).map((dir) => dir.replace(/\/+$/, '') || '/'),
+  );
   for (const baseDir of baseDirectories) {
     const candidateSocketPath = path.join(baseDir, `tmux-${uid}`, socketName);
     try {
@@ -266,6 +266,7 @@ function preparePaneLaunchPlan(options) {
   const activeScratchDir = options.scratchDir ?? ownedScratchDir;
   const { wrapperPath, paneExitTmpPath, paneExitPath } = writePaneWrapperScript(activeScratchDir);
   const paneCommand = buildPosixShellCommand([
+    '/bin/sh',
     wrapperPath,
     paneExitTmpPath,
     paneExitPath,

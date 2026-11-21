@@ -292,6 +292,9 @@ cleanup_resources() {
   if [ -n "$tmux_socket" ] && [ -n "$tmux_binary" ]; then
     "$tmux_binary" -L "$tmux_socket" kill-server >/dev/null 2>&1 || true
     rm -f "/tmp/tmux-$(id -u)/$tmux_socket" "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$tmux_socket" 2>/dev/null || true
+    if [ -n "${TMPDIR:-}" ]; then
+      rm -f "${TMPDIR%/}/tmux-$(id -u)/$tmux_socket" 2>/dev/null || true
+    fi
     tmux_socket=""
   fi
   if [ -n "$terminal_handle" ] && [ -n "$orca_binary" ]; then
