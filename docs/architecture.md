@@ -7,8 +7,11 @@ not to be replaced.
 ## The layout
 
 ```
+.github/
+└── workflows/          CI across Linux, macOS, and Windows (ci.yml)
 Cargo.toml              the workspace: members, shared package settings,
                         shared dependency versions, shared lints
+justfile                one-command entry points for every check and test layer
 crates/
 └── avandar-tui-kit/    the umbrella crate: re-exports the others behind features
 docs/
@@ -23,6 +26,18 @@ docs/
 ├── testing.md          the test layers, where each runs, and the rules for them
 ├── rules/              how code is written here
 └── skills.md           how the agent skills are installed
+rig/
+├── expected/           normalized capability baselines for all 13 configurations
+├── iterm2/             Layer 6 Tart + VNC macOS virtual machine driver
+├── linux/              Linux floor container (Rust 1.88, Node, Chromium, tmux 3.3a)
+├── orca/               Layer 5 unfocused live Orca terminal runner
+├── probe/              unpublished capability_probe crate (moves to avandar-tui-term in M3)
+├── tmux/               stock and full tmux server configurations
+├── windows/            Layer 7 CI Windows log and artifact fetcher
+└── xterm/              Layers 3 and 4 Playwright + xterm.js + node-pty harness
+scripts/
+├── ci/                 workspace feature-matrix checks
+└── skills/             agent skill installation and update helpers
 ```
 
 ## One workspace, many crates, one umbrella

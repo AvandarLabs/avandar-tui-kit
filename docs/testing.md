@@ -29,7 +29,8 @@ is proved.
 Rules 3 and 5 were learned the direct way. The first version of the xterm.js
 harness below used one short sleep and attached its output reader a moment
 after starting the program, and two runs in ten failed. With both fixed,
-thirty runs in a row gave identical results.
+thirty runs in a row gave identical results, with zero fixed sleeps anywhere
+in `rig/`.
 
 ## The layers
 
@@ -50,6 +51,21 @@ What is left for a person is a short checklist before a release, for
 judgments no assertion can make: whether scrolling feels right, whether the
 colors read well. Nothing on it is a correctness check.
 
+## How to run each layer
+
+Every `justfile` recipe is a single command you can also run directly:
+
+| Layer | `just` recipe | Single command |
+| --- | --- | --- |
+| 1 (host) | `just test` | `cargo test --workspace --all-features` |
+| 1 (Linux floor) | `just linux <command>` | `./rig/linux/run.sh <command>` (for example `just linux just check`) |
+| 2 | `just lint-targets` | `cargo clippy --workspace --all-targets --all-features --target x86_64-pc-windows-msvc --target x86_64-unknown-linux-gnu -- -D warnings` |
+| 3 | `just xterm <program> [scenario]` | `./rig/xterm/run.sh <program> [scenario]` |
+| 4 | `just xterm-tmux <config> <program> [scenario]` | `./rig/xterm/run-tmux.sh <config> <program> [scenario]` (`config` is `stock` or `full`) |
+| 5 | `just orca <program>` | `./rig/orca/run.sh <program>` (also accepts `--tmux` or `--tmux-config <stock\|full>`) |
+| 6 | `just iterm2 <program> [scenario]` | `./rig/iterm2/run.sh <program> [scenario]` (also accepts `--tmux <stock\|full\|cc-stock\|cc-full>`) |
+| 7 | `just windows` | `./rig/windows/run.sh` (also accepts `--wait`, `--branch <name>`, `--run-id <id>`) |
+
 ### 1. Unit and escape-sequence tests
 
 Decisions are pure functions (see `rules/tui.md`), so most of the toolkit is
@@ -58,51 +74,64 @@ function too, so the rules in `terminals.md` are assertions on bytes: the mouse
 setup contains modes 1000, 1002 and 1006 and never 1003, no mouse mode is
 reset before teardown, a paste is bracketed.
 
-Linux runs in a container at the minimum Rust version, which checks that
-floor at the same time.
+Linux runs in `rig/linux` (`rust:1.88-bookworm` with Node 22, Playwright
+Chromium, and `tmux 3.3a`), which checks the Rust 1.88 and `tmux 3.3` floors
+locally (`just linux`) and in CI using the same image.
 
 ### 2. Cross-target lint
 
-The Windows and Linux targets are installed with rustup, and clippy runs
-against each from the development machine. No Windows toolchain is needed,
-because nothing is linked. It catches a `cfg(windows)` branch that no longer
-compiles, which is the most common way a cross-platform crate breaks.
+The Windows (`x86_64-pc-windows-msvc`) and Linux (`x86_64-unknown-linux-gnu`)
+targets are installed with rustup, and `just lint-targets` runs clippy against
+both from the development machine. No Windows toolchain is needed, because
+nothing is linked. It catches a `cfg(windows)` branch that no longer compiles,
+which is the most common way a cross-platform crate breaks.
 
 ### 3. The xterm.js harness
 
 xterm.js is the terminal inside Orca, so this layer carries the most weight.
-A small Node program opens a real xterm.js in a headless browser, at the
-version Orca ships and with the same Unicode add-on, and connects it to one of
-the toolkit's example programs running in a pseudo-terminal. The browser
-delivers real mouse and keyboard events to xterm.js, xterm.js encodes them as
-it would for a person, and the test reads what the program received.
+`rig/xterm` opens the browser build of `@xterm/xterm` `6.0.0` with
+`@xterm/addon-unicode11` `0.9.0` in headless Chromium via Playwright and
+connects it over WebSocket to an example program running in a `node-pty`
+pseudo-terminal. Playwright delivers real mouse, wheel, keyboard, paste, and
+focus events to xterm.js, xterm.js encodes them as it would for a person, and
+the harness compares the normalized report against
+`rig/expected/xterm-{macos,linux,windows}.json`.
 
 It uses the browser build of xterm.js, not the headless one: the code that
 turns a click or a key press into bytes exists only in the browser build, and
 that code is what has to be tested. On Windows the pseudo-terminal is ConPTY,
 so this layer is also the Windows terminal test.
 
-Proved: a click, a drag, the wheel, clicks with Shift, Option and Control, a
-right click, a double click, arrow and function keys, Control and Alt chords,
-a bracketed paste and focus changes all arrived as the expected bytes, with
-thirty identical runs in a row at about four seconds each.
+Proved: **30 consecutive identical runs** of `just xterm capability_probe`
+natively on macOS and **30 consecutive identical runs** inside the `rig/linux`
+floor container (`rustc 1.88.0`), with zero fixed sleeps anywhere in the rig,
+plus CI verification on macOS, Linux, and Windows (`windows-2025`).
 
 ### 4. tmux in the xterm.js harness
 
-The same harness starts the example program inside a private tmux server
-(its own socket, its own configuration file), once with tmux's stock
-configuration and once with the full one from `terminals.md`.
+`just xterm-tmux` starts the example program inside a private `tmux` server
+(its own socket and no user config), once with `rig/tmux/stock.conf` (an empty
+file) and once with `rig/tmux/full.conf` (`mouse on`, `set-clipboard on`,
+`allow-passthrough on`, `extended-keys on`, `focus-events on`), and checks the
+normalized output against
+`rig/expected/xterm-tmux-{stock,full}-{macos,linux}.json`.
+
+Proved: **30 consecutive identical runs** in `stock` and **30 consecutive
+identical runs** in `full` both natively on macOS (`tmux 3.8`) and inside the
+`rig/linux` container (`tmux 3.3a`) - `90/90` consecutive runs combined with
+Layer 3 on each platform.
 
 ### 5. Orca
 
-Orca's command line can start a terminal, type into it and read it back. The
-capability probe runs in a live Orca terminal that way and its answers are
-compared with `terminals.md`. This is the check that the harness in layer 3
-still matches the real thing: if Orca changes its xterm.js version or
-settings, this layer says so.
+`just orca` (`rig/orca/run.sh`) creates an unfocused live Orca terminal
+through Orca's command line (`orca terminal spawn` without stealing keyboard
+focus), runs the example program alone or inside a private `tmux` server
+(`--tmux`), checks that Orca's reported `xterm.js` version still matches the
+version pinned in `rig/xterm/package.json`, and compares the output against
+`rig/expected/orca.json` and `rig/expected/orca-tmux.json`.
 
-Proved: the probe ran in an Orca terminal, alone and inside tmux, and
-reported xterm.js 6.0.0.
+Proved: `capability_probe` ran in live Orca `1.4.258`, alone and inside `tmux
+3.8`, reported `xterm.js(6.0.0)`, and matched both baselines.
 
 ### 6. iTerm2 in a virtual machine
 
@@ -110,40 +139,54 @@ iTerm2 is a desktop app. Driving it on the development machine itself does
 not work without a person: macOS asks for approval the first time an app is
 opened, and asks again before one program may watch or control another, and
 only someone at the screen can answer. So iTerm2 runs in a macOS virtual
-machine that an agent controls completely.
+machine (`tuikit-macos`) that an agent controls completely.
 
-The virtual machine exposes its screen and input over VNC from outside the
-guest. A test starts the example program in iTerm2, moves the pointer, clicks,
-drags, scrolls and types through VNC, which the guest sees as real hardware
-events, and reads the program's log from a folder shared with the host. A
-screenshot is one command away when something needs looking at.
+One-time preparation of the `tuikit-macos` Tart guest:
 
-The virtual machine is prepared once so that no prompt can appear in a run:
-iTerm2 installed with its download flag cleared, its confirmation for running
-a script answered, the local network prompt answered. It is then kept and
-reused.
+- Apple Silicon macOS 15 guest image in Tart named `tuikit-macos`.
+- Automatic login enabled, with screen saver and screen lock disabled so a
+  cold boot lands directly on an unlocked desktop.
+- macOS Screen Sharing / VNC enabled so loopback VNC connections succeed
+  without interactive approval.
+- iTerm2 `3.7.7` installed at `/Applications/iTerm.app` with
+  `com.apple.quarantine` cleared, first-run script and automation prompts
+  approved, and the local-network prompt answered.
+- Homebrew `tmux` (`3.8`) installed in the guest for `stock`, `full`, and
+  `tmux -CC` runs.
+- macOS Sequoia click-wallpaper-to-show-desktop and notification banners
+  quieted so pointer events never hide the terminal window.
 
-Proved: iTerm2 3.7.7 was installed in a macOS 15 virtual machine, its prompts
-answered through VNC, the probe run alone and inside tmux, and a click, a
-drag, the wheel and modified clicks injected through VNC arrived in the
-program at the expected cells.
+`just iterm2` (`rig/iterm2/run.sh`) boots `tuikit-macos` headless with
+`tart run --no-graphics --no-audio --no-clipboard --vnc-experimental` and a
+VirtioFS shared directory, waits on `tart exec` and RFB handshake readiness
+(zero fixed sleeps), calibrates the VNC Option modifier before key chords,
+backs up and restores guest `defaults` (`com.googlecode.iterm2` and
+`NSGlobalDomain`) around every run, captures a VNC screenshot automatically on
+failure, and stops the VM cleanly on exit.
 
-It uses [Tart](https://github.com/openai/tart) to run the virtual machine.
+Proved: **10 consecutive cold-start runs** from a stopped `tuikit-macos` VM
+(`10/10` identical capability digests), plus full matrix verification across
+iTerm2 alone, `stock` and `full` `tmux`, and `tmux -CC` against
+`rig/expected/iterm2*.json`.
+
+It uses [Tart](https://github.com/cirruslabs/tart) to run the virtual machine.
 Tart is source-available under the Functional Source License, not open
 source. It is a development tool only: no crate depends on it.
 
 ### 7. Windows on CI runners
 
-Windows is the one platform with no local run. Layers 1, 3 and the build at
-the minimum Rust version run on GitHub's hosted Windows runners on every pull
-request, and that is where Windows behavior is proved. Locally, layer 2
-catches Windows code that no longer compiles before a push.
+Windows is the one platform with no local run. Layers 1, 3, the Rust 1.88
+floor build, and the `.cmd` shim round-trip test run on GitHub's hosted
+`windows-2025` runners on every pushed branch and pull request, checking live
+output against `rig/expected/xterm-windows.json`. Locally, Layer 2
+(`just lint-targets`) catches Windows code that no longer compiles before a
+push.
 
-An agent still runs this layer itself: it pushes the branch, waits for the
-Windows jobs, and reads their logs. Because the loop is slower than a local
-run, Windows-only code is kept small and behind one module per concern (see
-`rules/rust.md`), and the Windows jobs upload the example programs' event
-logs so a failure can be read without rerunning it.
+`just windows` (`./rig/windows/run.sh`) inspects the current branch's latest
+`ci.yml` run via `gh`, optionally waits for completion (`--wait`), and
+downloads the Windows job logs and `RIG_XTERM_LOG_DIR` event-log artifacts
+into `target/windows-ci/` so any failure can be inspected locally without
+rerunning CI.
 
 A local Windows virtual machine was considered and set aside: Windows needs a
 paid license to be used properly, and CI runners come already licensed.
@@ -152,9 +195,12 @@ paid license to be used properly, and CI runners come already licensed.
 
 | Piece | State |
 | --- | --- |
-| Capability probe (first version, throwaway) | Run in Orca, iTerm2 and tmux. Its results are in `terminals.md`. |
-| xterm.js harness | Proved as a throwaway. To be built in the repository. |
-| iTerm2 virtual machine | Proved by hand. The scripted version is to be built. |
-| Linux container run | Proved with the workspace as it is |
-| Cross-target lint | Proved against the planned dependencies |
-| CI | Not set up |
+| `rig/probe` (`capability_probe`, VT reply parsers, `.cmd` shim tests) | Built and verified across all 13 configurations |
+| `rig/xterm` (`xterm.js 6.0.0` + Playwright + `node-pty` harness) | Built and verified (30/30 consecutive runs on macOS and Linux, plus Windows ConPTY in CI) |
+| `rig/tmux` (`stock.conf` and `full.conf` private-server runner) | Built and verified (30/30 consecutive runs per config on macOS `tmux 3.8` and Linux `tmux 3.3a`) |
+| `rig/orca` (unfocused live Orca terminal runner) | Built and verified against Orca `1.4.258` (`orca.json`, `orca-tmux.json`) |
+| `rig/iterm2` (headless `tuikit-macos` Tart + VNC driver) | Built and verified (10/10 cold-start runs across iTerm2, `tmux`, and `tmux -CC`) |
+| `rig/linux` (`rust:1.88-bookworm`, Node 22, Chromium, `tmux 3.3a` container) | Built and verified locally (`just linux`) and in CI |
+| `rig/expected` (all 13 normalized capability baselines) | Built and verified in workspace tests and live CI checks |
+| Cross-target lint (`just lint-targets`) | Built and verified for `x86_64-pc-windows-msvc` and `x86_64-unknown-linux-gnu` |
+| `rig/windows` (`just windows`) and GitHub Actions CI (`.github/workflows/ci.yml`) | Built and verified across Linux, macOS, and Windows (`windows-2025`) |

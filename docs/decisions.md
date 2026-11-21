@@ -584,3 +584,51 @@ docs under `docs/`, never in published READMEs, `Cargo.toml` fields, or
 rustdoc.
 
 **Revisit when.** Never.
+
+## The capability probe lives in the test rig until avandar-tui-term exists
+
+**Decision.** During Milestone 0, the capability probe and its pure VT reply
+parsers live in an unpublished workspace member crate at `rig/probe`
+(`publish = false`), with `capability_probe` as an example binary driven by
+every test layer. It moves into `avandar-tui-term` in Milestone 3.
+
+**Why.** Milestone 0 measures every first-class terminal, `tmux` mode, and
+Windows ConPTY behavior before any library crate is written, so the specs and
+`ratatui-mouse` rest on measured facts rather than assumptions. Creating
+`avandar-tui-term` ahead of its spec just to hold the probe would violate the
+spec-first order in `docs/milestones.md`.
+
+**Consequences.** `rig/probe` inherits `[workspace.package]` and
+`[workspace.lints]` like every member crate, stays unpublished
+(`publish = false`), and owns the Windows `.cmd` shim proof (`cmd_shim`)
+alongside the reply parsers. When Milestone 3 builds `avandar-tui-term`,
+`capability_probe` is rewritten over that crate's modules and `rig/probe`
+leaves the workspace.
+
+**Revisit when.** Milestone 3 lands `avandar-tui-term` and moves
+`capability_probe` into its permanent home.
+
+## tmux 3.3 is tested in the Linux floor container
+
+**Decision.** `tmux 3.3` (`3.3a`, Debian Bookworm's package), the minimum
+supported `tmux` version, is pinned and tested inside `rig/linux` alongside
+`rustc 1.88.0`, while macOS runs test current Homebrew `tmux` (`3.8`).
+
+**Why.** `tmux 3.3` is the oldest release with `allow-passthrough`, which sets
+the toolkit's floor, and its behavior differs from `tmux 3.8` in ways only real
+execution exposes (`tmux 3.3a` defaults `mouse` to `off`, leaves `DECRQM` and
+`CSI 16 t` unanswered, does not forward `OSC 11 ; ?` background queries, and
+uses older Unicode width tables). Putting `tmux 3.3a` in the same Debian
+Bookworm container that already pins Rust `1.88` tests both floors in one
+reproducible image locally (`just linux`) and in CI without building a second
+`tmux` on macOS.
+
+**Consequences.** `rig/expected` carries separate macOS (`tmux 3.8`) and Linux
+(`tmux 3.3a`) baselines (`xterm-tmux-{stock,full}-{macos,linux}.json`), and
+`docs/terminals.md` records both versions wherever they differ. Every crate
+touching terminal I/O proves it degrades cleanly when `DECRQM` and `OSC 11 ; ?`
+go unanswered in `tmux 3.3a`.
+
+**Revisit when.** The minimum supported `tmux` version is raised, or the Linux
+floor container moves off Debian Bookworm and needs `tmux 3.3a` built from
+source to keep testing that floor.

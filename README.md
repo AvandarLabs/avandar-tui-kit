@@ -36,16 +36,26 @@ should work but are not tested. See [`docs/terminals.md`](docs/terminals.md).
 
 ## Developing
 
-A Rust toolchain is the only prerequisite ([rustup.rs](https://rustup.rs)).
-`just` is optional (`cargo install just`): every recipe is one command you can
-also type by hand.
+A Rust toolchain is the only prerequisite for building and unit-testing the
+workspace ([rustup.rs](https://rustup.rs)). `just` is optional
+(`cargo install just`): every recipe is one command you can also type by hand.
 
 ```sh
-cargo test --workspace --all-features                          # just test
+cargo test --workspace --all-features                                 # just test
 cargo clippy --workspace --all-targets --all-features -- -D warnings  # just lint
-cargo fmt --all                                                # just fmt
-just check    # everything that has to pass before a change lands
+cargo fmt --all                                                       # just fmt
+just check                                                            # fmt-check, lint, test, doc
+just lint-targets                                                     # Layer 2: Windows + Linux clippy
+just linux just check                                                 # Layer 1: Rust 1.88 + Linux floor container
+just xterm capability_probe                                           # Layer 3: headless xterm.js harness
+just xterm-tmux full capability_probe                                 # Layer 4: stock or full tmux in xterm.js
+just orca capability_probe                                            # Layer 5: unfocused live Orca terminal
+just iterm2 capability_probe                                          # Layer 6: iTerm2 in the Tart + VNC macOS VM
+just windows                                                          # Layer 7: inspect and download Windows CI logs
 ```
+
+See [`docs/testing.md`](docs/testing.md) for what each test layer proves and
+where it runs.
 
 ## Agent skills
 
