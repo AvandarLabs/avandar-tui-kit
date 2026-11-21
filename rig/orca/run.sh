@@ -39,39 +39,38 @@ setup_theme() {
 }
 
 print_usage_block() {
-  cat <<EOF
-${COLOR_HEADING}Usage:${COLOR_RESET}
-  ${COLOR_BOLD}just orca${COLOR_RESET} <program> [--batch | --interactive] [--timeout-ms <ms>] [program_args...]
-  ${COLOR_BOLD}./rig/orca/run.sh${COLOR_RESET} <program> [--batch | --interactive] [--timeout-ms <ms>] [program_args...]
-
-${COLOR_HEADING}Purpose:${COLOR_RESET}
-  Build a workspace example binary and run it inside an unfocused live Orca
-  terminal (Layer 5), streaming its JSONL section and summary records to stdout.
-
-${COLOR_HEADING}Arguments:${COLOR_RESET}
-  ${COLOR_ACCENT}<program>${COLOR_RESET}              Cargo example binary name (for example: capability_probe)
-
-${COLOR_HEADING}Options:${COLOR_RESET}
-  ${COLOR_ACCENT}-h, --help${COLOR_RESET}             Show this help text on stdout and exit 0
-  ${COLOR_ACCENT}--batch${COLOR_RESET}                Pass --batch to <program> so it exits after automated sections (default)
-  ${COLOR_ACCENT}--interactive${COLOR_RESET}          Run <program> without auto-appending --batch
-  ${COLOR_ACCENT}--timeout-ms <ms>${COLOR_RESET}      Maximum wait time in milliseconds for terminal exit (default: 20000)
-  ${COLOR_ACCENT}--${COLOR_RESET}                     Forward all remaining arguments verbatim to <program>
-
-${COLOR_HEADING}Forwarded capability_probe options:${COLOR_RESET}
-  ${COLOR_ACCENT}--osc52 <token>${COLOR_RESET}        Emit plain (and in tmux, passthrough) OSC 52 sequence for <token>
-  ${COLOR_ACCENT}--push-kitty${COLOR_RESET}           Push Kitty keyboard disambiguate flags during interactive mode
-  ${COLOR_MUTED}(Note: --log <path> is managed automatically by run.sh and must not be passed manually.)${COLOR_RESET}
-
-${COLOR_HEADING}Streams:${COLOR_RESET}
-  stdout                 JSONL "section" and "summary" records captured from <program>
-  stderr                 Build/launch progress, warnings, errors, and final status summary
-
-${COLOR_HEADING}Examples:${COLOR_RESET}
-  just orca capability_probe
-  just orca capability_probe --batch --osc52 "tuikit-orca-osc52-probe"
-  ./rig/orca/run.sh capability_probe --timeout-ms 30000
-EOF
+  printf '%s\n' \
+    "${COLOR_HEADING}Usage:${COLOR_RESET}" \
+    "  ${COLOR_BOLD}just orca${COLOR_RESET} <program> [--batch | --interactive] [--timeout-ms <ms>] [program_args...]" \
+    "  ${COLOR_BOLD}./rig/orca/run.sh${COLOR_RESET} <program> [--batch | --interactive] [--timeout-ms <ms>] [program_args...]" \
+    "" \
+    "${COLOR_HEADING}Purpose:${COLOR_RESET}" \
+    "  Build a workspace example binary and run it inside an unfocused live Orca" \
+    "  terminal (Layer 5), streaming its JSONL section and summary records to stdout." \
+    "" \
+    "${COLOR_HEADING}Arguments:${COLOR_RESET}" \
+    "  ${COLOR_ACCENT}<program>${COLOR_RESET}              Cargo example binary name (for example: capability_probe)" \
+    "" \
+    "${COLOR_HEADING}Options:${COLOR_RESET}" \
+    "  ${COLOR_ACCENT}-h, --help${COLOR_RESET}             Show this help text on stdout and exit 0" \
+    "  ${COLOR_ACCENT}--batch${COLOR_RESET}                Pass --batch to <program> so it exits after automated sections (default)" \
+    "  ${COLOR_ACCENT}--interactive${COLOR_RESET}          Run <program> without auto-appending --batch" \
+    "  ${COLOR_ACCENT}--timeout-ms <ms>${COLOR_RESET}      Maximum wait time in milliseconds for terminal exit (default: 20000)" \
+    "  ${COLOR_ACCENT}--${COLOR_RESET}                     Forward all remaining arguments verbatim to <program>" \
+    "" \
+    "${COLOR_HEADING}Forwarded capability_probe options:${COLOR_RESET}" \
+    "  ${COLOR_ACCENT}--osc52 <token>${COLOR_RESET}        Emit plain (and in tmux, passthrough) OSC 52 sequence for <token>" \
+    "  ${COLOR_ACCENT}--push-kitty${COLOR_RESET}           Push Kitty keyboard disambiguate flags during interactive mode" \
+    "  ${COLOR_MUTED}(Note: --log <path> is managed automatically by run.sh and must not be passed manually.)${COLOR_RESET}" \
+    "" \
+    "${COLOR_HEADING}Streams:${COLOR_RESET}" \
+    "  stdout                 JSONL \"section\" and \"summary\" records captured from <program>" \
+    "  stderr                 Build/launch progress, warnings, errors, and final status summary" \
+    "" \
+    "${COLOR_HEADING}Examples:${COLOR_RESET}" \
+    "  just orca capability_probe" \
+    "  just orca capability_probe --batch --osc52 \"tuikit-orca-osc52-probe\"" \
+    "  ./rig/orca/run.sh capability_probe --timeout-ms 30000"
 }
 
 for scanned_argument in "$@"; do
@@ -219,16 +218,23 @@ resolve_orca_binary() {
     command -v orca-dev
     return 0
   fi
-  local candidate_path=""
-  if candidate_path="$(command -v orca 2>/dev/null)"; then
-    if [ "$(uname -s)" = "Linux" ] && [ -z "${ORCA_SESSION_ID:-}" ] && [ "$candidate_path" = "/usr/bin/orca" ]; then
-      command -v orca-ide 2>/dev/null
-      return $?
+  local system_name=""
+  system_name="$(uname -s)"
+  local path_candidates=""
+  path_candidates="$(type -ap orca 2>/dev/null || true)"
+  local saved_ifs="$IFS"
+  IFS=$'\n'
+  # Ignore /usr/bin/orca on Linux because that path belongs to the GNOME screen reader.
+  for candidate_path in $path_candidates; do
+    IFS="$saved_ifs"
+    if [ -n "$candidate_path" ] \
+      && ! { [ "$system_name" = "Linux" ] && [ "$candidate_path" = "/usr/bin/orca" ]; }; then
+      printf '%s\n' "$candidate_path"
+      return 0
     fi
-    printf '%s\n' "$candidate_path"
-    return 0
-  fi
-  if [ "$(uname -s)" = "Linux" ] && command -v orca-ide >/dev/null 2>&1; then
+  done
+  IFS="$saved_ifs"
+  if [ "$system_name" = "Linux" ] && command -v orca-ide >/dev/null 2>&1; then
     command -v orca-ide
     return 0
   fi
@@ -268,7 +274,13 @@ if ! cargo build --manifest-path "$repository_root/Cargo.toml" --workspace --exa
     "Check available example names under rig/probe/examples/ and fix any compile errors above."
 fi
 
-target_directory="${CARGO_TARGET_DIR:-$repository_root/target}"
+raw_target_directory="${CARGO_TARGET_DIR:-$repository_root/target}"
+if [ ! -d "$raw_target_directory" ]; then
+  fail_error \
+    "Cargo target directory was not found at '$raw_target_directory'." \
+    "Verify CARGO_TARGET_DIR and check that 'cargo build' succeeded."
+fi
+target_directory="$(cd "$raw_target_directory" && pwd)"
 binary_path="$target_directory/debug/examples/$program_name"
 if [ ! -x "$binary_path" ]; then
   fail_error \
