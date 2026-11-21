@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>rig-xterm bridge</title>
+    <link rel="stylesheet" href="/vendor/xterm.css" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        background: #122738;
+        overflow: hidden;
+      }
+      #terminal-container {
+        margin: 0;
+        padding: 0;
+        display: inline-block;
+        background: #122738;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="terminal-container"></div>
+    <script src="/vendor/xterm.js"></script>
+    <script src="/vendor/addon-unicode11.js"></script>
+    <script type="module">
+      import { decodeOsc52Payload } from '/src/osc52.mjs';
+
+      function parseDimensionParam(searchParams, keyName, fallbackValue) {
+        const rawParam = searchParams.get(keyName);
+        const parsedInt = rawParam ? Number.parseInt(rawParam, 10) : Number.NaN;
+        return Number.isInteger(parsedInt) && parsedInt > 0 ? parsedInt : fallbackValue;
+      }
+
+      function createConfiguredTerminal(cols, rows) {
+        const terminal = new window.Terminal({
+          allowProposedApi: true,
+          cols,
+          rows,
+          scrollback: 1000,
+          convertEol: false,
+          macOptionIsMeta: false,
+          fontFamily: 'monospace',
+          fontSize: 14,
+          theme: {
+            background: '#122738',
+            foreground: '#e5e9f0',
+          },
+        });
+        const Unicode11Constructor =
+          window.Unicode11Addon.Unicode11Addon ?? window.Unicode11Addon;
+        const unicode11Addon = new Unicode11Constructor();
+        terminal.loadAddon(unicode11Addon);
+        terminal.unicode.activeVersion = '11';
+        return terminal;
+      }
+
+      function measureTerminalLayout(terminal, containerElement) {
+        const screenElement =
+          containerElement.querySelector('.xterm-screen') ?? containerElement;
+        const screenBounds = screenElement.getBoundingClientRect();
+        const coreCellDims = terminal._core?._renderService?.dimensions?.css?.cell;
+        const cellWidthPx =
+          coreCellDims?.width > 0 ? coreCellDims.width : screenBounds.width / terminal.cols;
+        const cellHeightPx =
+          coreCellDims?.height > 0 ? coreCellDims.height : screenBounds.height / terminal.rows;
+        return {
+          cellWidthPx,
+          cellHeightPx,
+          screenLeftPx: screenBounds.left,
+          screenTopPx: screenBounds.top,
+        };
+      }
+
+      function waitForMeasuredLayout(terminal, containerElement) {
+        const initialMetrics = measureTerminalLayout(terminal, containerElement);
+        if (initialMetrics.cellWidthPx > 0 && initialMetrics.cellHeightPx > 0) {
+          return Promise.resolve(initialMetrics);
+        }
+        return new Promise((resolve) => {
+          const checkNextFrame = () => {
+            const metrics = measureTerminalLayout(terminal, containerElement);
+            if (metrics.cellWidthPx > 0 && metrics.cellHeightPx > 0) {
+              resolve(metrics);
+            } else {
+              window.requestAnimationFrame(checkNextFrame);
+            }
+          };
+          window.requestAnimationFrame(checkNextFrame);
+        });
+      }
+
+      function base64ToUint8Array(dataBase64) {
+        const binaryString = window.atob(dataBase64);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let byteIndex = 0; byteIndex < binaryString.length; byteIndex += 1) {
+          bytes[byteIndex] = binaryString.charCodeAt(byteIndex);
+        }
+        return bytes;
+      }
+
+      function sendSocketJson(socket, payloadObject) {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify(payloadObject));
+        }
+      }
+
+      function installWindowHelpers(terminal, containerElement) {
+        window.__osc52Payloads = [];
+        terminal.parser.registerOscHandler(52, (payload) => {
+          window.__osc52Payloads.push(decodeOsc52Payload(payload));
+          return true;
+        });
+
+        window.__getTerminalState = () => {
+          const layoutMetrics = measureTerminalLayout(terminal, containerElement);
+          return {
+            cols: terminal.cols,
+            rows: terminal.rows,
+            cellWidthPx: layoutMetrics.cellWidthPx,
+            cellHeightPx: layoutMetrics.cellHeightPx,
+            screenLeftPx: layoutMetrics.screenLeftPx,
+            screenTopPx: layoutMetrics.screenTopPx,
+            mouseTrackingMode: terminal.modes.mouseTrackingMode,
+            bracketedPasteMode: terminal.modes.bracketedPasteMode,
+            sendFocusMode: terminal.modes.sendFocusMode,
+            synchronizedOutputMode: terminal.modes.synchronizedOutputMode,
+            applicationCursorKeysMode: terminal.modes.applicationCursorKeysMode,
+            unicodeVersion: terminal.unicode.activeVersion,
+            osc52Payloads: [...window.__osc52Payloads],
+          };
+        };
+        window.__terminalState = window.__getTerminalState;
+        window.__getActiveBufferLine = (rowIndex) =>
+          terminal.buffer.active.getLine(rowIndex)?.translateToString(true) ?? '';
+        window.__clearOsc52Payloads = () => {
+          window.__osc52Payloads.length = 0;
+        };
+        window.__pasteText = (textToPaste) => {
+          terminal.paste(textToPaste);
+        };
+        window.__blurTerminal = () => {
+          terminal.blur();
+        };
+        window.__focusTerminal = () => {
+          terminal.focus();
+        };
+      }
+
+      function connectBridgeSocket(terminal) {
+        const socket = new WebSocket(`ws://${window.location.host}/bridge`);
+        terminal.onData((data) => sendSocketJson(socket, { type: 'term_input', data }));
+        terminal.onBinary((binaryLatin1) =>
+          sendSocketJson(socket, { type: 'term_binary', binaryLatin1 }),
+        );
+        socket.addEventListener('message', (messageEvent) => {
+          const parsedMessage = JSON.parse(String(messageEvent.data));
+          if (parsedMessage.type === 'pty_output') {
+            const outputBytes = base64ToUint8Array(parsedMessage.dataBase64);
+            terminal.write(outputBytes, () => {
+              sendSocketJson(socket, {
+                type: 'write_ack',
+                sequenceNumber: parsedMessage.sequenceNumber,
+              });
+            });
+          }
+        });
+        const socketOpenPromise = new Promise((resolve, reject) => {
+          socket.addEventListener('open', () => resolve(socket), { once: true });
+          socket.addEventListener('error', () => reject(new Error('Bridge WebSocket failed')), {
+            once: true,
+          });
+        });
+        return { socket, socketOpenPromise };
+      }
+
+      async function bootBrowserTerminal() {
+        const searchParams = new URLSearchParams(window.location.search);
+        const cols = parseDimensionParam(searchParams, 'cols', 100);
+        const rows = parseDimensionParam(searchParams, 'rows', 30);
+        const containerElement = document.getElementById('terminal-container');
+        const terminal = createConfiguredTerminal(cols, rows);
+        installWindowHelpers(terminal, containerElement);
+        terminal.open(containerElement);
+        terminal.focus();
+        const { socket, socketOpenPromise } = connectBridgeSocket(terminal);
+        await Promise.all([
+          socketOpenPromise,
+          waitForMeasuredLayout(terminal, containerElement),
+        ]);
+        sendSocketJson(socket, {
+          type: 'terminal_ready',
+          state: window.__getTerminalState(),
+        });
+      }
+
+      bootBrowserTerminal();
+    </script>
+  </body>
+</html>

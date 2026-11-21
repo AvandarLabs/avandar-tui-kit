@@ -34,3 +34,6 @@ logs
 
 # Difit session comments
 .difit/
+
+# Node harness dependencies
+rig/xterm/node_modules/
