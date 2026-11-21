@@ -77,6 +77,7 @@ case "${1:-}:${2:-}" in
     printf '[]\n' ;;
   build:*)
     printf 'Step 1/7 : FROM rust:1.88-bookworm\n'
+    [ "${MOCK_DOCKER_BUILD_FAIL:-0}" = "1" ] && exit 1
     exit 0 ;;
   run:*)
     for arg in "$@"; do
@@ -127,9 +128,9 @@ esac
             fs::create_dir_all(&bin_dir).expect("mock bin dir must be creatable");
             let docker_path = bin_dir.join("docker");
             fs::write(&docker_path, MOCK_DOCKER_SCRIPT).expect("mock docker writable");
-            let mut perms = fs::metadata(&docker_path).expect("metadata").permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&docker_path, perms).expect("mock docker executable");
+            let mut permissions = fs::metadata(&docker_path).expect("metadata").permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&docker_path, permissions).expect("mock docker executable");
             let inherited_path = env::var("PATH").unwrap_or_default();
             let combined_path = format!("{}:{inherited_path}", bin_dir.display());
             let calls_file = temp_dir.path.join("docker_calls.tsv");
@@ -143,6 +144,7 @@ esac
         fn run(&self, arguments: &[&str], extra_env: &[(&str, &str)]) -> Output {
             let mut env_pairs = vec![
                 ("PATH", self.combined_path.as_str()),
+                ("TMPDIR", self.temp_dir.path.to_str().expect("UTF-8")),
                 (
                     "MOCK_DOCKER_CALLS_FILE",
                     self.calls_file.to_str().expect("UTF-8"),
@@ -154,6 +156,18 @@ esac
 
         fn read_calls(&self) -> String {
             fs::read_to_string(&self.calls_file).unwrap_or_default()
+        }
+
+        fn has_leftover_context_dirs(&self) -> bool {
+            fs::read_dir(&self.temp_dir.path)
+                .expect("fixture temp dir readable")
+                .filter_map(Result::ok)
+                .any(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("tuikit-linux-ctx.")
+                })
         }
     }
 
@@ -258,7 +272,7 @@ esac
         let temp_dir = TempTestDir::create("no-docker");
         let hermetic_bin = temp_dir.path.join("hermetic-bin");
         create_hermetic_shell_bin(&hermetic_bin);
-        let missing_out = run_linux_script(
+        let missing_output = run_linux_script(
             &["rustc", "--version"],
             &temp_dir.path,
             &[
@@ -266,20 +280,20 @@ esac
                 ("NO_COLOR", "1"),
             ],
         );
-        assert_eq!(missing_out.status.code(), Some(1));
-        assert!(missing_out.stdout.is_empty());
-        let missing_err = String::from_utf8(missing_out.stderr).expect("UTF-8");
-        assert!(missing_err.contains("docker") && missing_err.contains("\n  ⚠️ "));
+        assert_eq!(missing_output.status.code(), Some(1));
+        assert!(missing_output.stdout.is_empty());
+        let missing_stderr = String::from_utf8(missing_output.stderr).expect("UTF-8");
+        assert!(missing_stderr.contains("docker") && missing_stderr.contains("\n  ⚠️ "));
 
         let fixture = MockDockerFixture::create("daemon-down");
-        let daemon_out = fixture.run(
+        let daemon_output = fixture.run(
             &["rustc", "--version"],
             &[("MOCK_DOCKER_INFO_FAIL", "1"), ("NO_COLOR", "1")],
         );
-        assert_eq!(daemon_out.status.code(), Some(1));
-        assert!(daemon_out.stdout.is_empty());
-        let daemon_err = String::from_utf8(daemon_out.stderr).expect("UTF-8");
-        assert!(daemon_err.contains("❌") && daemon_err.contains("\n  ⚠️ "));
+        assert_eq!(daemon_output.status.code(), Some(1));
+        assert!(daemon_output.stdout.is_empty());
+        let daemon_stderr = String::from_utf8(daemon_output.stderr).expect("UTF-8");
+        assert!(daemon_stderr.contains("❌") && daemon_stderr.contains("\n  ⚠️ "));
     }
 
     fn assert_docker_run_contract(run_line: &str) {
@@ -296,27 +310,19 @@ esac
             "NO_COLOR=1",
             "RIG_XTERM_LOG_DIR=/tmp/mock-logs",
         ] {
-            assert!(
-                fields.contains(&required_flag),
-                "missing '{required_flag}' in docker run call: {run_line}"
-            );
+            assert!(fields.contains(&required_flag), "missing {required_flag}");
         }
         assert!(
             fields
                 .iter()
-                .any(|item| item.ends_with(":/var/cache/tuikit/cargo-target")),
-            "missing cargo target volume mount: {run_line}"
+                .any(|item| item.ends_with(":/var/cache/tuikit/cargo-target"))
         );
         assert!(
             fields
                 .iter()
-                .any(|item| item.ends_with(":/workspace/rig/xterm/node_modules")),
-            "missing xterm node_modules volume mount: {run_line}"
+                .any(|item| item.ends_with(":/workspace/rig/xterm/node_modules"))
         );
-        assert!(
-            run_line.ends_with("\t./rig/xterm/run.sh\t--help"),
-            "trailing command must preserve --help for inner command: {run_line}"
-        );
+        assert!(run_line.ends_with("\t./rig/xterm/run.sh\t--help"));
     }
 
     #[test]
@@ -332,11 +338,8 @@ esac
                 ("RIG_XTERM_LOG_DIR", "/tmp/mock-logs"),
             ],
         );
-        assert!(
-            output.status.success(),
-            "stderr:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        assert!(output.status.success());
+        assert!(!fixture.has_leftover_context_dirs());
         assert_eq!(
             String::from_utf8(output.stdout).expect("UTF-8"),
             "{\"probe\":\"ok\"}\n"
@@ -359,22 +362,31 @@ esac
     #[test]
     fn mock_docker_reuses_cached_image_supports_rebuild_and_propagates_exit_code() {
         let cached = MockDockerFixture::create("cached-image");
-        let cached_out = cached.run(&["cargo", "test"], &[("NO_COLOR", "1")]);
-        assert!(cached_out.status.success());
+        let cached_output = cached.run(&["cargo", "test"], &[("NO_COLOR", "1")]);
+        assert!(cached_output.status.success());
         assert!(!cached.read_calls().contains("CALL\tbuild\t"));
 
         let rebuild = MockDockerFixture::create("rebuild-image");
-        let rebuild_out = rebuild.run(&["--rebuild", "cargo", "test"], &[("NO_COLOR", "1")]);
-        assert!(rebuild_out.status.success());
+        let rebuild_output = rebuild.run(&["--rebuild", "cargo", "test"], &[("NO_COLOR", "1")]);
+        assert!(rebuild_output.status.success());
         assert!(rebuild.read_calls().contains("CALL\tbuild\t"));
+        assert!(!rebuild.has_leftover_context_dirs());
+
+        let build_failed = MockDockerFixture::create("failed-build");
+        let build_failed_output = build_failed.run(
+            &["--rebuild", "cargo", "test"],
+            &[("MOCK_DOCKER_BUILD_FAIL", "1"), ("NO_COLOR", "1")],
+        );
+        assert_eq!(build_failed_output.status.code(), Some(1));
+        assert!(!build_failed.has_leftover_context_dirs());
 
         let failing = MockDockerFixture::create("failing-command");
-        let fail_out = failing.run(
+        let failing_output = failing.run(
             &["cargo", "test"],
             &[("MOCK_DOCKER_EXIT_CODE", "17"), ("NO_COLOR", "1")],
         );
-        assert_eq!(fail_out.status.code(), Some(17));
-        let fail_err = String::from_utf8(fail_out.stderr).expect("UTF-8");
-        assert!(fail_err.contains("❌") && fail_err.contains("\n  ⚠️ "));
+        assert_eq!(failing_output.status.code(), Some(17));
+        let failing_stderr = String::from_utf8(failing_output.stderr).expect("UTF-8");
+        assert!(failing_stderr.contains("❌") && failing_stderr.contains("\n  ⚠️ "));
     }
 }

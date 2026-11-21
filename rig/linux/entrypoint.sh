@@ -19,7 +19,7 @@ sync_xterm_node_modules() {
   local target_modules="$xterm_dir/node_modules"
   local target_stamp="$target_modules/.linux-lock.sha256"
   local image_modules="/opt/tuikit-xterm-deps/node_modules"
-  local image_stamp="$image_modules/.linux-lock.sha256"
+  local image_stamp="/opt/tuikit-xterm-deps/.linux-lock.sha256"
 
   [ -f "$lockfile_path" ] || return 0
   mkdir -p "$target_modules"
@@ -29,14 +29,15 @@ sync_xterm_node_modules() {
   [ -f "$target_stamp" ] && current_hash="$(tr -d '[:space:]' < "$target_stamp")"
   [ "$current_hash" = "$desired_hash" ] && return 0
 
+  rm -f "$target_stamp"
   find "$target_modules" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
   [ -f "$image_stamp" ] && image_hash="$(tr -d '[:space:]' < "$image_stamp")"
   if [ "$image_hash" = "$desired_hash" ] && [ -d "$image_modules" ]; then
     cp -RP "$image_modules/." "$target_modules/"
   else
     npm --prefix "$xterm_dir" ci >&2
-    printf '%s\n' "$desired_hash" > "$target_stamp"
   fi
+  printf '%s\n' "$desired_hash" > "$target_stamp"
 }
 
 prepare_runtime_directories

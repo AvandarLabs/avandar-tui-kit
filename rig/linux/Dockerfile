@@ -74,7 +74,7 @@ COPY rig/xterm/package.json rig/xterm/package-lock.json /opt/tuikit-xterm-deps/
 
 RUN cd /opt/tuikit-xterm-deps \
     && npm ci \
-    && sha256sum package-lock.json | awk '{print $1}' > /opt/tuikit-xterm-deps/node_modules/.linux-lock.sha256 \
+    && sha256sum package-lock.json | awk '{print $1}' > /opt/tuikit-xterm-deps/.linux-lock.sha256 \
     && rm -rf /root/.npm \
     && chmod -R a+rX /opt/tuikit-xterm-deps
 

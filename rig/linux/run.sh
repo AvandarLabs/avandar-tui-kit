@@ -119,6 +119,19 @@ resolve_arch_tag() {
   esac
 }
 
+staged_context_dir=""
+
+cleanup_resources() {
+  if [ -n "${staged_context_dir:-}" ]; then
+    rm -rf "$staged_context_dir"
+    staged_context_dir=""
+  fi
+}
+
+trap cleanup_resources EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 stage_minimal_build_context() {
   local context_dir="$1"
   mkdir -p "$context_dir/rig/linux" "$context_dir/rig/xterm"
@@ -133,12 +146,12 @@ ensure_linux_image() {
     return 0
   fi
   log_info "Building Linux floor image '$image_tag'..."
-  local scratch_base="${TMPDIR:-/tmp}" context_dir build_status=0
-  context_dir="$(mktemp -d "${scratch_base%/}/tuikit-linux-ctx.XXXXXX")"
-  stage_minimal_build_context "$context_dir"
-  docker build -f "$context_dir/rig/linux/Dockerfile" -t "$image_tag" "$context_dir" >&2 \
+  local scratch_base="${TMPDIR:-/tmp}" build_status=0
+  staged_context_dir="$(mktemp -d "${scratch_base%/}/tuikit-linux-ctx.XXXXXX")"
+  stage_minimal_build_context "$staged_context_dir"
+  docker build -f "$staged_context_dir/rig/linux/Dockerfile" -t "$image_tag" "$staged_context_dir" >&2 \
     || build_status=$?
-  rm -rf "$context_dir"
+  cleanup_resources
   [ "$build_status" -eq 0 ] || fail_error "Failed to build Linux floor image '$image_tag'." \
     "Inspect the docker build output above and verify network access and rig/linux/Dockerfile."
   log_success "Built Linux floor image '$image_tag'."
@@ -218,6 +231,7 @@ repository_root="$(cd "$script_directory/../.." && pwd)"
   "Workspace Cargo.toml not found at '$repository_root/Cargo.toml'." \
   "Run this script from an intact avandar-tui-kit checkout."
 
+# Pre-create the nested volume mountpoint as the caller so Docker on Linux never creates it as root:root.
 mkdir -p "$repository_root/rig/xterm/node_modules"
 arch_tag="$(resolve_arch_tag)"
 cargo_target_volume="tuikit-linux-cargo-target-${arch_tag}"

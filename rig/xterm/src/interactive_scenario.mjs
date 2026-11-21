@@ -75,14 +75,14 @@ function hasMouseRecord(records, mouseKind, column, row) {
   );
 }
 
+/** Returns `true` when `tmuxVersion` identifies a `tmux 3.3` server (`tmux 3.3`, `tmux 3.3a`). */
 export function isTmux33Version(tmuxVersion) {
   return /^tmux 3\.3(?:[^0-9]|$)/.test(tmuxVersion ?? '');
 }
 
+/** Returns `true` unless the caller explicitly disables outer mouse expectations for stub tests. */
 export function shouldExpectOuterMouseEvents(stepContext) {
-  return typeof stepContext?.shouldExpectMouseEvents === 'boolean'
-    ? stepContext.shouldExpectMouseEvents
-    : true;
+  return stepContext?.shouldExpectMouseEvents !== false;
 }
 
 /** Verifies pointer step logs across direct `xterm.js`, `tmux 3.3`, `tmux 3.8`, or mouse-off stubs. */
