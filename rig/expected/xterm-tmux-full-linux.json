@@ -1,0 +1,343 @@
+{
+  "identity": {
+    "os": "linux",
+    "xtversion": "tmux 3.3a",
+    "term": "tmux-256color",
+    "term_program": "tmux",
+    "is_tmux": true,
+    "is_stdin_tty": true,
+    "is_stdout_tty": true
+  },
+  "mouse_modes": {
+    "is_m1_expected": false,
+    "is_m5_reset": false,
+    "after_m1": [],
+    "after_m5": []
+  },
+  "kitty_keyboard": {
+    "answered": false,
+    "initial_flags": null,
+    "pushed_flags": null,
+    "popped_flags": null
+  },
+  "modes": {
+    "bracketed_paste": {
+      "after_enable": null,
+      "after_disable": null
+    },
+    "focus_events": {
+      "after_enable": null,
+      "after_disable": null
+    },
+    "synchronized_output": {
+      "after_enable": null,
+      "after_disable": null
+    }
+  },
+  "background_color": {
+    "answered": false,
+    "is_dark": null
+  },
+  "cell_size": {
+    "answered": false
+  },
+  "widths": {
+    "all_toolkit_glyphs_single_cell": true,
+    "samples": {
+      "ascii_a": 1,
+      "precomposed_acute": 1,
+      "combining_acute": 1,
+      "cjk_han": 2,
+      "hangul_syllable": 2,
+      "fullwidth_latin_a": 2,
+      "ellipsis": 1,
+      "middle_dot": 1,
+      "chevron": 1,
+      "pointer_triangle": 1,
+      "box_horizontal": 1,
+      "box_vertical": 1,
+      "box_top_left": 1,
+      "box_tee_right": 1,
+      "box_bottom_left": 1,
+      "block_eighth_1": 1,
+      "block_eighth_3": 1,
+      "block_eighth_4": 1,
+      "block_eighth_6": 1,
+      "block_full": 1,
+      "braille_dot_1": 1,
+      "braille_full": 1,
+      "private_use_icon": 1,
+      "plain_emoji": 2,
+      "family_zwj": 2,
+      "regional_flag_us": 2,
+      "heart_vs16": 1,
+      "heart_plain": 1,
+      "thumbs_up_skin_tone": 4,
+      "thumbs_up_plain": 2,
+      "rainbow_flag": 1,
+      "white_flag_base": 1,
+      "zwsp": 0
+    }
+  },
+  "osc52": [
+    {
+      "form": "plain",
+      "updatedOuterClipboard": true,
+      "updatedTmuxBuffer": true
+    },
+    {
+      "form": "tmux",
+      "updatedOuterClipboard": true,
+      "updatedTmuxBuffer": false
+    },
+    {
+      "form": "both",
+      "updatedOuterClipboard": true,
+      "updatedTmuxBuffer": true
+    }
+  ],
+  "interactive": {
+    "pointer": {
+      "hover": {
+        "hasMoved": false,
+        "hasDown": false,
+        "hasDrag": false,
+        "hasUp": false,
+        "hasScrollDown": false,
+        "hasScrollUp": false,
+        "modifiers": {
+          "shift": false,
+          "alt": false,
+          "ctrl": false
+        }
+      },
+      "left_click": {
+        "hasMoved": false,
+        "hasDown": true,
+        "hasDrag": false,
+        "hasUp": true,
+        "hasScrollDown": false,
+        "hasScrollUp": false,
+        "modifiers": {
+          "shift": false,
+          "alt": false,
+          "ctrl": false
+        }
+      },
+      "left_drag": {
+        "hasMoved": false,
+        "hasDown": true,
+        "hasDrag": true,
+        "hasUp": true,
+        "hasScrollDown": false,
+        "hasScrollUp": false,
+        "modifiers": {
+          "shift": false,
+          "alt": false,
+          "ctrl": false
+        }
+      },
+      "wheel_down": {
+        "hasMoved": false,
+        "hasDown": false,
+        "hasDrag": false,
+        "hasUp": false,
+        "hasScrollDown": true,
+        "hasScrollUp": false,
+        "modifiers": {
+          "shift": false,
+          "alt": false,
+          "ctrl": false
+        }
+      },
+      "wheel_up": {
+        "hasMoved": false,
+        "hasDown": false,
+        "hasDrag": false,
+        "hasUp": false,
+        "hasScrollDown": false,
+        "hasScrollUp": true,
+        "modifiers": {
+          "shift": false,
+          "alt": false,
+          "ctrl": false
+        }
+      },
+      "right_click": {
+        "hasMoved": false,
+        "hasDown": false,
+        "hasDrag": false,
+        "hasUp": true,
+        "hasScrollDown": false,
+        "hasScrollUp": false,
+        "modifiers": {
+          "shift": false,
+          "alt": false,
+          "ctrl": false
+        }
+      },
+      "shift_click": {
+        "hasMoved": false,
+        "hasDown": false,
+        "hasDrag": false,
+        "hasUp": false,
+        "hasScrollDown": false,
+        "hasScrollUp": false,
+        "modifiers": {
+          "shift": false,
+          "alt": false,
+          "ctrl": false
+        }
+      },
+      "alt_click": {
+        "hasMoved": false,
+        "hasDown": true,
+        "hasDrag": false,
+        "hasUp": true,
+        "hasScrollDown": false,
+        "hasScrollUp": false,
+        "modifiers": {
+          "shift": false,
+          "alt": true,
+          "ctrl": false
+        }
+      },
+      "alt_drag": {
+        "hasMoved": false,
+        "hasDown": true,
+        "hasDrag": true,
+        "hasUp": true,
+        "hasScrollDown": false,
+        "hasScrollUp": false,
+        "modifiers": {
+          "shift": false,
+          "alt": true,
+          "ctrl": false
+        }
+      },
+      "ctrl_click": {
+        "hasMoved": false,
+        "hasDown": false,
+        "hasDrag": false,
+        "hasUp": true,
+        "hasScrollDown": false,
+        "hasScrollUp": false,
+        "modifiers": {
+          "shift": false,
+          "alt": false,
+          "ctrl": true
+        }
+      },
+      "double_click": {
+        "hasMoved": false,
+        "hasDown": true,
+        "hasDrag": false,
+        "hasUp": true,
+        "hasScrollDown": false,
+        "hasScrollUp": false,
+        "modifiers": {
+          "shift": false,
+          "alt": false,
+          "ctrl": false
+        }
+      }
+    },
+    "keyboard": {
+      "arrow_up": [
+        {
+          "code": "up",
+          "shift": false,
+          "alt": false,
+          "ctrl": false
+        }
+      ],
+      "f1": [
+        {
+          "code": "f1",
+          "shift": false,
+          "alt": false,
+          "ctrl": false
+        }
+      ],
+      "ctrl_a": [
+        {
+          "code": "char:a",
+          "shift": false,
+          "alt": false,
+          "ctrl": true
+        }
+      ],
+      "alt_a": [
+        {
+          "code": "char:a",
+          "shift": false,
+          "alt": true,
+          "ctrl": false
+        }
+      ],
+      "alt_enter": [
+        {
+          "code": "enter",
+          "shift": false,
+          "alt": true,
+          "ctrl": false
+        }
+      ],
+      "shift_enter": [
+        {
+          "code": "enter",
+          "shift": false,
+          "alt": false,
+          "ctrl": false
+        }
+      ],
+      "ctrl_enter": [
+        {
+          "code": "enter",
+          "shift": false,
+          "alt": false,
+          "ctrl": false
+        }
+      ]
+    },
+    "kitty_enter": {
+      "alt_enter": [
+        {
+          "code": "enter",
+          "shift": false,
+          "alt": true,
+          "ctrl": false
+        }
+      ],
+      "shift_enter": [
+        {
+          "code": "enter",
+          "shift": false,
+          "alt": false,
+          "ctrl": false
+        }
+      ],
+      "ctrl_enter": [
+        {
+          "code": "enter",
+          "shift": false,
+          "alt": false,
+          "ctrl": false
+        }
+      ]
+    },
+    "paste": {
+      "hasPasteEvent": true,
+      "keyPressCount": 0,
+      "arrivedInSingleBurst": true
+    },
+    "focus": {
+      "hasFocusLost": true,
+      "hasFocusGained": true
+    },
+    "teardown": {
+      "cleanExitResetMouse": true,
+      "panicExitResetMouse": true
+    }
+  }
+}

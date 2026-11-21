@@ -80,15 +80,24 @@ jobs:
           RIG_XTERM_LOG_DIR="${GITHUB_WORKSPACE}/target/ci-event-logs/linux" \
             ./rig/linux/run.sh ./rig/xterm/run.sh capability_probe \
             > target/ci-event-logs/linux/stdout-xterm.json
+          ./rig/linux/run.sh node rig/xterm/src/expected_compare.mjs \
+            target/ci-event-logs/linux/stdout-xterm.json \
+            rig/expected/xterm-linux.json
 
       - name: xterm.js harness in stock and full tmux
         run: |
           RIG_XTERM_LOG_DIR="${GITHUB_WORKSPACE}/target/ci-event-logs/linux" \
             ./rig/linux/run.sh ./rig/xterm/run-tmux.sh stock capability_probe \
             > target/ci-event-logs/linux/stdout-tmux-stock.json
+          ./rig/linux/run.sh node rig/xterm/src/expected_compare.mjs \
+            target/ci-event-logs/linux/stdout-tmux-stock.json \
+            rig/expected/xterm-tmux-stock-linux.json
           RIG_XTERM_LOG_DIR="${GITHUB_WORKSPACE}/target/ci-event-logs/linux" \
             ./rig/linux/run.sh ./rig/xterm/run-tmux.sh full capability_probe \
             > target/ci-event-logs/linux/stdout-tmux-full.json
+          ./rig/linux/run.sh node rig/xterm/src/expected_compare.mjs \
+            target/ci-event-logs/linux/stdout-tmux-full.json \
+            rig/expected/xterm-tmux-full-linux.json
 
       - name: Upload Linux event logs on failure
         if: failure()
@@ -149,15 +158,24 @@ jobs:
           RIG_XTERM_LOG_DIR="${GITHUB_WORKSPACE}/target/ci-event-logs/macos" \
             ./rig/xterm/run.sh capability_probe \
             > target/ci-event-logs/macos/stdout-xterm.json
+          node rig/xterm/src/expected_compare.mjs \
+            target/ci-event-logs/macos/stdout-xterm.json \
+            rig/expected/xterm-macos.json
 
       - name: xterm.js harness in stock and full tmux
         run: |
           RIG_XTERM_LOG_DIR="${GITHUB_WORKSPACE}/target/ci-event-logs/macos" \
             ./rig/xterm/run-tmux.sh stock capability_probe \
             > target/ci-event-logs/macos/stdout-tmux-stock.json
+          node rig/xterm/src/expected_compare.mjs \
+            target/ci-event-logs/macos/stdout-tmux-stock.json \
+            rig/expected/xterm-tmux-stock-macos.json
           RIG_XTERM_LOG_DIR="${GITHUB_WORKSPACE}/target/ci-event-logs/macos" \
             ./rig/xterm/run-tmux.sh full capability_probe \
             > target/ci-event-logs/macos/stdout-tmux-full.json
+          node rig/xterm/src/expected_compare.mjs \
+            target/ci-event-logs/macos/stdout-tmux-full.json \
+            rig/expected/xterm-tmux-full-macos.json
 
       - name: Upload macOS event logs on failure
         if: failure()
@@ -239,6 +257,8 @@ jobs:
           $stdoutJson = node rig/xterm/src/harness.mjs capability_probe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           [System.IO.File]::WriteAllText("$PWD/target/ci-event-logs/windows/stdout-xterm.json", ($stdoutJson -join "`n") + "`n", $utf8NoBom)
+          node rig/xterm/src/expected_compare.mjs target/ci-event-logs/windows/stdout-xterm.json rig/expected/xterm-windows.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload Windows event logs
         if: always()

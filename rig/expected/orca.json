@@ -1,0 +1,118 @@
+{
+  "identity": {
+    "os": "macos",
+    "xtversion": "xterm.js(6.0.0)",
+    "term": "xterm-256color",
+    "term_program": "Orca",
+    "is_tmux": false,
+    "is_stdin_tty": true,
+    "is_stdout_tty": true
+  },
+  "mouse_modes": {
+    "is_m1_expected": true,
+    "is_m5_reset": true,
+    "after_m1": [
+      {
+        "mode": 1000,
+        "state": "reset"
+      },
+      {
+        "mode": 1002,
+        "state": "set"
+      },
+      {
+        "mode": 1003,
+        "state": "reset"
+      },
+      {
+        "mode": 1006,
+        "state": "set"
+      }
+    ],
+    "after_m5": [
+      {
+        "mode": 1000,
+        "state": "reset"
+      },
+      {
+        "mode": 1002,
+        "state": "reset"
+      },
+      {
+        "mode": 1003,
+        "state": "reset"
+      },
+      {
+        "mode": 1006,
+        "state": "reset"
+      }
+    ]
+  },
+  "kitty_keyboard": {
+    "answered": true,
+    "initial_flags": 0,
+    "pushed_flags": 1,
+    "popped_flags": 0
+  },
+  "modes": {
+    "bracketed_paste": {
+      "after_enable": "set",
+      "after_disable": "reset"
+    },
+    "focus_events": {
+      "after_enable": "set",
+      "after_disable": "reset"
+    },
+    "synchronized_output": {
+      "after_enable": "set",
+      "after_disable": "reset"
+    }
+  },
+  "background_color": {
+    "answered": true,
+    "is_dark": true
+  },
+  "cell_size": {
+    "answered": false
+  },
+  "widths": {
+    "all_toolkit_glyphs_single_cell": true,
+    "samples": {
+      "ascii_a": 1,
+      "precomposed_acute": 1,
+      "combining_acute": 1,
+      "cjk_han": 2,
+      "hangul_syllable": 2,
+      "fullwidth_latin_a": 2,
+      "ellipsis": 1,
+      "middle_dot": 1,
+      "chevron": 1,
+      "pointer_triangle": 1,
+      "box_horizontal": 1,
+      "box_vertical": 1,
+      "box_top_left": 1,
+      "box_tee_right": 1,
+      "box_bottom_left": 1,
+      "block_eighth_1": 1,
+      "block_eighth_3": 1,
+      "block_eighth_4": 1,
+      "block_eighth_6": 1,
+      "block_full": 1,
+      "braille_dot_1": 1,
+      "braille_full": 1,
+      "private_use_icon": 1,
+      "plain_emoji": 2,
+      "family_zwj": 2,
+      "regional_flag_us": 2,
+      "heart_vs16": 1,
+      "heart_plain": 1,
+      "thumbs_up_skin_tone": 4,
+      "thumbs_up_plain": 2,
+      "rainbow_flag": 1,
+      "white_flag_base": 1,
+      "zwsp": 1
+    }
+  },
+  "osc52": null,
+  "interactive": null
+}
