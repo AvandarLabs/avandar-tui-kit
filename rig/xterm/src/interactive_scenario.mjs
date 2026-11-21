@@ -311,20 +311,30 @@ async function finishInteractiveCleanExit(stepContext) {
   return { exitCode: exitOutcome.exitCode, exitReason: 'clean_key_exit', terminalStateAfterExit };
 }
 
+/** Waits until `xterm.js` receives the outer terminal mode sequences expected after `<log>.ready`. */
+export async function waitForReadyOuterTerminalModes(
+  stepContext,
+  targetPlatform = process.platform,
+) {
+  const shouldExpectMouse = shouldExpectOuterMouseEvents(stepContext);
+  if (!shouldExpectMouse && targetPlatform === 'win32') {
+    return;
+  }
+  const hasExpectedOuterMode = shouldExpectMouse
+    ? () => window.__getTerminalState().mouseTrackingMode !== 'none'
+    : () => window.__getTerminalState().bracketedPasteMode === true;
+  await stepContext.bridge.page.waitForFunction(hasExpectedOuterMode, undefined, {
+    timeout: stepContext.timeoutMs,
+  });
+}
+
 async function prepareInteractiveSubrun(stepContext, fenceLabel) {
   await waitForProbeReady(
     stepContext.logPath,
     stepContext.timeoutMs,
     stepContext.session.exitPromise,
   );
-  if (process.platform !== 'win32') {
-    const hasExpectedMode = shouldExpectOuterMouseEvents(stepContext)
-      ? () => window.__getTerminalState().mouseTrackingMode !== 'none'
-      : () => window.__getTerminalState().bracketedPasteMode === true;
-    await stepContext.bridge.page.waitForFunction(hasExpectedMode, undefined, {
-      timeout: stepContext.timeoutMs,
-    });
-  }
+  await waitForReadyOuterTerminalModes(stepContext);
   const terminalStateAtReady = await stepContext.bridge.getTerminalState(stepContext.timeoutMs);
   await runFencedStep(stepContext, fenceLabel, async () => {});
   return terminalStateAtReady;

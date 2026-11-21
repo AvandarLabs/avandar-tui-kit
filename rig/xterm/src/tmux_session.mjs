@@ -288,10 +288,9 @@ export async function createTmuxSession(options) {
   const sanitizedEnv = buildSanitizedPtyEnv(options.env ?? process.env, options.envOverrides ?? {});
   const { ownedScratchDir, paneExitPath, paneCommand } = preparePaneLaunchPlan(options);
   const socketName = buildUniqueTmuxSocketName();
-  registerActiveTmuxServer(socketName, sanitizedEnv);
-  startDetachedKeeperSession({ socketName, configPath, cols, rows, sanitizedEnv });
-
   try {
+    registerActiveTmuxServer(socketName, sanitizedEnv);
+    startDetachedKeeperSession({ socketName, configPath, cols, rows, sanitizedEnv });
     const tmuxServerInfo = queryTmuxServerInfo(socketName, sanitizedEnv);
     const ptySession = startPtySession({
       command: 'tmux',

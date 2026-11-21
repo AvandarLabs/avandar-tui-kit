@@ -10,6 +10,7 @@ import { createBridgeServer, startBrowserBridge } from '../src/bridge_server.mjs
 import {
   assertPointerStepResults,
   shouldExpectOuterMouseEvents,
+  waitForReadyOuterTerminalModes,
 } from '../src/interactive_scenario.mjs';
 import {
   buildUniqueTmuxSocketName,
@@ -369,4 +370,28 @@ test('run-tmux.sh full capability_probe verifies M0 Rows 10 and 12 and clean tea
   assert.notEqual(report.panic.exitCode, 0);
   assert.equal(report.panic.terminalStateAfterPanic.mouseTrackingMode, 'none');
   assert.deepEqual(listHarnessTmuxSockets(), []);
+});
+
+test('waitForReadyOuterTerminalModes awaits mouse on win32 and createTmuxSession cleans scratchDir', async () => {
+  let waitCalls = 0;
+  const page = { async waitForFunction() { waitCalls += 1; } };
+  await waitForReadyOuterTerminalModes({ tmuxMode: null, timeoutMs: 500, bridge: { page } }, 'win32');
+  assert.equal(waitCalls, 1, 'win32 must wait for ConPTY mouseTrackingMode when mouse is expected');
+  await waitForReadyOuterTerminalModes(
+    { tmuxMode: 'stock', session: { tmuxServerInfo: { isMouseEnabled: false } }, timeoutMs: 500, bridge: { page } },
+    'win32',
+  );
+  assert.equal(waitCalls, 1, 'win32 must skip bracketedPaste wait when outer mouse is disabled');
+
+  const beforeDirs = new Set(fs.readdirSync(os.tmpdir()).filter((entry) => entry.startsWith('tuikit-tmux-')));
+  await assert.rejects(() =>
+    createTmuxSession({
+      programPath: process.execPath,
+      tmuxMode: 'full',
+      bridge: { isTerminalReady: true },
+      envOverrides: { PATH: '/nonexistent' },
+    }),
+  );
+  const afterDirs = fs.readdirSync(os.tmpdir()).filter((entry) => entry.startsWith('tuikit-tmux-'));
+  assert.deepEqual(afterDirs.filter((entry) => !beforeDirs.has(entry)), []);
 });
