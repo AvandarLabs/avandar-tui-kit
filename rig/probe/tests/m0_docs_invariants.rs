@@ -30,19 +30,9 @@ const TOUCHED_FILES_WITHOUT_EM_DASH: &[&str] = &[
     "rig/probe/tests/m0_docs_invariants.rs",
 ];
 
-const RIG_SLEEP_SCAN_TARGETS: &[&str] = &[
-    "rig/iterm2",
-    "rig/linux",
-    "rig/orca",
-    "rig/probe/examples",
-    "rig/probe/src",
-    "rig/tmux",
-    "rig/windows",
-    "rig/xterm/src",
-    "rig/xterm/web",
-    "rig/xterm/run.sh",
-    "rig/xterm/run-tmux.sh",
-];
+const RIG_SLEEP_SCAN_TARGETS: &str = "rig/iterm2 rig/linux rig/orca rig/probe/examples \
+    rig/probe/src rig/tmux rig/windows rig/xterm/src rig/xterm/web rig/xterm/run.sh \
+    rig/xterm/run-tmux.sh";
 
 const SKIPPED_FILE_EXTENSIONS: &[&str] = &["pyc", "pyo", "png", "swp"];
 
@@ -167,7 +157,11 @@ fn parse_justfile_recipe_bodies(justfile_text: &str) -> BTreeMap<String, Vec<Str
     recipes
 }
 
-fn assert_contains_all(haystack: &str, context: &str, required_fragments: &[&str]) {
+fn assert_contains_all<'a>(
+    haystack: &str,
+    context: &str,
+    required_fragments: impl IntoIterator<Item = &'a str>,
+) {
     for required_fragment in required_fragments {
         assert!(
             haystack.contains(required_fragment),
@@ -185,6 +179,20 @@ fn assert_lacks_all(haystack: &str, context: &str, forbidden_fragments: &[&str])
     }
 }
 
+fn collect_markdown_doc_files(workspace_root: &Path) -> Vec<PathBuf> {
+    let mut doc_files = vec![
+        workspace_root.join("AGENTS.md"),
+        workspace_root.join("README.md"),
+    ];
+    let docs_dir = workspace_root.join("docs");
+    if docs_dir.is_dir() {
+        collect_rig_source_files(&docs_dir, &mut doc_files);
+    }
+    doc_files.retain(|path| path.extension().is_some_and(|ext| ext == "md"));
+    doc_files.sort();
+    doc_files
+}
+
 #[test]
 fn terminals_doc_has_zero_verify_markers_and_records_conpty_and_tmux_3_3() {
     let terminals_doc = read_repo_file("docs/terminals.md");
@@ -200,8 +208,9 @@ fn terminals_doc_has_zero_verify_markers_and_records_conpty_and_tmux_3_3() {
         "cmd.exe /D /S /C",
         "`\"\\^^^\"\"`",
         "rig/expected",
+        "without `Drag` motion events",
     ];
-    assert_contains_all(&terminals_doc, "docs/terminals.md", &required_fragments);
+    assert_contains_all(&terminals_doc, "docs/terminals.md", required_fragments);
 }
 
 #[test]
@@ -212,8 +221,13 @@ fn testing_doc_aligns_runner_cli_flags_and_expected_compare() {
         "expected_compare.mjs",
         "--tmux <stock|full>",
         "expected_baselines.rs",
+        "iterm2.json",
+        "iterm2-tmux-stock.json",
+        "iterm2-tmux-full.json",
+        "iterm2-tmux-cc.json",
+        "--tmux cc-full",
     ];
-    assert_contains_all(&testing_doc, "docs/testing.md", &required_fragments);
+    assert_contains_all(&testing_doc, "docs/testing.md", required_fragments);
     assert_lacks_all(
         &testing_doc,
         "docs/testing.md",
@@ -239,22 +253,19 @@ fn testing_doc_covers_all_layers_vm_settings_reliability_counts_and_built_status
         "30",
         "10",
     ];
-    assert_contains_all(&testing_doc, "docs/testing.md", &required_fragments);
+    assert_contains_all(&testing_doc, "docs/testing.md", required_fragments);
     let status_section = extract_markdown_h2_section(&testing_doc, "Status").to_ascii_lowercase();
     assert_lacks_all(
         &status_section,
         "docs/testing.md ## Status",
         &["to be built", "not set up", "throwaway"],
     );
-    let built_pieces = [
-        "rig/probe",
-        "rig/xterm",
-        "rig/tmux",
-        "rig/iterm2",
-        "rig/linux",
-        "rig/expected",
-    ];
-    assert_contains_all(&status_section, "docs/testing.md ## Status", &built_pieces);
+    let built_pieces = "rig/probe rig/xterm rig/tmux rig/iterm2 rig/linux rig/expected";
+    assert_contains_all(
+        &status_section,
+        "docs/testing.md ## Status",
+        built_pieces.split_whitespace(),
+    );
 }
 
 #[test]
@@ -264,7 +275,7 @@ fn architecture_and_decisions_satisfy_m0_exit_criteria() {
     assert_contains_all(
         &layout_section,
         "docs/architecture.md layout",
-        &[".github/", "justfile", "rig/", "scripts/"],
+        [".github/", "justfile", "rig/", "scripts/"],
     );
 
     let decisions_doc = read_repo_file("docs/decisions.md");
@@ -282,7 +293,7 @@ fn architecture_and_decisions_satisfy_m0_exit_criteria() {
         assert_contains_all(
             &section_body,
             &format!("decision '{decision_heading}'"),
-            &required_labels,
+            required_labels,
         );
     }
 }
@@ -305,7 +316,7 @@ fn readme_documents_rig_commands_and_hides_private_apps() {
     assert_contains_all(
         &developing_section,
         "README.md ## Developing",
-        &required_commands,
+        required_commands,
     );
     assert_lacks_all(
         &readme_doc.to_ascii_lowercase(),
@@ -318,16 +329,9 @@ fn readme_documents_rig_commands_and_hides_private_apps() {
 fn justfile_recipes_and_expected_baselines_are_complete() {
     let workspace_root = repository_root();
     let recipes = parse_justfile_recipe_bodies(&read_repo_file("justfile"));
-    for layer_recipe in [
-        "test",
-        "linux",
-        "lint-targets",
-        "xterm",
-        "xterm-tmux",
-        "orca",
-        "iterm2",
-        "windows",
-    ] {
+    for layer_recipe in
+        "test linux lint-targets xterm xterm-tmux orca iterm2 windows".split_whitespace()
+    {
         let body_lines = recipes
             .get(layer_recipe)
             .unwrap_or_else(|| panic!("justfile missing recipe '{layer_recipe}'"));
@@ -353,7 +357,7 @@ fn rig_sleep_ban_and_touched_docs_em_dash_and_local_path_bans_hold() {
     let workspace_root = repository_root();
     let sleep_word = concat!("sl", "eep");
     let mut rig_files = Vec::new();
-    for relative_target in RIG_SLEEP_SCAN_TARGETS {
+    for relative_target in RIG_SLEEP_SCAN_TARGETS.split_whitespace() {
         collect_rig_source_files(&workspace_root.join(relative_target), &mut rig_files);
     }
     rig_files.sort();
@@ -368,18 +372,18 @@ fn rig_sleep_ban_and_touched_docs_em_dash_and_local_path_bans_hold() {
             file_path.display()
         );
     }
-
-    let local_users_prefix = concat!("/", "Users", "/");
     for relative_path in TOUCHED_FILES_WITHOUT_EM_DASH {
-        let contents = read_repo_file(relative_path);
         assert!(
-            !contents.contains('\u{2014}'),
+            !read_repo_file(relative_path).contains('\u{2014}'),
             "{relative_path} contains an em dash"
         );
-        assert!(
-            !contents.contains(local_users_prefix),
-            "{relative_path} leaks a local path"
-        );
+    }
+    let local_prefixes = [concat!("/", "Users", "/"), concat!("/", "home", "/")];
+    for doc_path in collect_markdown_doc_files(&workspace_root) {
+        let contents = fs::read_to_string(&doc_path).unwrap_or_else(|read_error| {
+            panic!("failed to read {}: {read_error}", doc_path.display())
+        });
+        assert_lacks_all(&contents, &doc_path.display().to_string(), &local_prefixes);
     }
 }
 

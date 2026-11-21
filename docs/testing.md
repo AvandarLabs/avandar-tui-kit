@@ -167,14 +167,17 @@ VirtioFS shared directory, waits on `tart exec` and RFB handshake readiness
 (zero fixed sleeps), calibrates the VNC Option modifier before key chords,
 backs up and restores guest `defaults` (`com.googlecode.iterm2` and
 `NSGlobalDomain`) around every run, captures a VNC screenshot automatically on
-failure, emits a JSON probe report on `stdout` (verified with
-`expected_compare.mjs` against `rig/expected/iterm2*.json`), and stops the VM
-cleanly on exit.
+failure, emits a JSON probe report on `stdout`, and stops the VM cleanly on
+exit. `expected_compare.mjs` verifies that output against the four iTerm2
+baselines in `rig/expected/`: `iterm2.json` (no `--tmux` flag),
+`iterm2-tmux-stock.json` (`--tmux stock`), `iterm2-tmux-full.json`
+(`--tmux full`), and `iterm2-tmux-cc.json` (`--tmux cc-full`; `--tmux cc-stock`
+is also exercised during the `matrix` sweep).
 
 Proved: **10 consecutive cold-start runs** from a stopped `tuikit-macos` VM
 (`10/10` identical capability digests), plus full matrix verification across
-iTerm2 alone, `stock` and `full` `tmux`, and `tmux -CC` against
-`rig/expected/iterm2*.json`.
+iTerm2 alone, `stock` and `full` `tmux`, and `tmux -CC` against those four
+`rig/expected/iterm2*.json` baselines.
 
 It uses [Tart](https://github.com/cirruslabs/tart) to run the virtual machine.
 Tart is source-available under the Functional Source License, not open

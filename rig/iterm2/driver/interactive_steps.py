@@ -94,14 +94,6 @@ def assert_iterm2_pointer_results(
             f"Rule M1 violation: mode 1002 emitted {len(hover_moves)} bare hover move events.",
             "Ensure mode 1003 is never enabled by setup M1.",
         )
-    all_mouse = [
-        record
-        for step_records in pointer_steps.values()
-        for record in step_records
-        if record.get("event_type") == "mouse"
-    ]
-    if tmux_mode in ("cc-stock", "cc-full") and not all_mouse:
-        return
     checks = [
         (_has_mouse_event(pointer_steps["left_click"], "down:left", 10, 5), "left_click down:left@(10,5)"),
         (_has_mouse_event(pointer_steps["left_click"], "up:left", 10, 5), "left_click up:left@(10,5)"),
@@ -276,7 +268,7 @@ def run_focus_steps(
     timeout_seconds: float,
 ) -> dict[str, list[dict[str, object]]]:
     """Blurs iTerm2 by clicking Finder desktop, then restores focus via the iTerm2 title bar."""
-    should_expect_focus = session.tmux_mode in (None, "full")
+    should_expect_focus = session.tmux_mode in (None, "full", "cc-stock", "cc-full")
     blur_start = _blur_iterm_to_desktop(vm, vnc, session, geometry, should_expect_focus, timeout_seconds)
     ensure_iterm_window_focused(vm, vnc, geometry, timeout_seconds)
     vnc.send_fence_key()

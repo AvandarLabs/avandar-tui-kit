@@ -14,10 +14,17 @@ if str(DRIVER_PARENT) not in sys.path:
 from unittest import mock
 
 from driver.cli_args import DriverRuntimeError, ParsedCliArgs  # noqa: E402
-from driver.iterm_window import GuestDefaultsBackup, restore_guest_defaults  # noqa: E402
+from driver.iterm_window import GuestDefaultsBackup, GuestItermSession, restore_guest_defaults  # noqa: E402
 from driver.main import _run_booted_vm_payload  # noqa: E402
 from driver.matrix_probes import measure_row_1_wheel_direction, run_iterm2_matrix  # noqa: E402
-from driver.scenarios import ScenarioRuntimeContext, capture_failure_screenshot_safe, run_named_scenario  # noqa: E402
+from driver.scenarios import (  # noqa: E402
+    ScenarioRuntimeContext,
+    ScreenshotCapable,
+    capture_failure_screenshot_safe,
+    execute_panic_scenario,
+    run_named_scenario,
+)
+from driver.vnc_input import WindowGeometry  # noqa: E402
 
 
 class FakeVnc:
@@ -49,6 +56,7 @@ class FakeContext:
 
 class ScenarioAndCleanupTests(unittest.TestCase):
     def test_failure_screenshot_is_captured_when_scenario_raises(self) -> None:
+        self.assertTrue(hasattr(ScreenshotCapable, "capture_screenshot"))
         with tempfile.TemporaryDirectory() as temp_dir:
             context = FakeContext(Path(temp_dir))
 
@@ -62,6 +70,32 @@ class ScenarioAndCleanupTests(unittest.TestCase):
             self.assertTrue(context.vnc.screenshots[0].name.endswith("failure-screenshot.png"))
             self.assertTrue(context.vnc.screenshots[0].is_file())
             self.assertIn("failure-screenshot.png", error_context.exception.recovery_hint)
+
+    def test_execute_panic_scenario_verifies_pre_panic_mouse_across_all_tmux_modes(self) -> None:
+        geometry = WindowGeometry(93.0, 168.0, 725.0, 543.0, 100, 30, 7.0, 17.0, 2.0)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            fake_session = GuestItermSession("p1", base / "p1.jsonl", base / "p1.meta.json", base / "p1.exit.json", "stock", None)
+            for tmux_mode in ("stock", "cc-stock"):
+                context = ScenarioRuntimeContext(
+                    vm=mock.MagicMock(),
+                    vnc=mock.MagicMock(),
+                    program="capability_probe",
+                    guest_program_path="/tmp/probe",
+                    tmux_mode=tmux_mode,
+                    guest_tmux_stocks={"stock": "/tmp/stock.conf", "full": "/tmp/full.conf"},
+                    timeout_ms=500,
+                )
+                with (
+                    mock.patch("driver.scenarios.launch_iterm_session", return_value=fake_session),
+                    mock.patch("driver.scenarios.wait_for_probe_ready"),
+                    mock.patch("driver.scenarios.resolve_session_geometry", return_value=geometry),
+                    mock.patch("driver.scenarios.ensure_iterm_window_focused"),
+                    mock.patch("driver.scenarios.run_fenced_vnc_step", return_value=[]),
+                ):
+                    with self.assertRaises(DriverRuntimeError) as panic_err:
+                        execute_panic_scenario(context)
+                    self.assertIn("active mouse tracking", panic_err.exception.message)
 
     def test_capture_failure_screenshot_safe_returns_none_and_cleans_temp_dir(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -147,3 +181,4 @@ class ScenarioAndCleanupTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

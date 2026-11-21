@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import shutil
 import tempfile
+from typing import Protocol
 
 from driver.cli_args import DriverError, DriverRuntimeError, merge_probe_args
 from driver.interactive_steps import (
@@ -35,6 +36,14 @@ from driver.vnc_input import (
     cell_center_to_vnc_pixels,
 )
 from driver.wait_helpers import read_all_jsonl_records, wait_for_probe_ready
+
+
+class ScreenshotCapable(Protocol):
+    """Protocol for VNC controllers capable of capturing a PNG failure screenshot."""
+
+    def capture_screenshot(self, output_path: Path) -> Path:
+        """Captures a screenshot to `output_path` and returns the written path."""
+        ...
 
 
 @dataclass
@@ -71,7 +80,9 @@ class ScenarioRuntimeContext:
         return self.guest_tmux_stocks[profile]
 
 
-def capture_failure_screenshot_safe(vnc: object, artifact_dir: Path | None) -> Path | None:
+def capture_failure_screenshot_safe(
+    vnc: ScreenshotCapable | None, artifact_dir: Path | None
+) -> Path | None:
     """Captures `failure-screenshot.png` via `vnc` without masking the primary exception."""
     if vnc is None or not hasattr(vnc, "capture_screenshot"):
         return None
@@ -83,7 +94,7 @@ def capture_failure_screenshot_safe(vnc: object, artifact_dir: Path | None) -> P
         target_dir = artifact_dir
     screenshot_path = target_dir / "failure-screenshot.png"
     try:
-        vnc.capture_screenshot(screenshot_path)  # type: ignore[attr-defined]
+        vnc.capture_screenshot(screenshot_path)
         return screenshot_path
     except Exception:  # noqa: BLE001
         if created_temp_dir is not None:
@@ -291,18 +302,17 @@ def execute_panic_scenario(context: ScenarioRuntimeContext) -> dict[str, object]
         wait_for_probe_ready(session.host_log_path, context.timeout_seconds, session.host_exit_path)
         geometry = resolve_session_geometry(context.vm, session, context.timeout_seconds)
         ensure_iterm_window_focused(context.vm, context.vnc, geometry, context.timeout_seconds)
-        if context.tmux_mode in (None, "full", "cc-full"):
-            click_x, click_y = cell_center_to_vnc_pixels(geometry, 10, 5)
-            pre_click = run_fenced_vnc_step(
-                context.vm,
-                context.vnc,
-                session,
-                "pre_panic_click",
-                lambda: context.vnc.run_tokens(build_click_tokens(click_x, click_y, 1)),
-                context.timeout_seconds,
-            )
-            if not any(record.get("event_type") == "mouse" for record in pre_click):
-                raise DriverRuntimeError("Expected active mouse tracking before F12 panic.", "Check M1 setup.")
+        click_x, click_y = cell_center_to_vnc_pixels(geometry, 10, 5)
+        pre_click = run_fenced_vnc_step(
+            context.vm,
+            context.vnc,
+            session,
+            "pre_panic_click",
+            lambda: context.vnc.run_tokens(build_click_tokens(click_x, click_y, 1)),
+            context.timeout_seconds,
+        )
+        if not any(record.get("event_type") == "mouse" for record in pre_click):
+            raise DriverRuntimeError("Expected active mouse tracking before F12 panic.", "Check M1 setup.")
         context.vnc.run_tokens(["key", "f12"])
         exit_outcome = wait_for_session_exit_and_teardown(session, context.timeout_seconds)
         if exit_outcome["exitCode"] == 0 and exit_outcome["signal"] == 0:

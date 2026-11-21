@@ -17,6 +17,7 @@ if str(DRIVER_PARENT) not in sys.path:
 from driver.cli_args import DriverRuntimeError  # noqa: E402
 from driver.interactive_steps import (  # noqa: E402
     assert_iterm2_pointer_results,
+    run_focus_steps,
     wait_for_session_exit_and_teardown,
 )
 from driver.iterm_window import GuestItermSession  # noqa: E402
@@ -25,7 +26,7 @@ from driver.tart_vm import (  # noqa: E402
     VncEndpoint,
     ensure_vm_present_and_cold,
 )
-from driver.vnc_input import VncController  # noqa: E402
+from driver.vnc_input import VncController, WindowGeometry  # noqa: E402
 
 
 class StubHungProcess:
@@ -202,8 +203,60 @@ class TeardownAndPointerAssertionTests(unittest.TestCase):
                 assert_iterm2_pointer_results(incomplete_steps, "full")
 
         empty_cc_steps = {key: [] for key in valid_steps}
-        assert_iterm2_pointer_results(empty_cc_steps, "cc-full")
+        for cc_mode in ("cc-stock", "cc-full"):
+            with self.assertRaises(DriverRuntimeError):
+                assert_iterm2_pointer_results(empty_cc_steps, cc_mode)
+
+    def test_run_focus_steps_requires_focus_events_in_cc_modes(self) -> None:
+        geometry = WindowGeometry(93.0, 168.0, 725.0, 543.0, 100, 30, 7.0, 17.0, 2.0)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "focus.jsonl"
+            log_path.write_text("", encoding="utf-8")
+            fake_vm, fake_vnc = mock.MagicMock(), mock.MagicMock()
+            def append_fence() -> None:
+                with log_path.open("a", encoding="utf-8") as handle:
+                    handle.write('{"kind":"event","event_type":"key","key_kind":"press","code":"f2"}\n')
+
+            fake_vnc.send_fence_key.side_effect = append_fence
+            with (
+                mock.patch("driver.interactive_steps.query_frontmost_app_name", return_value="Finder"),
+                mock.patch("driver.interactive_steps.ensure_iterm_window_focused"),
+            ):
+                stock_session = GuestItermSession("s1", log_path, log_path, log_path, "stock", None)
+                self.assertEqual(
+                    run_focus_steps(fake_vm, fake_vnc, stock_session, geometry, 0.05),
+                    {"focusLostEvents": [], "focusGainedEvents": []},
+                )
+                for cc_mode in ("cc-stock", "cc-full"):
+                    cc_session = GuestItermSession("s2", log_path, log_path, log_path, cc_mode, None)
+                    with self.assertRaises(DriverRuntimeError):
+                        run_focus_steps(fake_vm, fake_vnc, cc_session, geometry, 0.05)
+
+    def test_launch_iterm_session_enables_rule_5_cc_attach_wait_only_for_cc_modes(self) -> None:
+        import ast
+        from driver.guest_scripts import PTY_RUNNER_SCRIPT
+        from driver.iterm_window import SessionLaunchSpec, launch_iterm_session
+
+        ast.parse(PTY_RUNNER_SCRIPT)
+        self.assertIn("wait_cc_attach", PTY_RUNNER_SCRIPT)
+        vm = TartVmSession("/usr/local/bin/tart", vm_name="tuikit-macos", env={"HOME": "/nonexistent"})
+        try:
+            with mock.patch.object(vm, "exec_guest"):
+                full_session = launch_iterm_session(
+                    vm, SessionLaunchSpec("s_full", "/tmp/probe", ["--batch"], tmux_mode="full", guest_tmux_conf_path="/tmp/f.conf"),
+                )
+                cc_session = launch_iterm_session(
+                    vm, SessionLaunchSpec("s_cc", "/tmp/probe", ["--batch"], tmux_mode="cc-full", guest_tmux_conf_path="/tmp/f.conf"),
+                )
+            full_spec = json.loads((vm.shared_dir / f"{full_session.session_id}.spec.json").read_text(encoding="utf-8"))
+            cc_spec = json.loads((vm.shared_dir / f"{cc_session.session_id}.spec.json").read_text(encoding="utf-8"))
+            self.assertIs(full_spec["wait_cc_attach"], False)
+            self.assertIs(cc_spec["wait_cc_attach"], True)
+        finally:
+            vm.stop()
 
 
 if __name__ == "__main__":
     unittest.main()
+
+

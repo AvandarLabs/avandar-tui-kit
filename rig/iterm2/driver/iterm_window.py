@@ -208,6 +208,7 @@ def launch_iterm_session(vm: TartVmSession, spec: SessionLaunchSpec) -> GuestIte
         "pre_banner": spec.pre_banner,
         "tmux_sock": guest_socket,
         "tmux_bin": "/opt/homebrew/bin/tmux",
+        "wait_cc_attach": bool(spec.tmux_mode and spec.tmux_mode.startswith("cc-")),
         "query_decrqm": True,
     }
     (vm.shared_dir / f"{session_id}.spec.json").write_text(json.dumps(runner_spec), encoding="utf-8")

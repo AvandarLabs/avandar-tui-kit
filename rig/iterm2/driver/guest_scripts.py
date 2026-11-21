@@ -29,6 +29,37 @@ print(json.dumps(iterm_windows))
 PTY_RUNNER_SCRIPT = """import fcntl, json, os, select, struct, subprocess, sys, termios, time, tty
 
 spec = json.loads(open(sys.argv[1], encoding="utf-8").read())
+if spec.get("wait_cc_attach", False):
+    try:
+        tty_fd = os.open("/dev/tty", os.O_RDWR)
+        old_attr = termios.tcgetattr(tty_fd)
+        try:
+            tty.setraw(tty_fd)
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                os.write(tty_fd, b"\\x1b]11;?\\x07\\x1b[c")
+                reply_buffer = b""
+                query_limit = time.monotonic() + 0.5
+                while time.monotonic() < query_limit:
+                    readable_fds, _, _ = select.select([tty_fd], [], [], 0.05)
+                    if readable_fds:
+                        reply_buffer += os.read(tty_fd, 1024)
+                        if reply_buffer.endswith(b"c") and b"\\x1b[?" in reply_buffer:
+                            break
+                if b"rgb:" in reply_buffer and b"rgb:0000/0000/0000" not in reply_buffer:
+                    break
+                extra_fds, _, _ = select.select([tty_fd], [], [], 0.02)
+                if extra_fds:
+                    extra_bytes = os.read(tty_fd, 1024)
+                    if b"rgb:" in extra_bytes and b"rgb:0000/0000/0000" not in extra_bytes:
+                        break
+            termios.tcflush(tty_fd, termios.TCIFLUSH)
+        finally:
+            termios.tcsetattr(tty_fd, termios.TCSADRAIN, old_attr)
+            os.close(tty_fd)
+    except OSError:
+        pass
+
 if spec.get("pre_banner"):
     sys.stdout.write(spec["pre_banner"])
     sys.stdout.flush()
