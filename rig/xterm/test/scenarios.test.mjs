@@ -152,7 +152,7 @@ function assertInteractiveKeyboardPasteAndFocus(interactiveReport) {
   }
   assert.equal(interactiveReport.terminalStateAfterExit.mouseTrackingMode, 'none');
   assert.equal(interactiveReport.terminalStateAfterExit.bracketedPasteMode, false);
-  assert.equal(interactiveReport.terminalStateAfterExit.sendFocusMode, false);
+  assert.equal(interactiveReport.terminalStateAfterExit.sendFocusMode, process.platform === 'win32');
 }
 
 test('cellCenterToViewportPx maps cell indices to pixel centers and rejects invalid bounds', () => {
@@ -382,7 +382,7 @@ test('run.sh executes capability_probe all scenario with clean JSON stdout and v
   assert.notEqual(report.panic.terminalStateBeforePanic.mouseTrackingMode, 'none');
   assert.equal(report.panic.terminalStateAfterPanic.mouseTrackingMode, 'none');
   assert.equal(report.panic.terminalStateAfterPanic.bracketedPasteMode, false);
-  assert.equal(report.panic.terminalStateAfterPanic.sendFocusMode, false);
+  assert.equal(report.panic.terminalStateAfterPanic.sendFocusMode, process.platform === 'win32');
 });
 
 test('cleanupManagedSession closes bridge and deletes scratchDir when dispose throws', async () => {

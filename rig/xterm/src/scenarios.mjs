@@ -265,7 +265,8 @@ async function executePanicScenario(runtime) {
     const terminalStateAfterPanic = await ctx.bridge.getTerminalState(ctx.timeoutMs);
     assert.equal(terminalStateAfterPanic.mouseTrackingMode, 'none');
     assert.equal(terminalStateAfterPanic.bracketedPasteMode, false);
-    assert.equal(terminalStateAfterPanic.sendFocusMode, false);
+    // Windows ConPTY owns outer DECSET 1004 (`?1004h`) until `ClosePseudoConsole` (`dispose()`).
+    assert.equal(terminalStateAfterPanic.sendFocusMode, process.platform === 'win32');
 
     return {
       scenario: 'panic',

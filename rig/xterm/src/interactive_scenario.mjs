@@ -305,7 +305,8 @@ async function finishInteractiveCleanExit(stepContext) {
   const terminalStateAfterExit = await stepContext.bridge.getTerminalState(stepContext.timeoutMs);
   assert.equal(terminalStateAfterExit.mouseTrackingMode, 'none');
   assert.equal(terminalStateAfterExit.bracketedPasteMode, false);
-  assert.equal(terminalStateAfterExit.sendFocusMode, false);
+  // Windows ConPTY owns outer DECSET 1004 (`?1004h`) until `ClosePseudoConsole` (`dispose()`).
+  assert.equal(terminalStateAfterExit.sendFocusMode, process.platform === 'win32');
   return { exitCode: exitOutcome.exitCode, exitReason: 'clean_key_exit', terminalStateAfterExit };
 }
 
@@ -341,9 +342,10 @@ async function prepareInteractiveSubrun(stepContext, fenceLabel) {
 async function runPrimaryInteractiveSubrun(runtime, withManagedSession) {
   return withManagedSession(runtime, [], async (stepContext) => {
     const terminalStateAtReady = await prepareInteractiveSubrun(stepContext, 'sync_ready');
-    if (runtime.tmuxMode === null && process.platform !== 'win32') {
-      assert.equal(terminalStateAtReady.mouseTrackingMode, 'drag');
-      assert.equal(terminalStateAtReady.bracketedPasteMode, true);
+    if (runtime.tmuxMode === null) {
+      const expectedMouseMode = process.platform === 'win32' ? 'any' : 'drag';
+      assert.equal(terminalStateAtReady.mouseTrackingMode, expectedMouseMode);
+      assert.equal(terminalStateAtReady.bracketedPasteMode, process.platform !== 'win32');
       assert.equal(terminalStateAtReady.sendFocusMode, true);
     }
     const pointerSteps = await runPointerSteps(stepContext, terminalStateAtReady);

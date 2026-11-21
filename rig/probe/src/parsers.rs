@@ -290,21 +290,13 @@ mod tests {
         // then answers DA1 (\x1b[?1;2c).
         let reply_bytes = b"\x1b[?1000;2$y\x1b[?1002;1$y\x1b[?1006;1$y\x1b[?1;2c";
         assert!(has_da1_reply(reply_bytes));
+        let report = |mode, state| ModeReport { mode, state };
         assert_eq!(
             parse_mode_reports(reply_bytes),
             vec![
-                ModeReport {
-                    mode: 1000,
-                    state: ModeReportState::Reset,
-                },
-                ModeReport {
-                    mode: 1002,
-                    state: ModeReportState::Set,
-                },
-                ModeReport {
-                    mode: 1006,
-                    state: ModeReportState::Set,
-                },
+                report(1000, ModeReportState::Reset),
+                report(1002, ModeReportState::Set),
+                report(1006, ModeReportState::Set),
             ]
         );
         assert_eq!(parse_kitty_flags_replies(reply_bytes), Vec::<u16>::new());
@@ -328,21 +320,20 @@ mod tests {
             Some("xterm.js(6.0.0)")
         );
         assert_eq!(parse_kitty_flags_replies(reply_bytes), vec![0, 1]);
-        assert_eq!(
-            parse_cell_pixel_size(reply_bytes),
-            Some(CellPixelSize {
-                height_px: 18,
-                width_px: 9,
-            })
-        );
+        let expected_cell = CellPixelSize {
+            height_px: 18,
+            width_px: 9,
+        };
+        assert_eq!(parse_cell_pixel_size(reply_bytes), Some(expected_cell));
         assert_eq!(
             parse_cursor_position(reply_bytes),
             Some(CursorPosition { row: 1, column: 3 })
         );
         assert!(has_da1_reply(reply_bytes));
         assert!(has_da1_reply(b"\x1b[?6c"));
+        let non_utf8_xt = b"\x1bP>|v1-\xff\x1b\\";
         assert_eq!(
-            parse_xtversion_reply(b"\x1bP>|v1-\xff\x1b\\").as_deref(),
+            parse_xtversion_reply(non_utf8_xt).as_deref(),
             Some("v1-\u{fffd}")
         );
     }
@@ -363,28 +354,21 @@ mod tests {
 
         let bad_kitty = b"\x1b[?u\x1b[?;1u\x1b[?1;u\x1b[?999999u";
         assert_eq!(parse_kitty_flags_replies(bad_kitty), Vec::<u16>::new());
-        assert_eq!(
-            parse_cursor_position(b"\x1b[0;1R\x1b[1;0R\x1b[999999;1R"),
-            None
-        );
-        assert_eq!(
-            parse_cell_pixel_size(b"\x1b[6;0;9t\x1b[6;18;0t\x1b[6;999999;9t"),
-            None
-        );
-        assert_eq!(
-            parse_cell_pixel_size(b"\x1b[6;0;9t\x1b[6;16;8t"),
-            Some(CellPixelSize {
-                height_px: 16,
-                width_px: 8
-            })
-        );
+        let bad_cpr = b"\x1b[0;1R\x1b[1;0R\x1b[999999;1R";
+        assert_eq!(parse_cursor_position(bad_cpr), None);
+        let bad_cell = b"\x1b[6;0;9t\x1b[6;18;0t\x1b[6;999999;9t";
+        assert_eq!(parse_cell_pixel_size(bad_cell), None);
+        let mixed_cell = b"\x1b[6;0;9t\x1b[6;16;8t";
+        let valid_cell = CellPixelSize {
+            height_px: 16,
+            width_px: 8,
+        };
+        assert_eq!(parse_cell_pixel_size(mixed_cell), Some(valid_cell));
         let bad_modes = b"\x1b[?999999;1$y\x1b[?1000;999999$y";
         assert_eq!(parse_mode_reports(bad_modes), Vec::<ModeReport>::new());
 
-        assert_eq!(
-            parse_xtversion_reply(b"\x1bP>|foo\x1bP>|bar\x1b\\").as_deref(),
-            Some("bar")
-        );
+        let multi_xt = b"\x1bP>|foo\x1bP>|bar\x1b\\";
+        assert_eq!(parse_xtversion_reply(multi_xt).as_deref(), Some("bar"));
         assert_eq!(parse_xtversion_reply(b"\x1bP>|unterminated\x1b"), None);
     }
 
