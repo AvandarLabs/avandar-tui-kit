@@ -15,6 +15,52 @@ import { readJsonLines, waitForProbeReady } from './ready_waiter.mjs';
 
 const DEFAULT_TERMINAL_COLS = 100;
 const DEFAULT_TERMINAL_ROWS = 30;
+const BOOLEAN_PROBE_FLAGS = new Set(['--batch', '--push-kitty']);
+const VALUE_PROBE_FLAGS = new Set(['--log', '--osc52', '--osc52-form']);
+
+/**
+ * Merges scenario-managed flags with forwarded `extraArgs`, deduplicating known `capability_probe`
+ * flags (giving `managedArgs` precedence) while preserving unknown flags for custom `<program>` runs.
+ */
+export function mergeProbeArgs(managedArgs = [], extraArgs = []) {
+  const combinedTokens = [...managedArgs, ...extraArgs];
+  const mergedArgs = [];
+  const seenProbeFlags = new Set();
+
+  for (let index = 0; index < combinedTokens.length; index += 1) {
+    const token = combinedTokens[index];
+    const equalsOffset = token.indexOf('=');
+    const inlineFlag = equalsOffset > 0 ? token.slice(0, equalsOffset) : null;
+    if (BOOLEAN_PROBE_FLAGS.has(token)) {
+      if (!seenProbeFlags.has(token)) {
+        seenProbeFlags.add(token);
+        mergedArgs.push(token);
+      }
+      continue;
+    }
+    if (VALUE_PROBE_FLAGS.has(token)) {
+      const valueToken = combinedTokens[index + 1];
+      index += 1;
+      if (!seenProbeFlags.has(token)) {
+        seenProbeFlags.add(token);
+        mergedArgs.push(token);
+        if (valueToken !== undefined) {
+          mergedArgs.push(valueToken);
+        }
+      }
+      continue;
+    }
+    if (inlineFlag !== null && VALUE_PROBE_FLAGS.has(inlineFlag)) {
+      if (!seenProbeFlags.has(inlineFlag)) {
+        seenProbeFlags.add(inlineFlag);
+        mergedArgs.push(token);
+      }
+      continue;
+    }
+    mergedArgs.push(token);
+  }
+  return mergedArgs;
+}
 
 function createDefaultPtySession({ programPath, programArgs, cols, rows, bridge }) {
   return startPtySession({
@@ -38,7 +84,34 @@ function normalizeScenarioRuntime(runtime) {
   };
 }
 
-async function withManagedSession(runtime, additionalArgs, runWithContext) {
+function waitBrieflyForSessionExit(exitPromise, maxWaitMs = 1500) {
+  if (!exitPromise || typeof exitPromise.then !== 'function') {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const fallbackTimer = setTimeout(resolve, maxWaitMs);
+    fallbackTimer.unref?.();
+    const finishWait = () => {
+      clearTimeout(fallbackTimer);
+      resolve();
+    };
+    exitPromise.then(finishWait, finishWait);
+  });
+}
+
+async function cleanupManagedSession(session, bridge, scratchDir) {
+  await session?.dispose?.();
+  await waitBrieflyForSessionExit(session?.exitPromise);
+  await bridge.close();
+  fs.rmSync(scratchDir, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 50,
+  });
+}
+
+async function withManagedSession(runtime, managedArgs, runWithContext) {
   const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tuikit-xterm-'));
   const logPath = path.join(scratchDir, 'probe.jsonl');
   const bridge = await startBrowserBridge({
@@ -51,7 +124,7 @@ async function withManagedSession(runtime, additionalArgs, runWithContext) {
   try {
     session = await runtime.createSession({
       programPath: runtime.programPath,
-      programArgs: ['--log', logPath, ...additionalArgs],
+      programArgs: mergeProbeArgs(['--log', logPath, ...managedArgs], runtime.extraArgs),
       cols: DEFAULT_TERMINAL_COLS,
       rows: DEFAULT_TERMINAL_ROWS,
       bridge,
@@ -64,14 +137,12 @@ async function withManagedSession(runtime, additionalArgs, runWithContext) {
       tmuxMode: runtime.tmuxMode,
     });
   } finally {
-    await session?.dispose?.();
-    await bridge.close();
-    fs.rmSync(scratchDir, { recursive: true, force: true });
+    await cleanupManagedSession(session, bridge, scratchDir);
   }
 }
 
 async function executeBatchScenario(runtime) {
-  return withManagedSession(runtime, ['--batch', ...runtime.extraArgs], async (stepContext) => {
+  return withManagedSession(runtime, ['--batch'], async (stepContext) => {
     await waitForProbeReady(
       stepContext.logPath,
       stepContext.timeoutMs,
@@ -95,8 +166,8 @@ async function executeBatchScenario(runtime) {
 }
 
 async function runSingleOsc52Probe(runtime, form, token) {
-  const probeFlags = ['--batch', '--osc52', token, '--osc52-form', form, ...runtime.extraArgs];
-  return withManagedSession(runtime, probeFlags, async (stepContext) => {
+  const managedOsc52Args = ['--batch', '--osc52', token, '--osc52-form', form];
+  return withManagedSession(runtime, managedOsc52Args, async (stepContext) => {
     await waitForProbeReady(
       stepContext.logPath,
       stepContext.timeoutMs,
@@ -144,7 +215,7 @@ async function executeOsc52Scenario(runtime) {
 }
 
 async function executePanicScenario(runtime) {
-  return withManagedSession(runtime, runtime.extraArgs, async (stepContext) => {
+  return withManagedSession(runtime, [], async (stepContext) => {
     await waitForProbeReady(
       stepContext.logPath,
       stepContext.timeoutMs,
@@ -184,7 +255,7 @@ async function executePanicScenario(runtime) {
 }
 
 async function executePassthroughScenario(runtime) {
-  return withManagedSession(runtime, runtime.extraArgs, async (stepContext) => {
+  return withManagedSession(runtime, [], async (stepContext) => {
     const exitOutcome = await stepContext.session.waitForExit(stepContext.timeoutMs);
     assert.equal(exitOutcome.exitCode, 0, `passthrough program exited with ${exitOutcome.exitCode}`);
     const records = fs.existsSync(stepContext.logPath) ? readJsonLines(stepContext.logPath) : [];

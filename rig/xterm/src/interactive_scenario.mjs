@@ -200,20 +200,43 @@ async function runKeyboardSteps(stepContext) {
   return keyboardSteps;
 }
 
+const EXPECTED_PASTE_KEY_CODES = Object.freeze([
+  'char:a', 'char:l', 'char:p', 'char:h', 'char:a', 'char:b', 'char:e', 'char:t', 'char:a',
+]);
+
+/**
+ * Returns `true` once `recordsAfterStart` contains either a bracketed `paste` event or the full
+ * `'alpha'` + `'beta'` key-press sequence emitted when bracketed paste mode is disabled.
+ */
+export function hasDeliveredPastePayload(recordsAfterStart) {
+  let matchedKeyCount = 0;
+  for (const item of recordsAfterStart) {
+    if (item?.kind !== 'event') {
+      continue;
+    }
+    if (item.event_type === 'paste') {
+      return true;
+    }
+    if (
+      item.event_type === 'key' &&
+      item.key_kind === 'press' &&
+      item.code === EXPECTED_PASTE_KEY_CODES[matchedKeyCount]
+    ) {
+      matchedKeyCount += 1;
+      if (matchedKeyCount === EXPECTED_PASTE_KEY_CODES.length) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 async function runPasteStep(stepContext, terminalStateAtReady) {
   const startRecordCount = readCompleteJsonLines(stepContext.logPath).length;
   await stepContext.bridge.pasteText('alpha\nbeta');
   await waitForLogRecords(
     stepContext.logPath,
-    (records) =>
-      records
-        .slice(startRecordCount)
-        .find(
-          (item) =>
-            item.kind === 'event' &&
-            (item.event_type === 'paste' ||
-              (item.event_type === 'key' && (item.code === 'char:b' || item.code === 'enter'))),
-        ) ?? null,
+    (records) => (hasDeliveredPastePayload(records.slice(startRecordCount)) ? true : null),
     {
       timeoutMs: stepContext.timeoutMs,
       processExitPromise: stepContext.session.exitPromise,
@@ -283,7 +306,7 @@ async function finishInteractiveCleanExit(stepContext) {
 }
 
 async function runPrimaryInteractiveSubrun(runtime, withManagedSession) {
-  return withManagedSession(runtime, runtime.extraArgs, async (stepContext) => {
+  return withManagedSession(runtime, [], async (stepContext) => {
     await waitForProbeReady(
       stepContext.logPath,
       stepContext.timeoutMs,
@@ -317,34 +340,30 @@ async function runPrimaryInteractiveSubrun(runtime, withManagedSession) {
 }
 
 async function runKittyEnterSubrun(runtime, withManagedSession) {
-  return withManagedSession(
-    runtime,
-    ['--push-kitty', ...runtime.extraArgs],
-    async (stepContext) => {
-      await waitForProbeReady(
-        stepContext.logPath,
-        stepContext.timeoutMs,
-        stepContext.session.exitPromise,
-      );
-      await stepContext.bridge.getTerminalState(stepContext.timeoutMs);
-      await runFencedStep(stepContext, 'sync_kitty_ready', async () => {});
+  return withManagedSession(runtime, ['--push-kitty'], async (stepContext) => {
+    await waitForProbeReady(
+      stepContext.logPath,
+      stepContext.timeoutMs,
+      stepContext.session.exitPromise,
+    );
+    await stepContext.bridge.getTerminalState(stepContext.timeoutMs);
+    await runFencedStep(stepContext, 'sync_kitty_ready', async () => {});
 
-      const page = stepContext.bridge.page;
-      const kittyEnterSteps = {
-        alt_enter: await runFencedStep(stepContext, 'kitty_alt_enter', () =>
-          page.keyboard.press('Alt+Enter'),
-        ),
-        shift_enter: await runFencedStep(stepContext, 'kitty_shift_enter', () =>
-          page.keyboard.press('Shift+Enter'),
-        ),
-        ctrl_enter: await runFencedStep(stepContext, 'kitty_ctrl_enter', () =>
-          page.keyboard.press('Control+Enter'),
-        ),
-      };
-      await finishInteractiveCleanExit(stepContext);
-      return kittyEnterSteps;
-    },
-  );
+    const page = stepContext.bridge.page;
+    const kittyEnterSteps = {
+      alt_enter: await runFencedStep(stepContext, 'kitty_alt_enter', () =>
+        page.keyboard.press('Alt+Enter'),
+      ),
+      shift_enter: await runFencedStep(stepContext, 'kitty_shift_enter', () =>
+        page.keyboard.press('Shift+Enter'),
+      ),
+      ctrl_enter: await runFencedStep(stepContext, 'kitty_ctrl_enter', () =>
+        page.keyboard.press('Control+Enter'),
+      ),
+    };
+    await finishInteractiveCleanExit(stepContext);
+    return kittyEnterSteps;
+  });
 }
 
 /**

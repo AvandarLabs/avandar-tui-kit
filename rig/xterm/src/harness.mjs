@@ -265,7 +265,20 @@ export async function runHarnessCliMain({
   }
 }
 
-if (path.resolve(process.argv[1] ?? '') === MODULE_FILE_PATH) {
+function resolveCanonicalFilePath(targetPath) {
+  if (!targetPath) {
+    return '';
+  }
+  const resolvedPath = path.resolve(targetPath);
+  const resolveRealPath = fs.realpathSync.native ?? fs.realpathSync;
+  try {
+    return resolveRealPath(resolvedPath);
+  } catch {
+    return resolvedPath;
+  }
+}
+
+if (resolveCanonicalFilePath(process.argv[1]) === resolveCanonicalFilePath(MODULE_FILE_PATH)) {
   const exitStatus = await runHarnessCliMain();
   process.exit(exitStatus);
 }

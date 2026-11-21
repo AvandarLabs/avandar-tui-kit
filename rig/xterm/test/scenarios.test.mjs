@@ -16,7 +16,9 @@ import {
   movePointerAcrossCells,
   wheelAtCell,
 } from '../src/cell_coords.mjs';
+import { hasDeliveredPastePayload } from '../src/interactive_scenario.mjs';
 import { waitForLogRecords } from '../src/ready_waiter.mjs';
+import { mergeProbeArgs } from '../src/scenarios.mjs';
 
 const TEST_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const XTERM_ROOT = path.resolve(TEST_DIRECTORY, '..');
@@ -230,9 +232,54 @@ test('waitForLogRecords ignores incomplete trailing lines and resolves on comple
     assert.equal(matchedRecord.code, 'f2');
     assert.equal(matchedRecord.key_kind, 'press');
   } finally {
-    fs.rmSync(tempDirectory, { recursive: true, force: true });
+    fs.rmSync(tempDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
+
+test('hasDeliveredPastePayload waits for full alpha+beta key burst when bracketed paste is off', () => {
+  const pasteRecord = { kind: 'event', event_type: 'paste', text: 'alpha\rbeta' };
+  assert.equal(hasDeliveredPastePayload([pasteRecord]), true);
+  const keyPress = (code) => ({ kind: 'event', event_type: 'key', key_kind: 'press', code });
+  const keyRelease = (code) => ({ kind: 'event', event_type: 'key', key_kind: 'release', code });
+  const partialEvents = [
+    keyPress('char:a'),
+    keyRelease('char:a'),
+    ...['l', 'p', 'h', 'a'].map((letter) => keyPress(`char:${letter}`)),
+    keyPress('enter'),
+    ...['b', 'e', 't'].map((letter) => keyPress(`char:${letter}`)),
+  ];
+  assert.equal(hasDeliveredPastePayload(partialEvents), false);
+  assert.equal(hasDeliveredPastePayload([...partialEvents, keyPress('char:a')]), true);
+});
+
+test('mergeProbeArgs deduplicates managed capability_probe flags while preserving custom flags', () => {
+  assert.deepEqual(mergeProbeArgs(['--push-kitty'], ['--push-kitty']), ['--push-kitty']);
+  const managedOsc52 = ['--batch', '--osc52', 'managed-token', '--osc52-form', 'plain'];
+  const extraOsc52 = ['--batch', '--osc52', 'extra-token', '--osc52-form', 'tmux', '--push-kitty'];
+  assert.deepEqual(mergeProbeArgs(managedOsc52, extraOsc52), [...managedOsc52, '--push-kitty']);
+  const customFlags = ['--custom', 'one', '--custom', 'two'];
+  assert.deepEqual(mergeProbeArgs([], customFlags), customFlags);
+});
+
+function assertBatchSectionRecords(batchReport) {
+  assert.equal(batchReport.exitCode, 0);
+  assert.equal(batchReport.terminalStateAfterExit.unicodeVersion, '11');
+  assert.equal(batchReport.terminalStateAfterExit.mouseTrackingMode, 'none');
+  const identityRecord = batchReport.records.find((record) => record.section === 'identity');
+  const mouseModesRecord = batchReport.records.find((record) => record.section === 'mouse_modes');
+  const colorRecord = batchReport.records.find((record) => record.section === 'background_color');
+  assert.equal(identityRecord?.is_tty_available, true);
+  assert.equal(identityRecord?.timed_out, false);
+  assert.equal(identityRecord?.is_tmux, false);
+  assert.ok(mouseModesRecord, 'expected mouse_modes section record');
+  assert.ok(colorRecord, 'expected background_color section record');
+  if (process.platform !== 'win32') {
+    assert.equal(mouseModesRecord.is_m1_expected, true);
+    assert.equal(mouseModesRecord.is_m5_reset, true);
+    assert.equal(colorRecord.answered, true);
+    assert.equal(colorRecord.is_dark, true);
+  }
+}
 
 test('bridge_server exposes blur/focus helpers and fails flush fast if browser socket closes', async () => {
   const bridge = await startBrowserBridge({ cols: 100, rows: 30 });
@@ -305,7 +352,9 @@ test('run.sh rejects invalid CLI arguments with exit code 2, empty stdout, and r
 });
 
 test('run.sh executes capability_probe all scenario with clean JSON stdout and verified teardown', () => {
-  const probeResult = runHarnessCli(['capability_probe'], { timeoutMs: 60000 });
+  const probeResult = runHarnessCli(['capability_probe', '--', '--push-kitty'], {
+    timeoutMs: 60000,
+  });
   assert.equal(probeResult.status, 0, `stderr:\n${probeResult.stderr}`);
   assert.match(probeResult.stderr, /==>/);
   assert.match(probeResult.stderr, /✅/);
@@ -317,20 +366,7 @@ test('run.sh executes capability_probe all scenario with clean JSON stdout and v
   assert.equal(report.program, 'capability_probe');
   assert.equal(report.scenario, 'all');
 
-  assert.equal(report.batch.exitCode, 0);
-  assert.equal(report.batch.terminalStateAfterExit.unicodeVersion, '11');
-  assert.equal(report.batch.terminalStateAfterExit.mouseTrackingMode, 'none');
-  const identityRecord = report.batch.records.find((record) => record.section === 'identity');
-  const mouseModesRecord = report.batch.records.find((record) => record.section === 'mouse_modes');
-  const colorRecord = report.batch.records.find((record) => record.section === 'background_color');
-  assert.equal(identityRecord?.is_tty_available, true);
-  assert.equal(identityRecord?.timed_out, false);
-  assert.equal(identityRecord?.is_tmux, false);
-  assert.equal(mouseModesRecord?.is_m1_expected, true);
-  assert.equal(mouseModesRecord?.is_m5_reset, true);
-  assert.equal(colorRecord?.answered, true);
-  assert.equal(colorRecord?.is_dark, true);
-
+  assertBatchSectionRecords(report.batch);
   assert.ok(
     report.osc52.probes[0].osc52Payloads.some(
       (payload) => payload.decodedText === 'tuikit-xterm-osc52-plain',

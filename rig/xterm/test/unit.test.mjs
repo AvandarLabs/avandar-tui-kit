@@ -174,7 +174,7 @@ test('waitForProbeReady resolves immediately when sentinel and ready record alre
     assert.equal(records[1].kind, 'ready');
     assert.deepEqual(readJsonLines(logPath), records);
   } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -191,7 +191,7 @@ test('waitForProbeReady wakes via fs.watch when ready sentinel arrives asynchron
     assert.equal(records.length, 2);
     assert.equal(records[1].kind, 'ready');
   } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -205,7 +205,7 @@ test('waitForProbeReady fails fast on early process exit and times out when neve
     );
     await assert.rejects(() => waitForProbeReady(path.join(tempDir, 'missing.jsonl'), 80), /timed out/i);
   } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
