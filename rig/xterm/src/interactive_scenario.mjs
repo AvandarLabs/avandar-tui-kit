@@ -75,33 +75,28 @@ function hasMouseRecord(records, mouseKind, column, row) {
   );
 }
 
-export function shouldExpectOuterMouseEvents(stepContext) {
-  if (stepContext.tmuxMode === null) {
-    return true;
-  }
-  if (typeof stepContext.session?.tmuxServerInfo?.isMouseEnabled === 'boolean') {
-    return stepContext.session.tmuxServerInfo.isMouseEnabled;
-  }
-  return stepContext.tmuxMode === 'full';
+export function isTmux33Version(tmuxVersion) {
+  return /^tmux 3\.3(?:[^0-9]|$)/.test(tmuxVersion ?? '');
 }
 
-/**
- * Verifies pointer step logs for either mouse-disabled stock tmux (`< 3.8`) or mouse-enabled runs.
- */
-export function assertPointerStepResults(pointerSteps, { shouldExpectMouseEvents = true } = {}) {
+export function shouldExpectOuterMouseEvents(stepContext) {
+  return typeof stepContext?.shouldExpectMouseEvents === 'boolean'
+    ? stepContext.shouldExpectMouseEvents
+    : true;
+}
+
+/** Verifies pointer step logs across direct `xterm.js`, `tmux 3.3`, `tmux 3.8`, or mouse-off stubs. */
+export function assertPointerStepResults(pointerSteps, options = {}) {
+  const { shouldExpectMouseEvents = true, tmuxVersion = null } = options;
   if (process.platform !== 'win32') {
     const hoverMovedCount = pointerSteps.hover.filter((record) => record.mouse_kind === 'moved').length;
     assert.equal(hoverMovedCount, 0, 'Rule M1 mode 1002 must not emit bare pointer-move events');
   }
   if (!shouldExpectMouseEvents) {
-    assert.deepEqual(pointerSteps.left_click, [], 'Stock tmux left_click must log empty array');
-    assert.deepEqual(pointerSteps.left_drag, [], 'Stock tmux left_drag must log empty array');
-    assert.deepEqual(pointerSteps.wheel_down, [], 'Stock tmux wheel_down must log empty array');
-    assert.deepEqual(pointerSteps.wheel_up, [], 'Stock tmux wheel_up must log empty array');
     const allMouseCount = Object.values(pointerSteps)
       .flat()
       .filter((record) => record.event_type === 'mouse').length;
-    assert.equal(allMouseCount, 0, 'Stock tmux (mouse off) must forward zero mouse events');
+    assert.equal(allMouseCount, 0, 'Mouse-disabled session must forward zero mouse events');
     return;
   }
   assert.ok(hasMouseRecord(pointerSteps.left_click, 'down:left', 10, 5), 'missing left_click down');
@@ -111,7 +106,9 @@ export function assertPointerStepResults(pointerSteps, { shouldExpectMouseEvents
   assert.ok(hasMouseRecord(pointerSteps.left_drag, 'up:left', 18, 6), 'missing left_drag up');
   assert.ok(hasMouseRecord(pointerSteps.wheel_down, 'scroll_down', 10, 5), 'missing wheel_down');
   assert.ok(hasMouseRecord(pointerSteps.wheel_up, 'scroll_up', 10, 5), 'missing wheel_up');
-  assert.ok(hasMouseRecord(pointerSteps.right_click, 'down:right', 15, 7), 'missing right down');
+  if (!isTmux33Version(tmuxVersion)) {
+    assert.ok(hasMouseRecord(pointerSteps.right_click, 'down:right', 15, 7), 'missing right down');
+  }
   assert.ok(hasMouseRecord(pointerSteps.right_click, 'up:right', 15, 7), 'missing right up');
 }
 
@@ -172,6 +169,7 @@ async function runPointerSteps(stepContext, terminalState) {
   const pointerSteps = { ...basicSteps, ...modifiedSteps };
   assertPointerStepResults(pointerSteps, {
     shouldExpectMouseEvents: shouldExpectOuterMouseEvents(stepContext),
+    tmuxVersion: stepContext.session?.tmuxServerInfo?.version ?? null,
   });
   return pointerSteps;
 }

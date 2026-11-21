@@ -18,6 +18,10 @@ build:
 test:
     cargo test --workspace --all-features
 
+# Run a command inside the Linux floor container (Rust 1.88, Node, Playwright, tmux 3.3).
+linux *args:
+    ./rig/linux/run.sh "$@"
+
 # Lint with clippy (pedantic + nursery are on); any warning fails.
 lint:
     cargo clippy --workspace --all-targets --all-features -- -D warnings

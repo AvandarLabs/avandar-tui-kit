@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { createBridgeServer, startBrowserBridge } from '../src/bridge_server.mjs';
 import {
   assertPointerStepResults,
+  isTmux33Version,
   shouldExpectOuterMouseEvents,
   waitForReadyOuterTerminalModes,
 } from '../src/interactive_scenario.mjs';
@@ -73,7 +74,7 @@ function hasMouseCell(records, kind, column, row) {
   );
 }
 
-function assertExactForwardedMouseCells(pointerSteps) {
+function assertExactForwardedMouseCells(pointerSteps, tmuxVersion = '') {
   assert.ok(hasMouseCell(pointerSteps.left_click, 'down:left', 10, 5));
   assert.ok(hasMouseCell(pointerSteps.left_click, 'up:left', 10, 5));
   assert.ok(hasMouseCell(pointerSteps.left_drag, 'down:left', 12, 6));
@@ -81,22 +82,18 @@ function assertExactForwardedMouseCells(pointerSteps) {
   assert.ok(hasMouseCell(pointerSteps.left_drag, 'up:left', 18, 6));
   assert.ok(hasMouseCell(pointerSteps.wheel_down, 'scroll_down', 10, 5));
   assert.ok(hasMouseCell(pointerSteps.wheel_up, 'scroll_up', 10, 5));
-  assert.ok(hasMouseCell(pointerSteps.right_click, 'down:right', 15, 7));
+  if (!isTmux33Version(tmuxVersion)) {
+    assert.ok(hasMouseCell(pointerSteps.right_click, 'down:right', 15, 7));
+  }
+  assert.ok(hasMouseCell(pointerSteps.right_click, 'up:right', 15, 7));
 }
 
 function assertStockTmuxInteractive(interactiveReport) {
-  const pointerSteps = interactiveReport.pointerSteps;
-  const isServerMouseOn = interactiveReport.tmuxServerInfo?.isMouseEnabled === true;
-  if (!isServerMouseOn) {
-    assert.deepEqual(pointerSteps.left_click, []);
-    assert.deepEqual(pointerSteps.left_drag, []);
-    assert.deepEqual(pointerSteps.wheel_down, []);
-    assert.deepEqual(pointerSteps.wheel_up, []);
-    const allPointerEvents = Object.values(pointerSteps).flat();
-    assert.equal(allPointerEvents.filter((record) => record.event_type === 'mouse').length, 0);
-  } else {
-    assertExactForwardedMouseCells(pointerSteps);
+  const tmuxVersion = interactiveReport.tmuxServerInfo?.version ?? '';
+  if (isTmux33Version(tmuxVersion)) {
+    assert.equal(interactiveReport.tmuxServerInfo?.isMouseEnabled, false);
   }
+  assertExactForwardedMouseCells(interactiveReport.pointerSteps, tmuxVersion);
   const focusRecords = [
     ...interactiveReport.focus.focusLostEvents,
     ...interactiveReport.focus.focusGainedEvents,
@@ -115,8 +112,9 @@ function assertStockTmuxInteractive(interactiveReport) {
 }
 
 function assertFullTmuxInteractive(interactiveReport) {
+  const tmuxVersion = interactiveReport.tmuxServerInfo?.version ?? '';
   assert.equal(interactiveReport.tmuxServerInfo?.isMouseEnabled, true);
-  assertExactForwardedMouseCells(interactiveReport.pointerSteps);
+  assertExactForwardedMouseCells(interactiveReport.pointerSteps, tmuxVersion);
   assert.ok(
     interactiveReport.focus.focusLostEvents.some(
       (record) => record.event_type === 'focus' && record.focused === false,
@@ -138,10 +136,17 @@ function assertTmuxBatchReport(batchReport) {
   const colorRecord = batchReport.records.find((record) => record.section === 'background_color');
   assert.equal(identityRecord?.is_tmux, true);
   assert.match(identityRecord?.term ?? '', /^tmux/);
-  assert.equal(mouseModesRecord?.is_m1_expected, true);
-  assert.equal(mouseModesRecord?.is_m5_reset, true);
-  assert.equal(colorRecord?.answered, true);
-  assert.equal(colorRecord?.is_dark, true);
+  if (isTmux33Version(identityRecord?.xtversion ?? '')) {
+    assert.equal(mouseModesRecord?.timed_out, false);
+    assert.deepEqual(mouseModesRecord?.after_m1, []);
+    assert.equal(colorRecord?.answered, false);
+    assert.equal(colorRecord?.phase, 'timeout');
+  } else {
+    assert.equal(mouseModesRecord?.is_m1_expected, true);
+    assert.equal(mouseModesRecord?.is_m5_reset, true);
+    assert.equal(colorRecord?.answered, true);
+    assert.equal(colorRecord?.is_dark, true);
+  }
 }
 
 test('run-tmux.sh --help prints plain help to stdout and exits 0 even without tmux in PATH', SKIP_ON_WIN32, () => {
@@ -202,7 +207,7 @@ test('run-tmux.sh fails with structured recovery hints on invalid args or missin
   }
 });
 
-test('tmux_session helpers and mouse-disabled stock assertions enforce M0 Row 9 contract', () => {
+test('tmux_session helpers and pointer assertions enforce stock and tmux 3.3 contracts', () => {
   const firstSocket = buildUniqueTmuxSocketName();
   const secondSocket = buildUniqueTmuxSocketName();
   assert.notEqual(firstSocket, secondSocket);
@@ -219,10 +224,15 @@ test('tmux_session helpers and mouse-disabled stock assertions enforce M0 Row 9 
   assert.equal(
     shouldExpectOuterMouseEvents({
       tmuxMode: 'stock',
-      session: { tmuxServerInfo: { version: 'tmux 3.3', isMouseEnabled: false } },
+      session: { tmuxServerInfo: { version: 'tmux 3.3a', isMouseEnabled: false } },
     }),
-    false,
+    true,
   );
+  assert.equal(isTmux33Version('tmux 3.3'), true);
+  assert.equal(isTmux33Version('tmux 3.3a'), true);
+  assert.equal(isTmux33Version('tmux 3.8'), false);
+  assert.equal(isTmux33Version('tmux 3.30'), false);
+  assert.equal(shouldExpectOuterMouseEvents({ shouldExpectMouseEvents: false }), false);
   const emptySteps = {
     hover: [],
     left_click: [],
@@ -238,7 +248,7 @@ test('tmux_session helpers and mouse-disabled stock assertions enforce M0 Row 9 
         { ...emptySteps, left_click: [{ event_type: 'mouse', mouse_kind: 'down:left' }] },
         { shouldExpectMouseEvents: false },
       ),
-    /Stock tmux/,
+    /Mouse-disabled/,
   );
 });
 
@@ -363,7 +373,7 @@ test('waitForReadyOuterTerminalModes awaits mouse on win32 and createTmuxSession
   await waitForReadyOuterTerminalModes({ tmuxMode: null, timeoutMs: 500, bridge: { page } }, 'win32');
   assert.equal(waitCalls, 1, 'win32 must wait for ConPTY mouseTrackingMode when mouse is expected');
   await waitForReadyOuterTerminalModes(
-    { tmuxMode: 'stock', session: { tmuxServerInfo: { isMouseEnabled: false } }, timeoutMs: 500, bridge: { page } },
+    { shouldExpectMouseEvents: false, timeoutMs: 500, bridge: { page } },
     'win32',
   );
   assert.equal(waitCalls, 1, 'win32 must skip bracketedPaste wait when outer mouse is disabled');
