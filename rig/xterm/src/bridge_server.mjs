@@ -109,12 +109,26 @@ function rejectAllAckWaiters(bridgeState, reasonError) {
   }
 }
 
+function clearPendingReadyWaiter(bridgeState, rejectionError = null) {
+  const pendingWaiter = bridgeState.readyWaiter;
+  if (!pendingWaiter) {
+    return;
+  }
+  clearTimeout(pendingWaiter.failureTimer);
+  bridgeState.readyWaiter = null;
+  if (rejectionError) {
+    pendingWaiter.reject(rejectionError);
+  }
+}
+
 function handleSocketMessage(bridgeState, rawMessage) {
   const message = JSON.parse(String(rawMessage));
   if (message.type === 'terminal_ready') {
     bridgeState.isTerminalReady = true;
     bridgeState.initialTerminalState = message.state;
-    bridgeState.resolveReady?.(message.state);
+    const pendingWaiter = bridgeState.readyWaiter;
+    clearPendingReadyWaiter(bridgeState);
+    pendingWaiter?.resolve(message.state);
     return;
   }
   if (message.type === 'write_ack') {
@@ -131,9 +145,9 @@ function handleSocketMessage(bridgeState, rawMessage) {
     return;
   }
   if (message.type === 'term_binary' && typeof message.binaryLatin1 === 'string') {
-    const binaryText = Buffer.from(message.binaryLatin1, 'latin1').toString('latin1');
+    const binaryBuffer = Buffer.from(message.binaryLatin1, 'latin1');
     for (const listener of bridgeState.inputListeners) {
-      listener(binaryText);
+      listener(binaryBuffer);
     }
   }
 }
@@ -142,16 +156,13 @@ function waitForTerminalReadySignal(bridgeState, timeoutMs) {
   if (bridgeState.isTerminalReady) {
     return Promise.resolve(bridgeState.initialTerminalState);
   }
+  clearPendingReadyWaiter(bridgeState);
   return new Promise((resolve, reject) => {
     const failureTimer = setTimeout(() => {
-      bridgeState.resolveReady = null;
+      bridgeState.readyWaiter = null;
       reject(new Error(`Timed out after ${timeoutMs}ms waiting for browser terminal_ready`));
     }, timeoutMs);
-    bridgeState.resolveReady = (readyState) => {
-      clearTimeout(failureTimer);
-      bridgeState.resolveReady = null;
-      resolve(readyState);
-    };
+    bridgeState.readyWaiter = { failureTimer, resolve, reject };
   });
 }
 
@@ -197,20 +208,28 @@ function sendChunkOverBridge(bridgeState, chunk) {
   return sequenceNumber;
 }
 
-async function launchChromiumPage(bridgeState, bridgeUrl, headless, timeoutMs) {
+async function launchChromiumPage(bridgeState, bridgeUrl, { headless, timeoutMs, executablePath }) {
   const readyPromise = waitForTerminalReadySignal(bridgeState, timeoutMs);
-  bridgeState.browser = await chromium.launch({ headless });
-  const browserContext = await bridgeState.browser.newContext({
-    viewport: { width: 1280, height: 800 },
-  });
-  bridgeState.page = await browserContext.newPage();
-  await bridgeState.page.goto(bridgeUrl);
+  readyPromise.catch(() => {});
+  try {
+    const launchOptions = executablePath ? { headless, executablePath } : { headless };
+    bridgeState.browser = await chromium.launch(launchOptions);
+    const browserContext = await bridgeState.browser.newContext({
+      viewport: { width: 1280, height: 800 },
+    });
+    bridgeState.page = await browserContext.newPage();
+    await bridgeState.page.goto(bridgeUrl);
+  } catch (launchError) {
+    clearPendingReadyWaiter(bridgeState);
+    throw launchError;
+  }
   return readyPromise;
 }
 
 async function teardownBridgeResources(bridgeState, httpServer, socketServer) {
   bridgeState.isOpen = false;
   bridgeState.isTerminalReady = false;
+  clearPendingReadyWaiter(bridgeState, new Error('Bridge closed before terminal_ready'));
   rejectAllAckWaiters(bridgeState, new Error('Bridge closed before write_ack completed'));
   bridgeState.activeSocket?.close();
   bridgeState.activeSocket = null;
@@ -242,8 +261,8 @@ function createBridgeController(bridgeState, httpServer, socketServer, port, col
     get page() {
       return bridgeState.page;
     },
-    openBrowser: ({ headless = true, timeoutMs = 15000 } = {}) =>
-      launchChromiumPage(bridgeState, bridgeUrl, headless, timeoutMs),
+    openBrowser: ({ headless = true, timeoutMs = 15000, executablePath } = {}) =>
+      launchChromiumPage(bridgeState, bridgeUrl, { headless, timeoutMs, executablePath }),
     writeToTerminal: (chunk) => sendChunkOverBridge(bridgeState, chunk),
     flushTerminalWrites: (timeoutMs = 5000) => flushPendingTerminalWrites(bridgeState, timeoutMs),
     async writeAndFlush(chunk, timeoutMs = 5000) {
@@ -278,7 +297,7 @@ export async function createBridgeServer({ cols = 100, rows = 30 } = {}) {
     activeSocket: null,
     browser: null,
     page: null,
-    resolveReady: null,
+    readyWaiter: null,
     lastSentSequence: 0,
     lastAckedSequence: 0,
     ackWaiters: new Set(),
@@ -308,10 +327,11 @@ export async function startBrowserBridge({
   rows = 30,
   headless = true,
   timeoutMs = 15000,
+  executablePath,
 } = {}) {
   const bridge = await createBridgeServer({ cols, rows });
   try {
-    await bridge.openBrowser({ headless, timeoutMs });
+    await bridge.openBrowser({ headless, timeoutMs, executablePath });
     return bridge;
   } catch (launchError) {
     await bridge.close();

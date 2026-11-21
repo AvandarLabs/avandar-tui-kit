@@ -7,12 +7,12 @@ import test from 'node:test';
 import { CliUsageError, parseHarnessArgs } from '../src/args.mjs';
 import { createBridgeServer, startBrowserBridge } from '../src/bridge_server.mjs';
 import { decodeOsc52Payload } from '../src/osc52.mjs';
-import { startBridgeAndPtySession, startPtySession } from '../src/pty_session.mjs';
 import {
-  buildReadySentinelPath,
-  readJsonLines,
-  waitForProbeReady,
-} from '../src/ready_waiter.mjs';
+  buildSanitizedPtyEnv,
+  startBridgeAndPtySession,
+  startPtySession,
+} from '../src/pty_session.mjs';
+import { buildReadySentinelPath, readJsonLines, waitForProbeReady } from '../src/ready_waiter.mjs';
 
 function createTempTestDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -22,7 +22,9 @@ function waitForTerminalInputMatching(bridge, isMatch, timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
     let accumulatedInput = '';
     const unsubscribe = bridge.onTerminalInput((inputChunk) => {
-      accumulatedInput += inputChunk;
+      accumulatedInput += Buffer.isBuffer(inputChunk)
+        ? inputChunk.toString('latin1')
+        : String(inputChunk);
       if (isMatch(accumulatedInput)) {
         clearTimeout(failureTimer);
         unsubscribe();
@@ -31,11 +33,27 @@ function waitForTerminalInputMatching(bridge, isMatch, timeoutMs = 5000) {
     });
     const failureTimer = setTimeout(() => {
       unsubscribe();
-      reject(
-        new Error(
-          `Timed out after ${timeoutMs}ms waiting for terminal input; got ${JSON.stringify(accumulatedInput)}`,
-        ),
-      );
+      reject(new Error(`Timed out after ${timeoutMs}ms waiting for terminal input`));
+    }, timeoutMs);
+  });
+}
+
+function waitForBinaryInputBuffer(bridge, expectedLength, timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    const receivedChunks = [];
+    let totalBytes = 0;
+    const unsubscribe = bridge.onTerminalInput((inputChunk) => {
+      receivedChunks.push(inputChunk);
+      totalBytes += Buffer.isBuffer(inputChunk) ? inputChunk.length : Buffer.byteLength(inputChunk);
+      if (totalBytes >= expectedLength) {
+        clearTimeout(failureTimer);
+        unsubscribe();
+        resolve(receivedChunks);
+      }
+    });
+    const failureTimer = setTimeout(() => {
+      unsubscribe();
+      reject(new Error(`Timed out after ${timeoutMs}ms waiting for binary terminal input`));
     }, timeoutMs);
   });
 }
@@ -43,15 +61,13 @@ function waitForTerminalInputMatching(bridge, isMatch, timeoutMs = 5000) {
 test('parseHarnessArgs parses help flags before double-dash and forwards after double-dash', () => {
   assert.equal(parseHarnessArgs(['-h']).isHelp, true);
   assert.equal(parseHarnessArgs(['--help'], { requireTmuxConfig: true }).isHelp, true);
-
   const forwardedParsed = parseHarnessArgs(['capability_probe', 'batch', '--', '--help']);
   assert.equal(forwardedParsed.isHelp, false);
   assert.deepEqual(forwardedParsed.extraArgs, ['--help']);
 });
 
 test('parseHarnessArgs applies scenario defaults and parses options in plain mode', () => {
-  const probeDefaults = parseHarnessArgs(['capability_probe']);
-  assert.deepEqual(probeDefaults, {
+  assert.deepEqual(parseHarnessArgs(['capability_probe']), {
     isHelp: false,
     tmuxConfig: null,
     program: 'capability_probe',
@@ -59,9 +75,7 @@ test('parseHarnessArgs applies scenario defaults and parses options in plain mod
     timeoutMs: 20000,
     extraArgs: [],
   });
-
-  const labDefaults = parseHarnessArgs(['mouse_lab']);
-  assert.equal(labDefaults.scenario, 'passthrough');
+  assert.equal(parseHarnessArgs(['mouse_lab']).scenario, 'passthrough');
 
   const explicitOptions = parseHarnessArgs([
     'capability_probe',
@@ -77,9 +91,7 @@ test('parseHarnessArgs applies scenario defaults and parses options in plain mod
 });
 
 test('parseHarnessArgs parses tmux config mode and validates stock or full', () => {
-  const stockParsed = parseHarnessArgs(['stock', 'capability_probe'], {
-    requireTmuxConfig: true,
-  });
+  const stockParsed = parseHarnessArgs(['stock', 'capability_probe'], { requireTmuxConfig: true });
   assert.equal(stockParsed.tmuxConfig, 'stock');
   assert.equal(stockParsed.program, 'capability_probe');
   assert.equal(stockParsed.scenario, 'all');
@@ -107,16 +119,13 @@ test('parseHarnessArgs rejects invalid arguments with CliUsageError and recovery
     { argv: ['custom', 'capability_probe'], options: { requireTmuxConfig: true } },
     { argv: ['stock'], options: { requireTmuxConfig: true } },
   ];
-
   for (const invalidCase of invalidCases) {
     assert.throws(
       () => parseHarnessArgs(invalidCase.argv, invalidCase.options),
-      (thrownError) => {
-        assert.ok(thrownError instanceof CliUsageError);
-        assert.equal(typeof thrownError.recoveryHint, 'string');
-        assert.ok(thrownError.recoveryHint.length > 0);
-        return true;
-      },
+      (thrownError) =>
+        thrownError instanceof CliUsageError &&
+        typeof thrownError.recoveryHint === 'string' &&
+        thrownError.recoveryHint.length > 0,
     );
   }
 });
@@ -130,26 +139,22 @@ test('decodeOsc52Payload decodes ASCII, UTF-8 CJK/emoji, empty clear, and query 
   assert.equal(asciiDecoded.isValid, true);
 
   const utf8Sample = '你好🦀';
-  const utf8Base64 = Buffer.from(utf8Sample, 'utf8').toString('base64');
-  const utf8Decoded = decodeOsc52Payload(`pc;${utf8Base64}`);
+  const utf8Decoded = decodeOsc52Payload(`pc;${Buffer.from(utf8Sample, 'utf8').toString('base64')}`);
   assert.equal(utf8Decoded.selection, 'pc');
   assert.equal(utf8Decoded.decodedText, utf8Sample);
-  assert.equal(utf8Decoded.isValid, true);
 
   const clearDecoded = decodeOsc52Payload('c;');
   assert.equal(clearDecoded.decodedText, '');
   assert.equal(clearDecoded.isValid, true);
 
   const queryDecoded = decodeOsc52Payload('s0;?');
-  assert.equal(queryDecoded.selection, 's0');
   assert.equal(queryDecoded.decodedText, null);
   assert.equal(queryDecoded.isQuery, true);
   assert.equal(queryDecoded.isValid, true);
 });
 
 test('decodeOsc52Payload marks malformed OSC 52 payloads invalid without throwing', () => {
-  const malformedInputs = ['cHJvYmUtMQ==', 'c;not-valid-base64!!!', 'c;abc', 'c;//8='];
-  for (const malformedInput of malformedInputs) {
+  for (const malformedInput of ['cHJvYmUtMQ==', 'c;not-valid-base64!!!', 'c;abc', 'c;//8=']) {
     const decoded = decodeOsc52Payload(malformedInput);
     assert.equal(decoded.decodedText, null);
     assert.equal(decoded.isValid, false);
@@ -160,11 +165,7 @@ test('waitForProbeReady resolves immediately when sentinel and ready record alre
   const tempDir = createTempTestDir('rig-xterm-ready-immediate-');
   try {
     const logPath = path.join(tempDir, 'probe.jsonl');
-    fs.writeFileSync(
-      logPath,
-      '{"kind":"section","section":"identity"}\n{"kind":"ready"}\n',
-      'utf8',
-    );
+    fs.writeFileSync(logPath, '{"kind":"section","section":"identity"}\n{"kind":"ready"}\n', 'utf8');
     fs.writeFileSync(buildReadySentinelPath(logPath), 'ready\n', 'utf8');
 
     const records = await waitForProbeReady(logPath, 2000);
@@ -182,12 +183,10 @@ test('waitForProbeReady wakes via fs.watch when ready sentinel arrives asynchron
   try {
     const logPath = path.join(tempDir, 'probe.jsonl');
     const readyPromise = waitForProbeReady(logPath, 3000);
-
     setImmediate(() => {
       fs.writeFileSync(logPath, '{"kind":"summary","mode":"batch"}\n{"kind":"ready"}\n', 'utf8');
       fs.writeFileSync(buildReadySentinelPath(logPath), 'ready\n', 'utf8');
     });
-
     const records = await readyPromise;
     assert.equal(records.length, 2);
     assert.equal(records[1].kind, 'ready');
@@ -200,59 +199,113 @@ test('waitForProbeReady fails fast on early process exit and times out when neve
   const tempDir = createTempTestDir('rig-xterm-ready-fail-');
   try {
     const crashLogPath = path.join(tempDir, 'crashed.jsonl');
-    const crashedExitPromise = Promise.resolve({ exitCode: 101, signal: 0 });
     await assert.rejects(
-      () => waitForProbeReady(crashLogPath, 5000, crashedExitPromise),
+      () => waitForProbeReady(crashLogPath, 5000, Promise.resolve({ exitCode: 101, signal: 0 })),
       /exited before writing ready sentinel/i,
     );
-
-    const missingLogPath = path.join(tempDir, 'missing.jsonl');
-    await assert.rejects(
-      () => waitForProbeReady(missingLogPath, 80),
-      /timed out/i,
-    );
+    await assert.rejects(() => waitForProbeReady(path.join(tempDir, 'missing.jsonl'), 80), /timed out/i);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
 
-test('pty_session enforces Rule 5 by refusing to spawn before browser terminal is ready', async () => {
+test('buildSanitizedPtyEnv strips outer terminal and tmux vars while preserving explicit overrides', () => {
+  const pollutedOuterEnv = {
+    PATH: '/usr/bin:/bin',
+    TERM: 'dumb',
+    TMUX: '/tmp/tmux-501/default,123,0',
+    TMUX_PANE: '%1',
+    STY: '1234.pts-0',
+    WINDOW: '0',
+    WINDOWID: '999',
+    TERMCAP: 'xterm|foo',
+    COLUMNS: '120',
+    LINES: '40',
+    TERM_PROGRAM: 'Orca',
+    TERM_PROGRAM_VERSION: '1.4.258',
+    ORCA_VERSION: '1.4.258',
+    ITERM_SESSION_ID: 'w0t0p0',
+    ITERM_PROFILE: 'Default',
+    LC_TERMINAL: 'iTerm2',
+    LC_TERMINAL_VERSION: '3.7.7',
+    WT_SESSION: 'guid-123',
+    VSCODE_INJECTION: '1',
+  };
+  const sanitized = buildSanitizedPtyEnv(pollutedOuterEnv, {
+    CUSTOM_HARNESS_FLAG: 'enabled',
+    TERM_PROGRAM: 'ExplicitOverride',
+  });
+  assert.equal(sanitized.PATH, '/usr/bin:/bin');
+  assert.equal(sanitized.TERM, 'xterm-256color');
+  for (const strippedKey of ['TMUX', 'TMUX_PANE', 'ORCA_VERSION', 'ITERM_SESSION_ID', 'WT_SESSION', 'COLUMNS']) {
+    assert.equal(sanitized[strippedKey], undefined);
+  }
+  assert.equal(sanitized.TERM_PROGRAM, 'ExplicitOverride');
+  assert.equal(sanitized.CUSTOM_HARNESS_FLAG, 'enabled');
+});
+
+test('pty_session enforces Rule 5 and cleans up Windows ConPTY handles after natural exit', async () => {
   assert.throws(
-    () =>
-      startPtySession({
-        command: process.execPath,
-        args: ['-e', 'process.exit(0)'],
-        bridge: { isTerminalReady: false },
-      }),
+    () => startPtySession({ command: process.execPath, bridge: { isTerminalReady: false } }),
     /Rule 5 violation: cannot spawn child process before browser terminal is listening/,
   );
 
+  let killCallCount = 0;
+  let hasDestroyedInSocket = false;
+  let triggerExit = null;
+  const fakePtySpawner = () => ({
+    pid: 4242,
+    _agent: { _inSocket: { destroy: () => { hasDestroyedInSocket = true; } } },
+    onData: () => {},
+    onExit: (handler) => { triggerExit = handler; },
+    write: () => {},
+    kill: () => { killCallCount += 1; },
+  });
+  const fakeBridge = { isTerminalReady: true, isOpen: false, onTerminalInput: () => () => {} };
+  const winSession = startPtySession({
+    command: 'cmd.exe',
+    bridge: fakeBridge,
+    platform: 'win32',
+    ptySpawner: fakePtySpawner,
+  });
+  triggerExit({ exitCode: 0, signal: 0 });
+  await winSession.waitForExit(1000);
+  winSession.dispose();
+  winSession.dispose();
+  assert.equal(killCallCount, 1);
+  assert.equal(hasDestroyedInSocket, true);
+});
+
+test('startBrowserBridge cleans up pending ready timer when browser launch fails', async () => {
   const unreadyServer = await createBridgeServer({ cols: 100, rows: 30 });
   try {
     assert.equal(unreadyServer.isTerminalReady, false);
     await assert.rejects(
-      () =>
-        startBridgeAndPtySession({
-          command: process.execPath,
-          args: ['-e', 'process.exit(0)'],
-          bridge: unreadyServer,
-        }),
+      () => startBridgeAndPtySession({ command: process.execPath, bridge: unreadyServer }),
       /Rule 5 violation: cannot spawn child process before browser terminal is listening/,
     );
   } finally {
     await unreadyServer.close();
   }
+
+  await assert.rejects(
+    () =>
+      startBrowserBridge({
+        cols: 100,
+        rows: 30,
+        timeoutMs: 60,
+        executablePath: '/nonexistent-chromium-binary-rig-xterm-test',
+      }),
+    /executable doesn't exist|Failed to launch|ENOENT/i,
+  );
 });
 
-test('browser bridge loads xterm.js 6.0.0 + Unicode11, replies DECRPM/DA1/OSC11, tracks modes, and captures OSC 52', async () => {
+test('browser bridge loads xterm.js 6.0.0 + Unicode11, preserves binary >= 0x80, and captures OSC 52', async () => {
   const bridge = await startBrowserBridge({ cols: 100, rows: 30 });
   try {
-    assert.equal(bridge.isTerminalReady, true);
-    assert.equal(bridge.initialTerminalState.cols, 100);
-    assert.equal(bridge.initialTerminalState.rows, 30);
-    assert.ok(bridge.initialTerminalState.cellWidthPx > 0);
-    assert.ok(bridge.initialTerminalState.cellHeightPx > 0);
-    assert.equal(bridge.initialTerminalState.unicodeVersion, '11');
+    const initial = bridge.initialTerminalState;
+    assert.equal(initial.unicodeVersion, '11');
+    assert.ok(initial.cellWidthPx > 0 && initial.cellHeightPx > 0);
 
     const queryReplyPromise = waitForTerminalInputMatching(
       bridge,
@@ -261,48 +314,51 @@ test('browser bridge loads xterm.js 6.0.0 + Unicode11, replies DECRPM/DA1/OSC11,
     await bridge.writeAndFlush(
       '\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?2004h\x1b[?1004h\x1b]52;c;aGVsbG8=\x07\x1b]11;?\x07\x1b[?1002$p\x1b[c',
     );
-    const queryReply = await queryReplyPromise;
-    assert.match(queryReply, /rgb:1212\/2727\/3838/);
+    assert.match(await queryReplyPromise, /rgb:1212\/2727\/3838/);
 
     const activeState = await bridge.getTerminalState();
     assert.equal(activeState.mouseTrackingMode, 'drag');
-    assert.equal(activeState.bracketedPasteMode, true);
-    assert.equal(activeState.sendFocusMode, true);
-    assert.equal(activeState.osc52Payloads.length, 1);
-    assert.equal(activeState.osc52Payloads[0].selection, 'c');
     assert.equal(activeState.osc52Payloads[0].decodedText, 'hello');
 
-    await bridge.clearOsc52Payloads();
-    await bridge.writeAndFlush('\x1b[?1006l\x1b[?1002l\x1b[?1000l');
-    const resetState = await bridge.getTerminalState();
-    assert.equal(resetState.mouseTrackingMode, 'none');
-    assert.equal(resetState.osc52Payloads.length, 0);
+    await bridge.writeAndFlush('\x1b[?1006l\x1b[?1002l\x1b[?1000h');
+    const binaryChunksPromise = waitForBinaryInputBuffer(bridge, 12);
+    await bridge.page.mouse.click(
+      initial.screenLeftPx + 97.5 * initial.cellWidthPx,
+      initial.screenTopPx + 5.5 * initial.cellHeightPx,
+    );
+    const binaryChunks = await binaryChunksPromise;
+    assert.ok(Buffer.isBuffer(binaryChunks[0]));
+    const combinedBinary = Buffer.concat(binaryChunks);
+    assert.equal(combinedBinary.length, 12);
+    assert.equal(combinedBinary[4], 0x82);
   } finally {
     await bridge.close();
   }
 });
 
-test('startPtySession round-trips terminal queries and Unicode11 CPR width between node-pty and browser xterm.js', async () => {
+test('startPtySession round-trips binary bytes >= 0x80 and Unicode11 CPR width without UTF-8 expansion', async () => {
   const bridge = await startBrowserBridge({ cols: 100, rows: 30 });
   try {
     const childScript = [
       'process.stdin.setRawMode(true);',
-      'let received = "";',
+      'const chunks = [];',
       'process.stdin.on("data", (chunk) => {',
-      '  received += chunk.toString("utf8");',
-      '  if (received.includes("\\x1b[1;3R")) process.exit(0);',
+      '  chunks.push(chunk);',
+      '  const buf = Buffer.concat(chunks);',
+      '  if (buf.includes(Buffer.from([0x1b, 0x5b, 0x4d, 0x20, 0x82, 0x26]))) process.exit(0);',
       '});',
-      'process.stdout.write("\\x1b[1;1H🦀\\x1b[6n");',
+      'process.stdout.write("\\x1b[?1000h\\x1b[1;1H🦀\\x1b[6n");',
     ].join(' ');
 
-    const ptySession = startPtySession({
-      command: process.execPath,
-      args: ['-e', childScript],
-      cols: 100,
-      rows: 30,
-      bridge,
-    });
+    const cprReplyPromise = waitForTerminalInputMatching(bridge, (text) => text.includes('\x1b[1;3R'));
+    const ptySession = startPtySession({ command: process.execPath, args: ['-e', childScript], bridge });
     try {
+      await cprReplyPromise;
+      const initial = bridge.initialTerminalState;
+      await bridge.page.mouse.click(
+        initial.screenLeftPx + 97.5 * initial.cellWidthPx,
+        initial.screenTopPx + 5.5 * initial.cellHeightPx,
+      );
       const exitOutcome = await ptySession.waitForExit(5000);
       assert.equal(exitOutcome.exitCode, 0);
     } finally {

@@ -16,8 +16,29 @@ const NODE_PTY_ROOT = path.resolve(MODULE_DIRECTORY, '..', 'node_modules', 'node
 const RULE_5_ERROR_MESSAGE =
   'Rule 5 violation: cannot spawn child process before browser terminal is listening';
 
-function ensureMacOsSpawnHelperExecutable() {
-  if (process.platform !== 'darwin') {
+const STRIPPED_OUTER_ENV_KEYS = new Set([
+  'COLUMNS',
+  'ITERM_PROFILE',
+  'ITERM_SESSION_ID',
+  'LC_TERMINAL',
+  'LC_TERMINAL_VERSION',
+  'LINES',
+  'ORCA_VERSION',
+  'STY',
+  'TERM',
+  'TERMCAP',
+  'TERM_PROGRAM',
+  'TERM_PROGRAM_VERSION',
+  'TMUX',
+  'TMUX_PANE',
+  'VSCODE_INJECTION',
+  'WINDOW',
+  'WINDOWID',
+  'WT_SESSION',
+]);
+
+function ensureMacOsSpawnHelperExecutable(platform) {
+  if (platform !== 'darwin') {
     return;
   }
   const candidatePaths = [
@@ -34,16 +55,31 @@ function ensureMacOsSpawnHelperExecutable() {
   }
 }
 
-function buildSanitizedPtyEnv(rawEnv) {
-  const sourceEnv = rawEnv ?? process.env;
+/**
+ * Builds a clean PTY environment stripping inherited multiplexer and outer-terminal variables
+ * from `baseEnv`, defaulting `TERM` to `xterm-256color`, and applying explicit `envOverrides`.
+ */
+export function buildSanitizedPtyEnv(baseEnv = process.env, envOverrides = {}) {
+  const sourceEnv = baseEnv ?? process.env;
   const sanitizedEnv = {};
   for (const [envKey, envValue] of Object.entries(sourceEnv)) {
-    if (envValue !== undefined && envValue !== null) {
+    if (
+      envValue !== undefined &&
+      envValue !== null &&
+      !STRIPPED_OUTER_ENV_KEYS.has(envKey.toUpperCase())
+    ) {
       sanitizedEnv[envKey] = String(envValue);
     }
   }
-  if (!sanitizedEnv.TERM) {
-    sanitizedEnv.TERM = 'xterm-256color';
+  sanitizedEnv.TERM = 'xterm-256color';
+  if (envOverrides && typeof envOverrides === 'object') {
+    for (const [overrideKey, overrideValue] of Object.entries(envOverrides)) {
+      if (overrideValue === undefined || overrideValue === null) {
+        delete sanitizedEnv[overrideKey];
+      } else {
+        sanitizedEnv[overrideKey] = String(overrideValue);
+      }
+    }
   }
   return sanitizedEnv;
 }
@@ -100,12 +136,38 @@ function wirePtyStreams(ptyProcess, bridge) {
   };
 }
 
-function killPtyQuietly(ptyProcess) {
-  try {
-    ptyProcess.kill();
-  } catch {
-    // Process may have exited concurrently.
+function disposePtyHandles(ptyProcess, isRunning, platform) {
+  if (isRunning || platform === 'win32') {
+    try {
+      ptyProcess.kill();
+    } catch {
+      // Process may have exited concurrently.
+    }
   }
+  if (platform === 'win32') {
+    try {
+      ptyProcess._agent?._inSocket?.destroy?.();
+    } catch {
+      // ConPTY input socket may already be closed.
+    }
+  }
+}
+
+function normalizeSessionOptions(options) {
+  return {
+    command: options?.command,
+    args: options?.args ?? [],
+    cwd: options?.cwd ?? process.cwd(),
+    env: options?.env ?? process.env,
+    envOverrides: options?.envOverrides ?? {},
+    cols: options?.cols ?? 100,
+    rows: options?.rows ?? 30,
+    headless: options?.headless ?? true,
+    timeoutMs: options?.timeoutMs ?? 15000,
+    bridge: options?.bridge,
+    platform: options?.platform ?? process.platform,
+    ptySpawner: options?.ptySpawner ?? pty.spawn,
+  };
 }
 
 /**
@@ -113,42 +175,37 @@ function killPtyQuietly(ptyProcess) {
  * Throws synchronously if `bridge.isTerminalReady !== true` (Rule 5).
  */
 export function startPtySession(options) {
-  const {
-    command,
-    args = [],
-    cwd = process.cwd(),
-    env = process.env,
-    cols = 100,
-    rows = 30,
-    bridge,
-  } = options ?? {};
-  assertBridgeReady(bridge);
-  ensureMacOsSpawnHelperExecutable();
+  const config = normalizeSessionOptions(options);
+  assertBridgeReady(config.bridge);
+  ensureMacOsSpawnHelperExecutable(config.platform);
 
-  const ptyProcess = pty.spawn(command, args, {
+  const ptyProcess = config.ptySpawner(config.command, config.args, {
     name: 'xterm-256color',
-    cols,
-    rows,
-    cwd,
-    env: buildSanitizedPtyEnv(env),
+    cols: config.cols,
+    rows: config.rows,
+    cwd: config.cwd,
+    env: buildSanitizedPtyEnv(config.env, config.envOverrides),
   });
-  const wired = wirePtyStreams(ptyProcess, bridge);
+  const wired = wirePtyStreams(ptyProcess, config.bridge);
+  let hasDisposed = false;
 
   return {
     pid: ptyProcess.pid,
     exitPromise: wired.exitPromise,
     async waitForExit(timeoutMs = 10000) {
       const exitOutcome = await raceExitWithTimeout(wired.exitPromise, timeoutMs);
-      if (bridge.isOpen) {
-        await bridge.flushTerminalWrites(timeoutMs);
+      if (config.bridge.isOpen) {
+        await config.bridge.flushTerminalWrites(timeoutMs);
       }
       return exitOutcome;
     },
     dispose() {
-      wired.unsubscribeInput();
-      if (wired.isRunning()) {
-        killPtyQuietly(ptyProcess);
+      if (hasDisposed) {
+        return;
       }
+      hasDisposed = true;
+      wired.unsubscribeInput();
+      disposePtyHandles(ptyProcess, wired.isRunning(), config.platform);
     },
   };
 }
@@ -158,29 +215,25 @@ export function startPtySession(options) {
  * When `bridge` is supplied, asserts `bridge.isTerminalReady === true`; when omitted,
  * launches a managed headless browser bridge and waits for `terminal_ready` before spawning.
  */
-export async function startBridgeAndPtySession({
-  command,
-  args = [],
-  cwd = process.cwd(),
-  env = process.env,
-  cols = 100,
-  rows = 30,
-  headless = true,
-  timeoutMs = 15000,
-  bridge,
-}) {
-  const isManagedBridge = bridge === undefined;
+export async function startBridgeAndPtySession(options) {
+  const config = normalizeSessionOptions(options);
+  const isManagedBridge = config.bridge === undefined;
   const activeBridge = isManagedBridge
-    ? await startBrowserBridge({ cols, rows, headless, timeoutMs })
-    : bridge;
+    ? await startBrowserBridge({
+        cols: config.cols,
+        rows: config.rows,
+        headless: config.headless,
+        timeoutMs: config.timeoutMs,
+      })
+    : config.bridge;
 
   try {
-    const ptySession = startPtySession({ command, args, cwd, env, cols, rows, bridge: activeBridge });
+    const ptySession = startPtySession({ ...config, bridge: activeBridge });
     return {
       bridge: activeBridge,
       ptySession,
       exitPromise: ptySession.exitPromise,
-      waitForExit: (exitTimeoutMs = timeoutMs) => ptySession.waitForExit(exitTimeoutMs),
+      waitForExit: (exitTimeoutMs = config.timeoutMs) => ptySession.waitForExit(exitTimeoutMs),
       async dispose() {
         ptySession.dispose();
         if (isManagedBridge) {
