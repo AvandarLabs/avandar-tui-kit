@@ -81,14 +81,30 @@ export function archiveSessionProbeLog({
     return null;
   }
   const filePrefix = buildArchivePrefix(tmuxMode);
-  const maxOnDisk = findMaxArchivedSequenceOnDisk(archiveDir, filePrefix);
-  archivedSessionSequence = Math.max(archivedSessionSequence + 1, maxOnDisk + 1);
-  const sequenceToken = String(archivedSessionSequence).padStart(2, '0');
   const safeLabel = buildArchiveToken(label, 'session');
-  const destinationPath = path.join(archiveDir, `${filePrefix}-${sequenceToken}-${safeLabel}.jsonl`);
   fs.mkdirSync(archiveDir, { recursive: true });
-  fs.copyFileSync(logPath, destinationPath);
-  return destinationPath;
+  let candidateSequence = Math.max(
+    archivedSessionSequence + 1,
+    findMaxArchivedSequenceOnDisk(archiveDir, filePrefix) + 1,
+  );
+  for (let attempt = 1; attempt <= 9999; attempt += 1) {
+    const sequenceToken = String(candidateSequence).padStart(2, '0');
+    const destinationPath = path.join(
+      archiveDir,
+      `${filePrefix}-${sequenceToken}-${safeLabel}.jsonl`,
+    );
+    try {
+      fs.copyFileSync(logPath, destinationPath, fs.constants.COPYFILE_EXCL);
+      archivedSessionSequence = candidateSequence;
+      return destinationPath;
+    } catch (copyError) {
+      if (copyError?.code !== 'EEXIST') {
+        throw copyError;
+      }
+      candidateSequence += 1;
+    }
+  }
+  throw new Error(`Exhausted unique session archive sequences for '${filePrefix}-${safeLabel}'.`);
 }
 
 function writeUniqueFormattedJsonFile(archiveDir, baseStem, kindSuffix, payloadObject) {

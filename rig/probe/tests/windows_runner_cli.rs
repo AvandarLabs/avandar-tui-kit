@@ -21,7 +21,7 @@ fn ci_and_windows_files_exist_without_sleep_or_em_dash() {
     ] {
         let full_path = root.join(relative_path);
         let contents = fs::read_to_string(&full_path)
-            .unwrap_or_else(|err| panic!("{} must be readable: {err}", full_path.display()));
+            .unwrap_or_else(|error| panic!("{} must be readable: {error}", full_path.display()));
         if is_shell_script {
             assert!(
                 contents.starts_with("#!/usr/bin/env bash"),
@@ -77,11 +77,11 @@ case "${1:-}:${2:-}" in
     for arg in "$@"; do [ "$arg" = "--log" ] && { printf 'ConPTY log ok\n'; exit 0; }; done
     cat "$MOCK_GH_VIEW_FILE" ;;
   run:download)
-    dir=""; prev=""
-    for arg in "$@"; do [ "$prev" = "--dir" ] && dir="$arg"; prev="$arg"; done
-    [ ! -e "$dir/windows-event-logs/xterm-01-probe.jsonl" ] || { printf 'file exists\n' >&2; exit 1; }
-    mkdir -p "$dir/windows-event-logs"
-    printf '{"kind":"summary"}\n' > "$dir/windows-event-logs/xterm-01-probe.jsonl" ;;
+    target_dir=""; previous_arg=""
+    for arg in "$@"; do [ "$previous_arg" = "--dir" ] && target_dir="$arg"; previous_arg="$arg"; done
+    [ ! -e "$target_dir/windows-event-logs/xterm-01-probe.jsonl" ] || { printf 'file exists\n' >&2; exit 1; }
+    mkdir -p "$target_dir/windows-event-logs"
+    printf '{"kind":"summary"}\n' > "$target_dir/windows-event-logs/xterm-01-probe.jsonl" ;;
   *) exit 1 ;;
 esac
 "#;
@@ -90,9 +90,11 @@ esac
 
     impl TempTestDir {
         fn create(label: &str) -> Self {
-            let id = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-            let path =
-                env::temp_dir().join(format!("tuikit-win-{label}-{}-{id}", std::process::id()));
+            let unique_id = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = env::temp_dir().join(format!(
+                "tuikit-win-{label}-{}-{unique_id}",
+                std::process::id()
+            ));
             fs::create_dir_all(&path).expect("temp dir creatable");
             Self(path)
         }
@@ -161,24 +163,32 @@ esac
         fs::set_permissions(file_path, permissions).expect("executable");
     }
 
-    fn create_hermetic_shell_bin(bin_dir: &Path) {
-        fs::create_dir_all(bin_dir).expect("hermetic bin dir");
-        let mut dirs: Vec<PathBuf> =
+    fn create_hermetic_shell_bin(bin_directory: &Path) {
+        fs::create_dir_all(bin_directory).expect("hermetic bin dir");
+        let mut search_dirs: Vec<PathBuf> =
             env::split_paths(&env::var_os("PATH").unwrap_or_default()).collect();
-        dirs.extend([PathBuf::from("/usr/bin"), PathBuf::from("/bin")]);
-        for name in ["env", "bash"] {
-            let src = dirs
+        search_dirs.extend([PathBuf::from("/usr/bin"), PathBuf::from("/bin")]);
+        for tool_name in ["env", "bash"] {
+            let source_path = search_dirs
                 .iter()
-                .map(|dir| dir.join(name))
+                .map(|directory| directory.join(tool_name))
                 .find(|candidate| candidate.is_file())
-                .unwrap_or_else(|| panic!("missing system tool {name}"));
-            symlink(src, bin_dir.join(name)).expect("symlink");
+                .unwrap_or_else(|| panic!("missing system tool {tool_name}"));
+            symlink(source_path, bin_directory.join(tool_name)).expect("symlink");
         }
     }
 
-    fn run_script(script: &Path, args: &[&str], cwd: &Path, envs: &[(&str, &str)]) -> Output {
+    fn run_script(
+        script: &Path,
+        args: &[&str],
+        working_dir: &Path,
+        envs: &[(&str, &str)],
+    ) -> Output {
         let mut command = Command::new(script);
-        command.args(args).current_dir(cwd).env_remove("NO_COLOR");
+        command
+            .args(args)
+            .current_dir(working_dir)
+            .env_remove("NO_COLOR");
         for &(name, value) in envs {
             command.env(name, value);
         }
@@ -192,22 +202,22 @@ esac
         create_hermetic_shell_bin(&hermetic_bin);
         let empty_cwd = temp_dir.0.join("empty-cwd");
         fs::create_dir_all(&empty_cwd).expect("empty cwd");
-        let path_val = hermetic_bin.to_str().expect("UTF-8");
+        let hermetic_path = hermetic_bin.to_str().expect("UTF-8");
 
         for script in [windows_script(), check_features_script()] {
             for flag in ["--help", "-h"] {
-                let out = run_script(
+                let output = run_script(
                     &script,
                     &[flag],
                     &empty_cwd,
-                    &[("PATH", path_val), ("NO_COLOR", "1")],
+                    &[("PATH", hermetic_path), ("NO_COLOR", "1")],
                 );
-                assert!(out.status.success() && out.stderr.is_empty());
-                let text = String::from_utf8(out.stdout).expect("UTF-8");
+                assert!(output.status.success() && output.stderr.is_empty());
+                let stdout_text = String::from_utf8(output.stdout).expect("UTF-8");
                 for heading in ["Usage:", "Purpose:", "Options:", "Streams:", "Examples:"] {
-                    assert!(text.contains(heading), "missing {heading}");
+                    assert!(stdout_text.contains(heading), "missing {heading}");
                 }
-                assert!(!text.contains("\x1b["));
+                assert!(!stdout_text.contains("\x1b["));
             }
         }
     }
@@ -215,46 +225,46 @@ esac
     #[test]
     fn invalid_cli_flags_exit_two_with_usage_and_recovery_hint() {
         let temp_dir = TempTestDir::create("invalid");
-        let win_cases: &[&[&str]] = &[
+        let windows_invalid_cases: &[&[&str]] = &[
             &["--unknown-flag"],
             &["--branch"],
             &["--run-id", "not-a-number"],
             &["--output-dir"],
             &["unexpected-positional"],
         ];
-        for args in win_cases {
-            let out = run_script(&windows_script(), args, &temp_dir.0, &[("NO_COLOR", "1")]);
-            assert_eq!(out.status.code(), Some(2), "args: {args:?}");
-            assert!(out.stdout.is_empty());
-            let err = String::from_utf8(out.stderr).expect("UTF-8");
-            assert!(err.contains("Usage:") && err.contains("\n  ⚠️ "));
+        for args in windows_invalid_cases {
+            let output = run_script(&windows_script(), args, &temp_dir.0, &[("NO_COLOR", "1")]);
+            assert_eq!(output.status.code(), Some(2), "args: {args:?}");
+            assert!(output.stdout.is_empty());
+            let stderr_text = String::from_utf8(output.stderr).expect("UTF-8");
+            assert!(stderr_text.contains("Usage:") && stderr_text.contains("\n  ⚠️ "));
         }
-        let cf = run_script(
+        let check_features_output = run_script(
             &check_features_script(),
             &["--bad"],
             &temp_dir.0,
             &[("NO_COLOR", "1")],
         );
-        assert_eq!(cf.status.code(), Some(2));
-        assert!(cf.stdout.is_empty());
+        assert_eq!(check_features_output.status.code(), Some(2));
+        assert!(check_features_output.stdout.is_empty());
     }
 
     #[test]
     fn check_features_runs_no_default_individual_and_all_features_for_published_crates() {
         let fixture = MockCliFixture::create("check-features");
-        let root_str = repository_root()
+        let root_text = repository_root()
             .to_str()
             .expect("UTF-8")
             .replace('\\', "/");
         let metadata_json = format!(
             r#"{{"packages":[
-              {{"name":"tui-alpha","manifest_path":"{root_str}/crates/tui-alpha/Cargo.toml","publish":null,"features":{{"default":[],"mouse":[],"paste":[]}}}},
-              {{"name":"rig-probe","manifest_path":"{root_str}/rig/probe/Cargo.toml","publish":[],"features":{{"default":[],"internal":[]}}}}
+              {{"name":"tui-alpha","manifest_path":"{root_text}/crates/tui-alpha/Cargo.toml","publish":null,"features":{{"default":[],"mouse":[],"paste":[]}}}},
+              {{"name":"rig-probe","manifest_path":"{root_text}/rig/probe/Cargo.toml","publish":[],"features":{{"default":[],"internal":[]}}}}
             ]}}"#
         );
         fs::write(&fixture.metadata_file, metadata_json).expect("metadata");
-        let out = fixture.run_target(&check_features_script(), &[], &[]);
-        assert!(out.status.success());
+        let output = fixture.run_target(&check_features_script(), &[], &[]);
+        assert!(output.status.success());
         let calls: Vec<String> = fs::read_to_string(&fixture.calls_file)
             .expect("calls")
             .lines()
@@ -276,33 +286,33 @@ esac
         let temp_dir = TempTestDir::create("missing-gh");
         let hermetic_bin = temp_dir.0.join("hermetic-bin");
         create_hermetic_shell_bin(&hermetic_bin);
-        let path_val = hermetic_bin.to_str().expect("UTF-8");
-        let missing = run_script(
+        let hermetic_path = hermetic_bin.to_str().expect("UTF-8");
+        let missing_output = run_script(
             &windows_script(),
             &["--branch", "feat/m0-test-rig"],
             &temp_dir.0,
-            &[("PATH", path_val), ("NO_COLOR", "1")],
+            &[("PATH", hermetic_path), ("NO_COLOR", "1")],
         );
-        assert_eq!(missing.status.code(), Some(1));
-        assert!(missing.stdout.is_empty());
+        assert_eq!(missing_output.status.code(), Some(1));
+        assert!(missing_output.stdout.is_empty());
 
         let fixture = MockCliFixture::create("unauth-empty");
-        let unauth = fixture.run_target(
+        let unauth_output = fixture.run_target(
             &windows_script(),
             &["--branch", "main"],
             &[("MOCK_GH_UNAUTH", "1")],
         );
-        assert_eq!(unauth.status.code(), Some(1));
+        assert_eq!(unauth_output.status.code(), Some(1));
         fs::write(&fixture.list_file, "[]").expect("empty list");
-        let empty = fixture.run_target(&windows_script(), &["--branch", "main"], &[]);
-        assert_eq!(empty.status.code(), Some(1));
-        assert!(empty.stdout.is_empty());
+        let empty_output = fixture.run_target(&windows_script(), &["--branch", "main"], &[]);
+        assert_eq!(empty_output.status.code(), Some(1));
+        assert!(empty_output.stdout.is_empty());
     }
 
     #[test]
     fn windows_runner_watches_in_progress_run_and_downloads_into_relative_dir_twice() {
         let fixture = MockCliFixture::create("watch-ok");
-        let out_dir = fixture.temp_dir.0.join("downloaded");
+        let output_dir = fixture.temp_dir.0.join("downloaded");
         fs::write(&fixture.list_file, r#"[{"databaseId":4242,"status":"in_progress","conclusion":null,"headSha":"abc","url":"https://example.test/4242"}]"#).expect("list");
         fs::write(&fixture.view_file, r#"{"databaseId":4242,"headBranch":"feat/m0","status":"in_progress","conclusion":null,"headSha":"abc","url":"https://example.test/4242","jobs":[{"databaseId":9001,"name":"Windows","status":"in_progress","conclusion":null}]}"#).expect("view");
         fs::write(&fixture.after_watch_file, r#"{"databaseId":4242,"headBranch":"feat/m0","status":"completed","conclusion":"success","headSha":"abc","url":"https://example.test/4242","jobs":[{"databaseId":9001,"name":"Windows","status":"completed","conclusion":"success"},{"databaseId":9002,"name":"Linux","status":"completed","conclusion":"success"}]}"#).expect("after");
@@ -314,17 +324,17 @@ esac
             "--output-dir",
             "./downloaded",
         ];
-        let first = fixture.run_target(&windows_script(), &args, &[]);
-        let second = fixture.run_target(&windows_script(), &args, &[]);
-        assert!(first.status.success() && second.status.success());
-        let second_stderr = String::from_utf8(second.stderr).expect("UTF-8");
+        let first_output = fixture.run_target(&windows_script(), &args, &[]);
+        let second_output = fixture.run_target(&windows_script(), &args, &[]);
+        assert!(first_output.status.success() && second_output.status.success());
+        let second_stderr = String::from_utf8(second_output.stderr).expect("UTF-8");
         assert!(!second_stderr.contains("No 'windows-event-logs*' artifacts"));
-        let stdout_line = String::from_utf8(second.stdout).expect("UTF-8");
+        let stdout_line = String::from_utf8(second_output.stdout).expect("UTF-8");
         assert_eq!(stdout_line.lines().count(), 1);
         assert!(stdout_line.contains("\"run_id\":4242"));
-        assert!(out_dir.join("jobs/Windows-9001.log").is_file());
+        assert!(output_dir.join("jobs/Windows-9001.log").is_file());
         assert!(
-            out_dir
+            output_dir
                 .join("artifacts/windows-event-logs/xterm-01-probe.jsonl")
                 .is_file()
         );
@@ -339,23 +349,23 @@ esac
     #[test]
     fn windows_runner_exits_one_when_windows_job_fails_after_downloading_logs() {
         let fixture = MockCliFixture::create("win-fail");
-        let out_dir = fixture.temp_dir.0.join("failed-out");
-        let out_arg = out_dir.to_str().expect("UTF-8");
+        let output_dir = fixture.temp_dir.0.join("failed-out");
+        let output_arg = output_dir.to_str().expect("UTF-8");
         fs::write(&fixture.view_file, r#"{"databaseId":777,"headBranch":"feat/m0","status":"completed","conclusion":"failure","headSha":"def","url":"https://example.test/777","jobs":[{"databaseId":8001,"name":"Windows","status":"completed","conclusion":"failure"}]}"#).expect("view");
 
-        let failed = fixture.run_target(
+        let failed_output = fixture.run_target(
             &windows_script(),
-            &["--run-id", "777", "--output-dir", out_arg],
+            &["--run-id", "777", "--output-dir", output_arg],
             &[],
         );
-        assert_eq!(failed.status.code(), Some(1));
-        assert!(out_dir.join("jobs/Windows-8001.log").is_file());
+        assert_eq!(failed_output.status.code(), Some(1));
+        assert!(output_dir.join("jobs/Windows-8001.log").is_file());
         assert!(
-            String::from_utf8(failed.stdout)
+            String::from_utf8(failed_output.stdout)
                 .expect("UTF-8")
                 .contains("\"conclusion\":\"failure\"")
         );
-        let err = String::from_utf8(failed.stderr).expect("UTF-8");
-        assert!(err.contains("❌") && err.contains("\n  ⚠️ "));
+        let stderr_text = String::from_utf8(failed_output.stderr).expect("UTF-8");
+        assert!(stderr_text.contains("❌") && stderr_text.contains("\n  ⚠️ "));
     }
 }

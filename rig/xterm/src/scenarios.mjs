@@ -177,8 +177,8 @@ async function withManagedSession(runtime, managedArgs, runWithContext, sessionL
     hasPrimaryError = true;
     throw caughtError;
   } finally {
-    const archiveOpts = { logPath, label, tmuxMode: runtime.tmuxMode };
-    await finalizeManagedSession(session, bridge, scratchDir, archiveOpts, hasPrimaryError);
+    const archiveOptions = { logPath, label, tmuxMode: runtime.tmuxMode };
+    await finalizeManagedSession(session, bridge, scratchDir, archiveOptions, hasPrimaryError);
   }
 }
 

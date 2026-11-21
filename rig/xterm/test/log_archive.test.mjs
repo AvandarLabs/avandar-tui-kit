@@ -155,7 +155,7 @@ test('runHarnessCliMain archives formatted report JSON on success', async () => 
     await withProcessEnvOverrides(
       { RIG_XTERM_LOG_DIR: archiveDir, RIG_XTERM_PROGRAM_BIN: stubBinary },
       async () => {
-        const okStatus = await runHarnessCliMain({
+        const successExitCode = await runHarnessCliMain({
           argv: ['custom_demo', 'passthrough'],
           createSession({ programArgs }) {
             fs.writeFileSync(extractLogPathFromArgs(programArgs), '{"kind":"summary"}\n', 'utf8');
@@ -168,7 +168,7 @@ test('runHarnessCliMain archives formatted report JSON on success', async () => 
             };
           },
         });
-        assert.equal(okStatus, 0);
+        assert.equal(successExitCode, 0);
         const reportPath = path.join(archiveDir, 'xterm-custom_demo-passthrough-report.json');
         const parsedReport = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
         assert.equal(parsedReport.program, 'custom_demo');
@@ -186,7 +186,7 @@ test('runHarnessCliMain archives formatted error JSON when runScenario throws', 
     await withProcessEnvOverrides(
       { RIG_XTERM_LOG_DIR: archiveDir, RIG_XTERM_PROGRAM_BIN: stubBinary },
       async () => {
-        const failStatus = await runHarnessCliMain({
+        const failureExitCode = await runHarnessCliMain({
           argv: ['full', 'custom_demo', 'passthrough'],
           requireTmuxConfig: true,
           scriptName: 'run-tmux.sh',
@@ -194,9 +194,10 @@ test('runHarnessCliMain archives formatted error JSON when runScenario throws', 
             throw new Error('simulated tmux session crash');
           },
         });
-        assert.equal(failStatus, 1);
-        const errFile = 'xterm-tmux-full-custom_demo-passthrough-error.json';
-        const parsedError = JSON.parse(fs.readFileSync(path.join(archiveDir, errFile), 'utf8'));
+        assert.equal(failureExitCode, 1);
+        const errorFileName = 'xterm-tmux-full-custom_demo-passthrough-error.json';
+        const errorFilePath = path.join(archiveDir, errorFileName);
+        const parsedError = JSON.parse(fs.readFileSync(errorFilePath, 'utf8'));
         assert.match(parsedError.error, /simulated tmux session crash/);
         assert.equal(typeof parsedError.stack, 'string');
         assert.equal(typeof parsedError.timestamp, 'string');
@@ -205,7 +206,7 @@ test('runHarnessCliMain archives formatted error JSON when runScenario throws', 
   });
 });
 
-test('log_archive advances past existing on-disk sequence and avoids overwriting reports', async () => {
+test('log_archive advances past existing and racing sequences without overwriting files', async () => {
   await withTempDirectory('tuikit-log-multiprocess-', async (tempDir) => {
     const archiveDir = path.join(tempDir, 'shared');
     fs.mkdirSync(archiveDir, { recursive: true });
@@ -215,8 +216,21 @@ test('log_archive advances past existing on-disk sequence and avoids overwriting
 
     resetArchiveSessionSequence();
     const env = { RIG_XTERM_LOG_DIR: archiveDir };
-    const archivedLog = archiveSessionProbeLog({ logPath: newLog, label: 'batch', env });
-    assert.equal(path.basename(archivedLog), 'xterm-05-batch.jsonl');
+    const realReaddirSync = fs.readdirSync;
+    const racingPath = path.join(archiveDir, 'xterm-05-batch.jsonl');
+    fs.readdirSync = (targetDir, ...rest) => {
+      const entries = realReaddirSync(targetDir, ...rest);
+      fs.writeFileSync(racingPath, '{"raced":true}\n', 'utf8');
+      fs.readdirSync = realReaddirSync;
+      return entries;
+    };
+    try {
+      const archivedLog = archiveSessionProbeLog({ logPath: newLog, label: 'batch', env });
+      assert.equal(path.basename(archivedLog), 'xterm-06-batch.jsonl');
+      assert.equal(fs.readFileSync(racingPath, 'utf8'), '{"raced":true}\n');
+    } finally {
+      fs.readdirSync = realReaddirSync;
+    }
 
     const parsedArgs = { program: 'capability_probe', scenario: 'batch', tmuxConfig: null };
     const firstReport = archiveHarnessReport({ report: { run: 1 }, parsedArgs, env });

@@ -133,6 +133,19 @@ print(items[0]["databaseId"] if items else "")
     "Push '$branch_name' to origin ('git push -u origin $branch_name') and retry with 'just windows --wait'."
 }
 
+downloaded_map_file=""
+
+cleanup_temp_files() {
+  if [ -n "${downloaded_map_file:-}" ]; then
+    rm -f "$downloaded_map_file"
+    downloaded_map_file=""
+  fi
+}
+
+trap cleanup_temp_files EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 query_run_view_json() {
   (cd "$repository_root" && gh run view "$run_id" \
     --json databaseId,headBranch,status,conclusion,headSha,url,jobs) \
@@ -142,12 +155,15 @@ query_run_view_json() {
 
 fetch_and_optionally_watch_run() {
   run_view_json="$(query_run_view_json)"
-  local current_status
+  local current_status watch_status=0
   current_status="$(RUN_JSON="$run_view_json" python3 -c \
     'import json, os; print(json.loads(os.environ["RUN_JSON"]).get("status") or "")')"
   if [ "$should_wait" -eq 1 ] && [ "$current_status" != "completed" ]; then
     log_info "Waiting for workflow run $run_id to complete..."
-    (cd "$repository_root" && gh run watch "$run_id" >&2) || true
+    (cd "$repository_root" && gh run watch "$run_id" >&2) || watch_status=$?
+    if [ "$watch_status" -eq 130 ] || [ "$watch_status" -eq 143 ]; then
+      exit "$watch_status"
+    fi
     run_view_json="$(query_run_view_json)"
   fi
 }
@@ -243,18 +259,18 @@ summary = {
     "output_dir": os.environ["OUT_DIR"],
     "windows_jobs": windows_jobs,
 }
-all_ok = bool(windows_jobs) and all(
+is_all_ok = bool(windows_jobs) and all(
     item["status"] == "completed" and item["conclusion"] == "success" for item in windows_jobs
 )
 print(json.dumps(summary, separators=(",", ":")))
-print("OK" if all_ok else "FAIL")
+print("OK" if is_all_ok else "FAIL")
 PY
 }
 
 emit_summary_and_finish() {
   local summary_state
   summary_state="$(build_summary_state)"
-  rm -f "$downloaded_map_file"
+  cleanup_temp_files
   local json_line="${summary_state%%$'\n'*}"
   local outcome_token="${summary_state##*$'\n'}"
   printf '%s\n' "$json_line"
@@ -273,7 +289,6 @@ check_prerequisites
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd "$script_directory/../.." && pwd)"
 run_view_json=""
-downloaded_map_file=""
 
 resolve_target_run_id
 fetch_and_optionally_watch_run
