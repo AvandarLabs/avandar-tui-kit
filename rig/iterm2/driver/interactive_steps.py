@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 import json
-from typing import Callable
 
 from driver.cli_args import DriverRuntimeError
 from driver.iterm_window import (
@@ -22,18 +22,15 @@ from driver.wait_helpers import (
 
 
 def ensure_iterm_window_focused(
-    vm: TartVmSession,
-    vnc: VncController,
-    geometry: WindowGeometry,
-    timeout_seconds: float,
+    vm: TartVmSession, vnc: VncController, geometry: WindowGeometry, timeout_seconds: float,
 ) -> None:
     """Activates iTerm2 via its title bar until it becomes the frontmost macOS app."""
-    tx, ty = titlebar_point_vnc_pixels(geometry)
+    title_x, title_y = titlebar_point_vnc_pixels(geometry)
 
     def _activate_until_frontmost() -> bool | None:
         if query_frontmost_app_name(vm) == "iTerm2":
             return True
-        vnc.run_tokens(build_click_tokens(tx, ty, button=1))
+        vnc.run_tokens(build_click_tokens(title_x, title_y, button=1))
         return True if query_frontmost_app_name(vm) == "iTerm2" else None
 
     poll_until(_activate_until_frontmost, timeout_seconds, "iTerm2 frontmost activation", 0.15)
@@ -46,12 +43,12 @@ def run_fenced_vnc_step(
     step_label: str,
     action: Callable[[], None],
     timeout_seconds: float,
-    dismiss_menu_before_fence: bool = False,
+    should_dismiss_menu_before_fence: bool = False,
 ) -> list[dict[str, object]]:
     """Executes `action`, optionally dismisses any popup menu, sends F2, and returns the slice."""
     start_count = len(read_complete_jsonl_records(session.host_log_path))
     action()
-    if dismiss_menu_before_fence:
+    if should_dismiss_menu_before_fence:
         dismiss_popup_menus_if_any(vm, vnc, timeout_seconds)
     vnc.send_fence_key()
 
@@ -76,33 +73,32 @@ def _has_mouse_event(
     col: int | None = None,
     row: int | None = None,
 ) -> bool:
-    for rec in records:
-        if rec.get("event_type") != "mouse" or rec.get("mouse_kind") != mouse_kind:
+    for record in records:
+        if record.get("event_type") != "mouse" or record.get("mouse_kind") != mouse_kind:
             continue
-        if col is not None and rec.get("column") != col:
+        if col is not None and record.get("column") != col:
             continue
-        if row is not None and rec.get("row") != row:
+        if row is not None and record.get("row") != row:
             continue
         return True
     return False
 
 
 def assert_iterm2_pointer_results(
-    pointer_steps: dict[str, list[dict[str, object]]],
-    tmux_mode: str | None,
+    pointer_steps: dict[str, list[dict[str, object]]], tmux_mode: str | None,
 ) -> None:
     """Validates Rule M1 hover suppression and expected mouse events across modes."""
-    hover_moves = [r for r in pointer_steps["hover"] if r.get("mouse_kind") == "moved"]
+    hover_moves = [record for record in pointer_steps["hover"] if record.get("mouse_kind") == "moved"]
     if hover_moves:
         raise DriverRuntimeError(
             f"Rule M1 violation: mode 1002 emitted {len(hover_moves)} bare hover move events.",
             "Ensure mode 1003 is never enabled by setup M1.",
         )
     all_mouse = [
-        rec
+        record
         for step_records in pointer_steps.values()
-        for rec in step_records
-        if rec.get("event_type") == "mouse"
+        for record in step_records
+        if record.get("event_type") == "mouse"
     ]
     if tmux_mode in ("cc-stock", "cc-full") and not all_mouse:
         return
@@ -115,57 +111,57 @@ def assert_iterm2_pointer_results(
         (_has_mouse_event(pointer_steps["wheel_down"], "scroll_down", 10, 5), "wheel_down@(10,5)"),
         (_has_mouse_event(pointer_steps["wheel_up"], "scroll_up", 10, 5), "wheel_up@(10,5)"),
     ]
-    missing = [label for ok, label in checks if not ok]
+    missing = [label for is_present, label in checks if not is_present]
     if missing:
-        actual = [(r.get("mouse_kind"), r.get("column"), r.get("row")) for r in pointer_steps["left_click"]]
+        actual = [
+            (record.get("mouse_kind"), record.get("column"), record.get("row"))
+            for record in pointer_steps["left_click"]
+        ]
         raise DriverRuntimeError(
             f"Missing expected pointer events in mode '{tmux_mode or 'direct'}': {', '.join(missing)} (left_click={actual}).",
             "Inspect failure-screenshot.png to verify window alignment and cell coordinates.",
         )
 
 
+def _build_pointer_step_specs(
+    geometry: WindowGeometry, modifiers: ModifierMap,
+) -> list[tuple[str, list[str], bool]]:
+    def cell_pixels(col: int, row: int) -> tuple[int, int]:
+        return cell_center_to_vnc_pixels(geometry, col, row)
+
+    return [
+        ("hover", build_move_tokens([cell_pixels(2, 2), cell_pixels(4, 2), cell_pixels(6, 2)]), False),
+        ("left_click", build_click_tokens(*cell_pixels(10, 5), 1), False),
+        ("left_drag", build_drag_tokens(cell_pixels(12, 6), cell_pixels(18, 6), 1), False),
+        ("wheel_down", build_wheel_tokens(*cell_pixels(10, 5), "down"), False),
+        ("wheel_up", build_wheel_tokens(*cell_pixels(10, 5), "up"), False),
+        ("right_click", build_click_tokens(*cell_pixels(15, 7), 3), True),
+        ("shift_click", build_click_tokens(*cell_pixels(11, 5), 1, (modifiers.shift_key,)), False),
+        ("alt_click", build_click_tokens(*cell_pixels(12, 5), 1, (modifiers.option_key,)), False),
+        ("cmd_click", build_click_tokens(*cell_pixels(12, 5), 1, (modifiers.command_key,)), False),
+        ("alt_drag", build_drag_tokens(cell_pixels(12, 8), cell_pixels(16, 8), 1, (modifiers.option_key,)), False),
+        ("ctrl_click", build_click_tokens(*cell_pixels(13, 5), 1, (modifiers.ctrl_key,)), True),
+        ("double_click", build_click_tokens(*cell_pixels(14, 5), 1, (), 2), False),
+    ]
+
+
 def run_pointer_steps(
     vm: TartVmSession,
     vnc: VncController,
     session: GuestItermSession,
-    geom: WindowGeometry,
-    mods: ModifierMap,
+    geometry: WindowGeometry,
+    modifiers: ModifierMap,
     timeout_seconds: float,
 ) -> dict[str, list[dict[str, object]]]:
     """Runs basic and modified pointer steps over VNC with F2 fences."""
-    c = lambda col, row: cell_center_to_vnc_pixels(geom, col, row)  # noqa: E731
-    run = lambda name, fn, menu=False: run_fenced_vnc_step(  # noqa: E731
-        vm, vnc, session, name, fn, timeout_seconds, dismiss_menu_before_fence=menu
-    )
-    steps = {
-        "hover": run("hover", lambda: vnc.run_tokens(build_move_tokens([c(2, 2), c(4, 2), c(6, 2)]))),
-        "left_click": run("left_click", lambda: vnc.run_tokens(build_click_tokens(*c(10, 5), 1))),
-        "left_drag": run("left_drag", lambda: vnc.run_tokens(build_drag_tokens(c(12, 6), c(18, 6), 1))),
-        "wheel_down": run("wheel_down", lambda: vnc.run_tokens(build_wheel_tokens(*c(10, 5), "down"))),
-        "wheel_up": run("wheel_up", lambda: vnc.run_tokens(build_wheel_tokens(*c(10, 5), "up"))),
-        "right_click": run("right_click", lambda: vnc.run_tokens(build_click_tokens(*c(15, 7), 3)), True),
-        "shift_click": run(
-            "shift_click", lambda: vnc.run_tokens(build_click_tokens(*c(11, 5), 1, (mods.shift_key,)))
-        ),
-        "alt_click": run(
-            "alt_click", lambda: vnc.run_tokens(build_click_tokens(*c(12, 5), 1, (mods.option_key,)))
-        ),
-        "cmd_click": run(
-            "cmd_click", lambda: vnc.run_tokens(build_click_tokens(*c(12, 5), 1, (mods.command_key,)))
-        ),
-        "alt_drag": run(
-            "alt_drag",
-            lambda: vnc.run_tokens(build_drag_tokens(c(12, 8), c(16, 8), 1, (mods.option_key,))),
-        ),
-        "ctrl_click": run(
-            "ctrl_click",
-            lambda: vnc.run_tokens(build_click_tokens(*c(13, 5), 1, (mods.ctrl_key,))),
-            True,
-        ),
-        "double_click": run(
-            "double_click", lambda: vnc.run_tokens(build_click_tokens(*c(14, 5), 1, (), 2))
-        ),
-    }
+    steps: dict[str, list[dict[str, object]]] = {}
+    for step_name, step_tokens, should_dismiss_menu in _build_pointer_step_specs(geometry, modifiers):
+        steps[step_name] = run_fenced_vnc_step(
+            vm, vnc, session, step_name,
+            lambda tokens=step_tokens: vnc.run_tokens(tokens),
+            timeout_seconds,
+            should_dismiss_menu_before_fence=should_dismiss_menu,
+        )
     assert_iterm2_pointer_results(steps, session.tmux_mode)
     return steps
 
@@ -174,34 +170,30 @@ def run_keyboard_steps(
     vm: TartVmSession,
     vnc: VncController,
     session: GuestItermSession,
-    mods: ModifierMap,
+    modifiers: ModifierMap,
     timeout_seconds: float,
 ) -> dict[str, list[dict[str, object]]]:
     """Runs standard navigation, function, Control, Option, and Enter chord probes."""
     chord_specs: list[tuple[str, str, tuple[str, ...]]] = [
         ("arrow_up", "up", ()),
         ("f1", "f1", ()),
-        ("ctrl_a", "a", (mods.ctrl_key,)),
-        ("alt_a", "a", (mods.option_key,)),
-        ("alt_enter", "enter", (mods.option_key,)),
-        ("shift_enter", "enter", (mods.shift_key,)),
-        ("ctrl_enter", "enter", (mods.ctrl_key,)),
+        ("ctrl_a", "a", (modifiers.ctrl_key,)),
+        ("alt_a", "a", (modifiers.option_key,)),
+        ("alt_enter", "enter", (modifiers.option_key,)),
+        ("shift_enter", "enter", (modifiers.shift_key,)),
+        ("ctrl_enter", "enter", (modifiers.ctrl_key,)),
     ]
     results: dict[str, list[dict[str, object]]] = {}
-    for label, key_name, key_mods in chord_specs:
+    for label, key_name, key_modifiers in chord_specs:
+        chord_tokens = build_chord_tokens(key_name, key_modifiers)
         results[label] = run_fenced_vnc_step(
-            vm,
-            vnc,
-            session,
-            label,
-            lambda kn=key_name, km=key_mods: vnc.run_tokens(build_chord_tokens(kn, km)),
-            timeout_seconds,
+            vm, vnc, session, label, lambda tokens=chord_tokens: vnc.run_tokens(tokens), timeout_seconds,
         )
-    if not any(r.get("code") == "up" for r in results["arrow_up"]):
+    if not any(record.get("code") == "up" for record in results["arrow_up"]):
         raise DriverRuntimeError("Missing ArrowUp key event.", "Check VNC keyboard focus.")
-    if not any(r.get("code") == "f1" for r in results["f1"]):
+    if not any(record.get("code") == "f1" for record in results["f1"]):
         raise DriverRuntimeError("Missing F1 key event.", "Check VNC function-key delivery.")
-    if not any(r.get("code") == "char:a" and r.get("ctrl") is True for r in results["ctrl_a"]):
+    if not any(record.get("code") == "char:a" and record.get("ctrl") is True for record in results["ctrl_a"]):
         raise DriverRuntimeError("Missing Ctrl+a key event.", "Check VNC Control modifier delivery.")
     return results
 
@@ -210,13 +202,13 @@ def run_paste_step(
     vm: TartVmSession,
     vnc: VncController,
     session: GuestItermSession,
-    mods: ModifierMap,
+    modifiers: ModifierMap,
     timeout_seconds: float,
 ) -> list[dict[str, object]]:
     """Loads `alpha\\nbeta` into guest pasteboard, presses Cmd+V over VNC, and verifies arrival."""
     start_count = len(read_complete_jsonl_records(session.host_log_path))
     vm.write_guest_clipboard("alpha\nbeta")
-    vnc.run_tokens(build_chord_tokens("v", (mods.command_key,)))
+    vnc.run_tokens(build_chord_tokens("v", (modifiers.command_key,)))
     poll_until(
         lambda: (
             True
@@ -232,11 +224,11 @@ def run_paste_step(
         timeout_seconds,
         "F2 fence after Cmd+V paste",
     )
-    has_bracketed = any(
-        rec.get("event_type") == "paste" and rec.get("text") in ("alpha\rbeta", "alpha\nbeta")
-        for rec in paste_events
+    has_bracketed_paste = any(
+        record.get("event_type") == "paste" and record.get("text") in ("alpha\rbeta", "alpha\nbeta")
+        for record in paste_events
     )
-    if not has_bracketed:
+    if not has_bracketed_paste:
         raise DriverRuntimeError(
             f"Expected bracketed paste 'alpha\\rbeta' or 'alpha\\nbeta', got {paste_events}.",
             "Verify bracketed paste mode (?2004h) and Cmd+V modifier calibration.",
@@ -248,25 +240,25 @@ def _blur_iterm_to_desktop(
     vm: TartVmSession,
     vnc: VncController,
     session: GuestItermSession,
-    geom: WindowGeometry,
-    expect_focus: bool,
+    geometry: WindowGeometry,
+    should_expect_focus: bool,
     timeout_seconds: float,
 ) -> int:
     blur_start = len(read_complete_jsonl_records(session.host_log_path))
-    out_x, out_y = outside_focus_point_vnc_pixels(geom)
-    vnc.run_tokens(build_click_tokens(out_x, out_y, button=1))
+    outside_x, outside_y = outside_focus_point_vnc_pixels(geometry)
+    vnc.run_tokens(build_click_tokens(outside_x, outside_y, button=1))
     poll_until(
         lambda: True if query_frontmost_app_name(vm) != "iTerm2" else None,
         timeout_seconds,
         "Finder activation after desktop click",
     )
-    if expect_focus:
+    if should_expect_focus:
         poll_until(
             lambda: (
                 True
                 if any(
-                    r.get("event_type") == "focus" and r.get("focused") is False
-                    for r in read_complete_jsonl_records(session.host_log_path)[blur_start:]
+                    record.get("event_type") == "focus" and record.get("focused") is False
+                    for record in read_complete_jsonl_records(session.host_log_path)[blur_start:]
                 )
                 else None
             ),
@@ -280,29 +272,28 @@ def run_focus_steps(
     vm: TartVmSession,
     vnc: VncController,
     session: GuestItermSession,
-    geom: WindowGeometry,
+    geometry: WindowGeometry,
     timeout_seconds: float,
 ) -> dict[str, list[dict[str, object]]]:
     """Blurs iTerm2 by clicking Finder desktop, then restores focus via the iTerm2 title bar."""
-    expect_focus = session.tmux_mode in (None, "full")
-    blur_start = _blur_iterm_to_desktop(vm, vnc, session, geom, expect_focus, timeout_seconds)
-    ensure_iterm_window_focused(vm, vnc, geom, timeout_seconds)
+    should_expect_focus = session.tmux_mode in (None, "full")
+    blur_start = _blur_iterm_to_desktop(vm, vnc, session, geometry, should_expect_focus, timeout_seconds)
+    ensure_iterm_window_focused(vm, vnc, geometry, timeout_seconds)
     vnc.send_fence_key()
     all_events = poll_until(
         lambda: extract_fence_slice(read_complete_jsonl_records(session.host_log_path), blur_start),
         timeout_seconds,
         "F2 fence after focus regain",
     )
-    focus_lost = [r for r in all_events if r.get("event_type") == "focus" and r.get("focused") is False]
-    focus_gained = [r for r in all_events if r.get("event_type") == "focus" and r.get("focused") is True]
-    if expect_focus and (not focus_lost or not focus_gained):
+    focus_lost = [record for record in all_events if record.get("event_type") == "focus" and record.get("focused") is False]
+    focus_gained = [record for record in all_events if record.get("event_type") == "focus" and record.get("focused") is True]
+    if should_expect_focus and (not focus_lost or not focus_gained):
         raise DriverRuntimeError("Missing FocusLost or FocusGained event on window refocus.", "Check mode ?1004h.")
     return {"focusLostEvents": focus_lost, "focusGainedEvents": focus_gained}
 
 
 def wait_for_session_exit_and_teardown(
-    session: GuestItermSession,
-    timeout_seconds: float,
+    session: GuestItermSession, timeout_seconds: float,
 ) -> dict[str, object]:
     """Waits for `<session>.exit.json`, parses DECRQM teardown state, and validates clean reset."""
     exit_data = poll_until(
@@ -316,10 +307,16 @@ def wait_for_session_exit_and_teardown(
     )
     teardown = parse_decrqm_snapshot(str(exit_data.get("decrqm", "")))
     if exit_data.get("decrqm"):
-        if teardown["mouseTrackingMode"] != "none" or teardown["bracketedPasteMode"] or teardown["sendFocusMode"]:
+        has_leaked_mode = (
+            teardown.get("mouseTrackingMode") != "none"
+            or bool(teardown.get("sgrMouseMode"))
+            or bool(teardown.get("bracketedPasteMode"))
+            or bool(teardown.get("sendFocusMode"))
+        )
+        if has_leaked_mode:
             raise DriverRuntimeError(
                 f"Terminal modes leaked after session exit: {teardown}.",
-                "Verify TerminalSessionGuard Drop/teardown resets mouse, paste, and focus modes.",
+                "Verify TerminalSessionGuard Drop/teardown resets mouse, SGR mouse, paste, and focus modes.",
             )
     return {
         "exitCode": int(exit_data.get("exitCode", -1)),
@@ -330,9 +327,7 @@ def wait_for_session_exit_and_teardown(
 
 
 def finish_interactive_clean_exit(
-    vnc: VncController,
-    session: GuestItermSession,
-    timeout_seconds: float,
+    vnc: VncController, session: GuestItermSession, timeout_seconds: float,
 ) -> dict[str, object]:
     """Sends Ctrl+C over VNC and verifies clean exit code 0, summary record, and mode teardown."""
     vnc.run_tokens(["key", "ctrl-c"])
@@ -343,9 +338,10 @@ def finish_interactive_clean_exit(
             "Verify Ctrl+C exits interactive capability_probe cleanly.",
         )
     records = read_all_jsonl_records(session.host_log_path)
-    has_summary = any(r.get("kind") == "summary" and r.get("mode") == "interactive" for r in records)
+    has_summary = any(record.get("kind") == "summary" and record.get("mode") == "interactive" for record in records)
     has_ctrl_c = any(
-        r.get("kind") == "event" and r.get("code") == "char:c" and r.get("ctrl") is True for r in records
+        record.get("kind") == "event" and record.get("code") == "char:c" and record.get("ctrl") is True
+        for record in records
     )
     if not (has_summary and has_ctrl_c):
         raise DriverRuntimeError("Missing interactive summary or Ctrl+C event record.", "Inspect JSONL log.")
@@ -361,10 +357,10 @@ def prepare_ready_interactive_session(
 ) -> WindowGeometry:
     """Waits for `<log>.ready`, resolves window geometry, activates iTerm2, and sends sync fence."""
     wait_for_probe_ready(session.host_log_path, timeout_seconds, session.host_exit_path)
-    geom = resolve_session_geometry(vm, session, timeout_seconds)
-    ensure_iterm_window_focused(vm, vnc, geom, timeout_seconds)
+    geometry = resolve_session_geometry(vm, session, timeout_seconds)
+    ensure_iterm_window_focused(vm, vnc, geometry, timeout_seconds)
     run_fenced_vnc_step(vm, vnc, session, fence_label, lambda: None, timeout_seconds)
     if session.tmux_mode and session.tmux_mode.startswith("cc-"):
-        geom = resolve_session_geometry(vm, session, timeout_seconds)
-        ensure_iterm_window_focused(vm, vnc, geom, timeout_seconds)
-    return geom
+        geometry = resolve_session_geometry(vm, session, timeout_seconds)
+        ensure_iterm_window_focused(vm, vnc, geometry, timeout_seconds)
+    return geometry

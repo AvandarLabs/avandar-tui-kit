@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 import json
 import os
 from pathlib import Path
 import platform
 import subprocess
 import sys
-from typing import Mapping, Sequence
 
 from driver import DEFAULT_VM_NAME
 from driver.cli_args import (
@@ -49,7 +49,9 @@ def log_error_with_hint(theme: Mapping[str, str], message: str, recovery_hint: s
     sys.stderr.flush()
 
 
-def _build_workspace_example(program_name: str, env: Mapping[str, str], theme: Mapping[str, str]) -> Path:
+def _build_workspace_example(
+    program_name: str, env: Mapping[str, str], theme: Mapping[str, str]
+) -> Path:
     cargo_bin = resolve_host_binary("cargo", env)
     manifest_path = REPOSITORY_ROOT / "Cargo.toml"
     if not manifest_path.is_file():
@@ -58,19 +60,29 @@ def _build_workspace_example(program_name: str, env: Mapping[str, str], theme: M
             "Run this script from an intact avandar-tui-kit checkout.",
         )
     log_progress(theme, f"Building workspace example '{program_name}'...")
-    proc = subprocess.run(
-        [cargo_bin, "build", "--manifest-path", str(manifest_path), "--workspace", "--example", program_name],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        env=dict(env),
-        check=False,
-    )
-    if proc.returncode != 0:
+    try:
+        completed = subprocess.run(
+            [cargo_bin, "build", "--manifest-path", str(manifest_path), "--workspace", "--example", program_name],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            env=dict(env),
+            check=False,
+        )
+    except OSError as os_error:
         raise DriverRuntimeError(
-            f"Cargo failed to build example '{program_name}' (exit {proc.returncode}).",
+            f"Failed to execute cargo at '{cargo_bin}': {os_error}",
+            "Verify Rust and cargo are installed via rustup.",
+        ) from os_error
+    if completed.returncode != 0:
+        raise DriverRuntimeError(
+            f"Cargo failed to build example '{program_name}' (exit {completed.returncode}).",
             "Check available example names under rig/probe/examples/ and fix any compile errors above.",
         )
-    target_root = Path(env["CARGO_TARGET_DIR"]).resolve() if env.get("CARGO_TARGET_DIR") else REPOSITORY_ROOT / "target"
+    target_root = (
+        Path(env["CARGO_TARGET_DIR"]).resolve()
+        if env.get("CARGO_TARGET_DIR")
+        else REPOSITORY_ROOT / "target"
+    )
     binary_path = target_root / "debug" / "examples" / program_name
     if not binary_path.is_file() or not os.access(binary_path, os.X_OK):
         raise DriverRuntimeError(
@@ -103,14 +115,13 @@ def _stage_guest_binaries_and_configs(
     binary_path: Path,
     program_name: str,
 ) -> tuple[str, dict[str, str]]:
-    vm.stage_host_file(binary_path, program_name, executable=True)
+    vm.stage_host_file(binary_path, program_name, is_executable=True)
     for conf_name in ("stock", "full"):
         conf_src = REPOSITORY_ROOT / "rig" / "tmux" / f"{conf_name}.conf"
         if conf_src.is_file():
-            vm.stage_host_file(conf_src, f"tmux_{conf_name}.conf", executable=False)
+            vm.stage_host_file(conf_src, f"tmux_{conf_name}.conf", is_executable=False)
     guest_bin = f"/tmp/{program_name}"
-    if not vm.env.get("RIG_ITERM2_MOCK_GUEST"):
-        vm.exec_guest(f'cp "{GUEST_SHARED_ROOT}/{program_name}" {guest_bin} && chmod +x {guest_bin}')
+    vm.exec_guest(f'cp "{GUEST_SHARED_ROOT}/{program_name}" {guest_bin} && chmod +x {guest_bin}')
     return guest_bin, {
         "stock": f"{GUEST_SHARED_ROOT}/tmux_stock.conf",
         "full": f"{GUEST_SHARED_ROOT}/tmux_full.conf",
@@ -128,8 +139,8 @@ def _run_booted_vm_payload(
     assert parsed.program is not None and parsed.scenario is not None
     artifact_dir = Path(env["RIG_ITERM2_LOG_DIR"]).resolve() if env.get("RIG_ITERM2_LOG_DIR") else None
     guest_bin, guest_confs = _stage_guest_binaries_and_configs(vm, binary_path, parsed.program)
-    backup = None if env.get("RIG_ITERM2_MOCK_GUEST") else backup_guest_defaults(vm)
-    ctx = ScenarioRuntimeContext(
+    backup = backup_guest_defaults(vm)
+    context = ScenarioRuntimeContext(
         vm=vm,
         vnc=vnc,
         program=parsed.program,
@@ -139,18 +150,25 @@ def _run_booted_vm_payload(
         timeout_ms=parsed.timeout_ms,
         extra_args=parsed.extra_args,
         artifact_dir=artifact_dir,
+        is_initial_natural_scrolling=backup.is_natural_swipe_direction,
     )
-    try:
-        log_progress(theme, f"Running Layer 6 scenario '{parsed.scenario}' (tmux={parsed.tmux_mode or 'none'})...")
-        if parsed.scenario == "matrix":
-            return run_iterm2_matrix(
-                ctx,
-                restore_callback=lambda: restore_guest_defaults(vm, backup) if backup else None,
-            )
-        return run_named_scenario(parsed.scenario, ctx)
-    finally:
-        if backup is not None:
+    is_defaults_restored = False
+
+    def _restore_defaults_once() -> None:
+        nonlocal is_defaults_restored
+        if not is_defaults_restored:
             restore_guest_defaults(vm, backup)
+            is_defaults_restored = True
+
+    try:
+        log_progress(
+            theme, f"Running Layer 6 scenario '{parsed.scenario}' (tmux={parsed.tmux_mode or 'none'})..."
+        )
+        if parsed.scenario == "matrix":
+            return run_iterm2_matrix(context, restore_callback=_restore_defaults_once)
+        return run_named_scenario(parsed.scenario, context)
+    finally:
+        _restore_defaults_once()
 
 
 def _execute_with_vm(
@@ -200,9 +218,9 @@ def run_cli(argv: Sequence[str], env: Mapping[str, str] | None = None) -> int:
         binary_path = resolve_or_build_program_binary(parsed.program, active_env, stderr_theme)
         report = _execute_with_vm(parsed, tart_bin, vncdo_bin, binary_path, active_env, stderr_theme)
         if active_env.get("RIG_ITERM2_LOG_DIR"):
-            out_dir = Path(active_env["RIG_ITERM2_LOG_DIR"]).resolve()
-            out_dir.mkdir(parents=True, exist_ok=True)
-            (out_dir / f"iterm2-{parsed.program}-{parsed.scenario}-report.json").write_text(
+            output_dir = Path(active_env["RIG_ITERM2_LOG_DIR"]).resolve()
+            output_dir.mkdir(parents=True, exist_ok=True)
+            (output_dir / f"iterm2-{parsed.program}-{parsed.scenario}-report.json").write_text(
                 f"{json.dumps(report, indent=2)}\n",
                 encoding="utf-8",
             )
@@ -220,6 +238,7 @@ def run_cli(argv: Sequence[str], env: Mapping[str, str] | None = None) -> int:
 
 
 def main() -> None:
+    """CLI entrypoint executing Layer 6 and exiting with its status code."""
     raise SystemExit(run_cli(sys.argv[1:]))
 
 

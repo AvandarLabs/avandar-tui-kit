@@ -10,8 +10,8 @@ COLOR_RESET=""; COLOR_BOLD=""; COLOR_HEADING=""; COLOR_ACCENT=""
 COLOR_MUTED=""; COLOR_SUCCESS=""; COLOR_WARN=""; COLOR_ERROR=""
 
 setup_theme() {
-  local fd="$1"
-  if [ -n "${NO_COLOR:-}" ] || [ "${TERM:-}" = "dumb" ] || [ ! -t "$fd" ]; then
+  local file_descriptor="$1"
+  if [ -n "${NO_COLOR:-}" ] || [ "${TERM:-}" = "dumb" ] || [ ! -t "$file_descriptor" ]; then
     COLOR_RESET=""; COLOR_BOLD=""; COLOR_HEADING=""; COLOR_ACCENT=""
     COLOR_MUTED=""; COLOR_SUCCESS=""; COLOR_WARN=""; COLOR_ERROR=""
   else

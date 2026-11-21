@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 import json
 from pathlib import Path
 import re
+import subprocess
 import threading
 import time
-from typing import Callable, Sequence, TypeVar
+from typing import TypeVar
 
 from driver.cli_args import DriverRuntimeError
 
-T = TypeVar("T")
+OutcomeT = TypeVar("OutcomeT")
 DECRQM_REPORT_PATTERN = re.compile(r"\x1b\[\?(\d+);(\d+)\$y")
 EXPECTED_PASTE_KEYS: tuple[str, ...] = (
     "char:a",
@@ -27,11 +29,11 @@ EXPECTED_PASTE_KEYS: tuple[str, ...] = (
 
 
 def poll_until(
-    predicate: Callable[[], T | None],
+    predicate: Callable[[], OutcomeT | None],
     timeout_seconds: float,
     description: str,
     poll_interval: float = 0.05,
-) -> T:
+) -> OutcomeT:
     """Polls `predicate` until it returns a non-None value or raises on bounded timeout."""
     waiter = threading.Event()
     deadline = time.monotonic() + max(timeout_seconds, 0.05)
@@ -43,8 +45,8 @@ def poll_until(
                 return outcome
         except DriverRuntimeError:
             raise
-        except Exception as exc:  # noqa: BLE001
-            last_error = exc
+        except (OSError, ValueError, subprocess.SubprocessError) as transient_error:
+            last_error = transient_error
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             detail = f" (last error: {last_error})" if last_error is not None else ""
@@ -93,7 +95,11 @@ def read_all_jsonl_records(log_path: str | Path) -> list[dict[str, object]]:
 
 def is_fence_key_record(record: dict[str, object]) -> bool:
     """Returns True when `record` is an F2 fence key event."""
-    return record.get("kind") == "event" and record.get("event_type") == "key" and record.get("code") == "f2"
+    return (
+        record.get("kind") == "event"
+        and record.get("event_type") == "key"
+        and record.get("code") == "f2"
+    )
 
 
 def is_fence_press_record(record: dict[str, object]) -> bool:
@@ -109,9 +115,9 @@ def extract_fence_slice(
     for index in range(start_count, len(records)):
         if is_fence_press_record(records[index]):
             return [
-                rec
-                for rec in records[start_count:index]
-                if rec.get("kind") == "event" and not is_fence_key_record(rec)
+                record
+                for record in records[start_count:index]
+                if record.get("kind") == "event" and not is_fence_key_record(record)
             ]
     return None
 
@@ -119,15 +125,15 @@ def extract_fence_slice(
 def has_delivered_paste_payload(records_after_start: Sequence[dict[str, object]]) -> bool:
     """Returns True once bracketed `paste` or unbracketed `alpha`+`beta` keys arrive."""
     matched_keys = 0
-    for rec in records_after_start:
-        if rec.get("kind") != "event":
+    for record in records_after_start:
+        if record.get("kind") != "event":
             continue
-        if rec.get("event_type") == "paste":
+        if record.get("event_type") == "paste":
             return True
         if (
-            rec.get("event_type") == "key"
-            and rec.get("key_kind") == "press"
-            and rec.get("code") == EXPECTED_PASTE_KEYS[matched_keys]
+            record.get("event_type") == "key"
+            and record.get("key_kind") == "press"
+            and record.get("code") == EXPECTED_PASTE_KEYS[matched_keys]
         ):
             matched_keys += 1
             if matched_keys == len(EXPECTED_PASTE_KEYS):
@@ -146,7 +152,7 @@ def wait_for_probe_ready(
     def _check_ready() -> list[dict[str, object]] | None:
         if ready_sentinel.is_file():
             records = read_complete_jsonl_records(log_path)
-            if any(rec.get("kind") == "ready" for rec in records):
+            if any(record.get("kind") == "ready" for record in records):
                 return records
         if exit_json_path is not None and exit_json_path.is_file() and not ready_sentinel.is_file():
             exit_info = json.loads(exit_json_path.read_text(encoding="utf-8"))
@@ -176,5 +182,7 @@ def parse_decrqm_snapshot(raw_reply: str) -> dict[str, object]:
         "sgrMouseMode": mode_states.get(1006) == 1,
         "bracketedPasteMode": mode_states.get(2004) == 1,
         "sendFocusMode": mode_states.get(1004) == 1,
-        "rawModeStates": {str(k): v for k, v in sorted(mode_states.items())},
+        "rawModeStates": {
+            str(mode_number): mode_status for mode_number, mode_status in sorted(mode_states.items())
+        },
     }

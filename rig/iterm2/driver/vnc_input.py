@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 import subprocess
-from typing import Mapping, Sequence
 
 from driver.cli_args import DriverRuntimeError
 from driver.tart_vm import GUEST_SHARED_ROOT, TartVmSession, VncEndpoint
@@ -15,10 +15,10 @@ CG_FLAG_COMMAND = 0x100000
 CANDIDATE_VNC_MODIFIERS: tuple[str, ...] = ("meta", "alt", "super")
 
 CG_FLAGS_SCRIPT = """import ctypes
-cg = ctypes.CDLL("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
-cg.CGEventSourceFlagsState.argtypes = [ctypes.c_int32]
-cg.CGEventSourceFlagsState.restype = ctypes.c_uint64
-print(hex(cg.CGEventSourceFlagsState(1)))
+core_graphics = ctypes.CDLL("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+core_graphics.CGEventSourceFlagsState.argtypes = [ctypes.c_int32]
+core_graphics.CGEventSourceFlagsState.restype = ctypes.c_uint64
+print(hex(core_graphics.CGEventSourceFlagsState(1)))
 """
 
 
@@ -59,12 +59,13 @@ def normalize_cell_size_pt(
     """Normalizes `CSI 16 t` cell dimensions to logical points when `tmux` reports Retina pixels."""
     if raw_width <= 0.0 or raw_height <= 0.0:
         return (7.0, 17.0)
-    cand_w, cand_h = raw_width, raw_height
-    if (cols * cand_w > window_width_pt or rows * cand_h > window_height_pt) and backing_scale > 1.0:
-        cand_w, cand_h = raw_width / backing_scale, raw_height / backing_scale
-    if cols * cand_w > window_width_pt or rows * cand_h > window_height_pt:
+    candidate_width, candidate_height = raw_width, raw_height
+    if (cols * candidate_width > window_width_pt or rows * candidate_height > window_height_pt) and backing_scale > 1.0:
+        candidate_width = raw_width / backing_scale
+        candidate_height = raw_height / backing_scale
+    if cols * candidate_width > window_width_pt or rows * candidate_height > window_height_pt:
         return (7.0, 17.0)
-    return (cand_w, cand_h)
+    return (candidate_width, candidate_height)
 
 
 def cell_center_to_vnc_pixels(geometry: WindowGeometry, col: int, row: int) -> tuple[int, int]:
@@ -102,15 +103,15 @@ def titlebar_point_vnc_pixels(geometry: WindowGeometry) -> tuple[int, int]:
 
 def _modifier_down_tokens(modifiers: Sequence[str]) -> list[str]:
     tokens: list[str] = []
-    for mod in modifiers:
-        tokens.extend(["keydown", mod])
+    for modifier_name in modifiers:
+        tokens.extend(["keydown", modifier_name])
     return tokens
 
 
 def _modifier_up_tokens(modifiers: Sequence[str]) -> list[str]:
     tokens: list[str] = []
-    for mod in reversed(modifiers):
-        tokens.extend(["keyup", mod])
+    for modifier_name in reversed(modifiers):
+        tokens.extend(["keyup", modifier_name])
     return tokens
 
 
@@ -191,11 +192,11 @@ def select_calibrated_modifiers(flag_samples: Mapping[str, int]) -> ModifierMap:
     """Selects VNC modifier names from sampled `CGEventSourceFlagsState` bitmasks."""
     option_key: str | None = None
     command_key: str | None = None
-    for vnc_mod, mask in flag_samples.items():
-        if option_key is None and (mask & CG_FLAG_OPTION):
-            option_key = vnc_mod
-        if command_key is None and (mask & CG_FLAG_COMMAND):
-            command_key = vnc_mod
+    for vnc_modifier, flag_mask in flag_samples.items():
+        if option_key is None and (flag_mask & CG_FLAG_OPTION):
+            option_key = vnc_modifier
+        if command_key is None and (flag_mask & CG_FLAG_COMMAND):
+            command_key = vnc_modifier
     return ModifierMap(
         option_key=option_key or "meta",
         command_key=command_key or "alt",
@@ -219,19 +220,30 @@ class VncController:
     def run_tokens(self, tokens: Sequence[str], timeout_seconds: float = 15.0) -> None:
         """Invokes `vncdo` synchronously with the given command tokens."""
         server = f"{self.endpoint.host}::{self.endpoint.port}"
-        cmd = [self.vncdo_bin, "-s", server, "-p", self.endpoint.password, *tokens]
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            env=self.env,
-            timeout=timeout_seconds,
-            check=False,
-        )
-        if proc.returncode != 0:
-            detail = (proc.stderr or proc.stdout).strip()
+        command = [self.vncdo_bin, "-s", server, "-p", self.endpoint.password, *tokens]
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                env=self.env,
+                timeout=timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as timeout_error:
             raise DriverRuntimeError(
-                f"vncdo command {list(tokens[:8])} failed (exit {proc.returncode}): {detail}",
+                f"vncdo command {list(tokens[:8])} timed out after {timeout_seconds:.1f}s.",
+                "Verify the Tart loopback VNC server is responsive or increase --timeout-ms.",
+            ) from timeout_error
+        except OSError as os_error:
+            raise DriverRuntimeError(
+                f"Failed to execute vncdo binary '{self.vncdo_bin}': {os_error}",
+                "Verify vncdotool is installed and executable.",
+            ) from os_error
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout).strip()
+            raise DriverRuntimeError(
+                f"vncdo command {list(tokens[:8])} failed (exit {completed.returncode}): {detail}",
                 "Verify vncdotool can reach the Tart loopback VNC server.",
             )
 
@@ -252,12 +264,14 @@ class VncController:
         helper_file = vm.shared_dir / "_cg_flags.py"
         helper_file.write_text(CG_FLAGS_SCRIPT, encoding="utf-8")
         samples: dict[str, int] = {}
-        for mod_name in CANDIDATE_VNC_MODIFIERS:
-            self.run_tokens(["keydown", mod_name])
+        for modifier_name in CANDIDATE_VNC_MODIFIERS:
+            self.run_tokens(["keydown", modifier_name])
             try:
-                out = vm.exec_guest(f'python3 "{GUEST_SHARED_ROOT}/_cg_flags.py"', 10.0).stdout.strip()
-                samples[mod_name] = int(out, 16) if out.startswith("0x") else 0
+                flags_output = vm.exec_guest(
+                    f'python3 "{GUEST_SHARED_ROOT}/_cg_flags.py"', 10.0
+                ).stdout.strip()
+                samples[modifier_name] = int(flags_output, 16) if flags_output.startswith("0x") else 0
             finally:
-                self.run_tokens(["keyup", mod_name])
+                self.run_tokens(["keyup", modifier_name])
         self._cached_modifiers = select_calibrated_modifiers(samples)
         return self._cached_modifiers

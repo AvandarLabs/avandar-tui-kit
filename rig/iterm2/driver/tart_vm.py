@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import fcntl
 import json
@@ -16,7 +17,6 @@ import subprocess
 import tempfile
 import threading
 import time
-from typing import Mapping, Sequence
 
 from driver import DEFAULT_VM_NAME
 from driver.cli_args import DriverRuntimeError
@@ -50,13 +50,13 @@ def parse_vnc_connection_url(text: str) -> VncEndpoint | None:
 
 
 def _default_fallback_dirs(tool_name: str, env: Mapping[str, str]) -> list[str]:
-    dirs: list[str] = []
+    directories: list[str] = []
     home = env.get("HOME", "")
     if tool_name == "vncdo" and home:
-        dirs.append(str(Path(home) / ".local" / "bin"))
+        directories.append(str(Path(home) / ".local" / "bin"))
     if tool_name in ("tart", "vncdo"):
-        dirs.extend(["/opt/homebrew/bin", "/usr/local/bin"])
-    return dirs
+        directories.extend(["/opt/homebrew/bin", "/usr/local/bin"])
+    return directories
 
 
 def resolve_host_binary(
@@ -67,20 +67,24 @@ def resolve_host_binary(
     """Finds an executable host tool in override env, PATH, or non-strict standard locations."""
     active_env = os.environ if env is None else env
     override_key = f"RIG_ITERM2_{tool_name.upper()}_BIN"
-    override_val = active_env.get(override_key, "").strip()
-    if override_val:
-        resolved = Path(override_val).expanduser().resolve()
+    override_value = active_env.get(override_key, "").strip()
+    if override_value:
+        resolved = Path(override_value).expanduser().resolve()
         if resolved.is_file() and os.access(resolved, os.X_OK):
             return str(resolved)
         raise DriverRuntimeError(
-            f"{override_key} does not point to an executable binary: '{override_val}'.",
+            f"{override_key} does not point to an executable binary: '{override_value}'.",
             f"Unset {override_key} or point it to a valid '{tool_name}' executable.",
         )
     found_in_path = shutil.which(tool_name, path=active_env.get("PATH", ""))
     if found_in_path:
         return found_in_path
     if not active_env.get("RIG_ITERM2_STRICT_PATH"):
-        candidates = list(fallback_dirs) if fallback_dirs is not None else _default_fallback_dirs(tool_name, active_env)
+        candidates = (
+            list(fallback_dirs)
+            if fallback_dirs is not None
+            else _default_fallback_dirs(tool_name, active_env)
+        )
         for directory in candidates:
             candidate = Path(directory) / tool_name
             if candidate.is_file() and os.access(candidate, os.X_OK):
@@ -92,9 +96,9 @@ def resolve_host_binary(
 def check_rfb_port_ready(endpoint: VncEndpoint) -> bool:
     """Verifies that `endpoint` accepts a TCP connection and speaks the `RFB ` greeting."""
     try:
-        with socket.create_connection((endpoint.host, endpoint.port), timeout=1.0) as sock:
-            sock.settimeout(1.0)
-            return sock.recv(12).startswith(b"RFB ")
+        with socket.create_connection((endpoint.host, endpoint.port), timeout=1.0) as rfb_socket:
+            rfb_socket.settimeout(1.0)
+            return rfb_socket.recv(12).startswith(b"RFB ")
     except OSError:
         return False
 
@@ -106,53 +110,69 @@ def _is_vm_disk_unlocked(vm_name: str, env: Mapping[str, str]) -> bool:
     disk_path = Path(home) / ".tart" / "vms" / vm_name / "disk.img"
     if not disk_path.is_file():
         return True
-    fd = os.open(disk_path, os.O_RDWR)
+    disk_fd = os.open(disk_path, os.O_RDWR)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        fcntl.flock(fd, fcntl.LOCK_UN)
+        fcntl.flock(disk_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(disk_fd, fcntl.LOCK_UN)
         return True
     except OSError:
         return False
     finally:
-        os.close(fd)
+        os.close(disk_fd)
 
 
 def wait_until_vm_fully_stopped(tart_bin: str, vm_name: str, env: Mapping[str, str]) -> None:
     """Waits until Tart reports `stopped` and Virtualization.framework releases `disk.img`."""
 
     def _check_stopped() -> bool | None:
-        proc = subprocess.run(
+        completed = subprocess.run(
             [tart_bin, "list", "--format", "json"],
             capture_output=True, text=True, env=dict(env), timeout=15, check=False,
         )
-        if proc.returncode != 0:
+        if completed.returncode != 0:
             return None
-        entries = [e for e in json.loads(proc.stdout) if e.get("Name") == vm_name]
-        if any(e.get("State") == "running" for e in entries):
+        entries = [entry for entry in json.loads(completed.stdout) if entry.get("Name") == vm_name]
+        if any(entry.get("State") == "running" for entry in entries):
             return None
         return True if _is_vm_disk_unlocked(vm_name, env) else None
 
     poll_until(_check_stopped, 20.0, f"VM '{vm_name}' stop and disk lock release", 0.2)
 
 
+def _run_tart_host_command(
+    command: Sequence[str], env: Mapping[str, str], timeout_seconds: float, action_label: str,
+) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            list(command), capture_output=True, text=True, env=dict(env), timeout=timeout_seconds, check=False,
+        )
+    except subprocess.TimeoutExpired as timeout_error:
+        raise DriverRuntimeError(
+            f"'{action_label}' timed out after {timeout_seconds:.1f}s.",
+            "Verify Tart is responsive by running 'tart list' manually.",
+        ) from timeout_error
+    except OSError as os_error:
+        raise DriverRuntimeError(
+            f"Failed to execute '{action_label}': {os_error}",
+            "Verify Tart is installed and executable in PATH.",
+        ) from os_error
+
+
 def ensure_vm_present_and_cold(tart_bin: str, vm_name: str, env: Mapping[str, str]) -> None:
     """Verifies `vm_name` exists in `tart list --format json` and stops it if already running."""
-    proc = subprocess.run(
-        [tart_bin, "list", "--format", "json"],
-        capture_output=True, text=True, env=dict(env), timeout=15, check=False,
-    )
-    if proc.returncode != 0:
+    completed = _run_tart_host_command([tart_bin, "list", "--format", "json"], env, 15.0, "tart list")
+    if completed.returncode != 0:
         raise DriverRuntimeError(
-            f"'tart list' failed with exit code {proc.returncode}: {proc.stderr.strip()}",
+            f"'tart list' failed with exit code {completed.returncode}: {completed.stderr.strip()}",
             "Verify Tart installation and check 'tart list' manually.",
         )
     try:
-        entries = json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:
+        entries = json.loads(completed.stdout)
+    except json.JSONDecodeError as decode_error:
         raise DriverRuntimeError(
-            f"Could not parse 'tart list --format json' output: {exc}",
+            f"Could not parse 'tart list --format json' output: {decode_error}",
             "Upgrade Tart to >= 2.42 and verify 'tart list --format json'.",
-        ) from exc
+        ) from decode_error
     matching = [item for item in entries if item.get("Name") == vm_name]
     if not matching:
         raise DriverRuntimeError(
@@ -160,7 +180,7 @@ def ensure_vm_present_and_cold(tart_bin: str, vm_name: str, env: Mapping[str, st
             f"Create and prepare '{vm_name}' following docs/testing.md before running Layer 6.",
         )
     if any(item.get("State") == "running" for item in matching):
-        subprocess.run([tart_bin, "stop", vm_name], capture_output=True, text=True, env=dict(env), timeout=30, check=False)
+        _run_tart_host_command([tart_bin, "stop", vm_name], env, 30.0, f"tart stop {vm_name}")
     wait_until_vm_fully_stopped(tart_bin, vm_name, env)
 
 
@@ -168,10 +188,7 @@ class TartVmSession:
     """Manages a single cold-booted headless `tuikit-macos` VM with VirtioFS and loopback VNC."""
 
     def __init__(
-        self,
-        tart_bin: str,
-        vm_name: str = DEFAULT_VM_NAME,
-        env: Mapping[str, str] | None = None,
+        self, tart_bin: str, vm_name: str = DEFAULT_VM_NAME, env: Mapping[str, str] | None = None,
     ) -> None:
         self.tart_bin = tart_bin
         self.vm_name = vm_name
@@ -180,34 +197,38 @@ class TartVmSession:
         self._proc: subprocess.Popen[str] | None = None
         self._endpoint: VncEndpoint | None = None
         self._boot_lines: list[str] = []
-        self._stopped = False
-        self._lock = threading.Lock()
-        self._prev_handlers: dict[int, object] = {}
+        self._is_stopped = False
+        self._has_started_vm = False
+        self._previous_signal_handlers: dict[int, object] = {}
 
     @property
     def vnc_endpoint(self) -> VncEndpoint:
+        """Returns the discovered loopback VNC endpoint for the booted VM."""
         if self._endpoint is None:
             raise DriverRuntimeError("VNC endpoint requested before VM boot.", "Call boot() first.")
         return self._endpoint
 
     def _register_cleanup_hooks(self) -> None:
         atexit.register(self.stop)
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            self._prev_handlers[sig] = signal.getsignal(sig)
+        for signal_number in (signal.SIGINT, signal.SIGTERM):
+            try:
+                self._previous_signal_handlers[signal_number] = signal.getsignal(signal_number)
 
-            def _handle_signal(signum: int, _frame: object) -> None:
-                self.stop()
-                raise SystemExit(128 + signum)
+                def _handle_signal(received_signal: int, _frame: object) -> None:
+                    self.stop()
+                    raise SystemExit(128 + received_signal)
 
-            signal.signal(sig, _handle_signal)
+                signal.signal(signal_number, _handle_signal)
+            except ValueError:
+                pass
 
     def _restore_signal_handlers(self) -> None:
-        for sig, handler in self._prev_handlers.items():
+        for signal_number, previous_handler in list(self._previous_signal_handlers.items()):
             try:
-                signal.signal(sig, handler)  # type: ignore[arg-type]
+                signal.signal(signal_number, previous_handler)  # type: ignore[arg-type]
             except (OSError, ValueError):
                 pass
-        self._prev_handlers.clear()
+        self._previous_signal_handlers.clear()
 
     def _consume_tart_stdout(self, pipe: object) -> None:
         assert pipe is not None
@@ -217,16 +238,45 @@ class TartVmSession:
             if parsed is not None:
                 self._endpoint = parsed
 
+    def _reap_tart_process(self, should_terminate_immediately: bool = False) -> None:
+        proc = self._proc
+        self._proc = None
+        if proc is None:
+            return
+        if not should_terminate_immediately:
+            try:
+                proc.wait(timeout=5)
+                return
+            except subprocess.TimeoutExpired:
+                pass
+        try:
+            proc.terminate()
+            proc.wait(timeout=2)
+            return
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+        try:
+            proc.kill()
+            proc.wait(timeout=5)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
     def _spawn_tart_run(self) -> None:
         self._endpoint = None
         self._boot_lines.clear()
-        cmd = [
+        self._has_started_vm = True
+        command = [
             self.tart_bin, "run", "--no-graphics", "--no-audio", "--no-clipboard",
             "--vnc-experimental", f"--dir=tuikit:{self.shared_dir}", self.vm_name,
         ]
-        self._proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=self.env
-        )
+        try:
+            self._proc = subprocess.Popen(
+                command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=self.env
+            )
+        except OSError as os_error:
+            raise DriverRuntimeError(
+                f"Failed to start 'tart run': {os_error}", "Verify Tart is installed and executable."
+            ) from os_error
         threading.Thread(target=self._consume_tart_stdout, args=(self._proc.stdout,), daemon=True).start()
 
     def boot(self, timeout_seconds: float) -> VncEndpoint:
@@ -236,11 +286,12 @@ class TartVmSession:
         deadline = time.monotonic() + timeout_seconds
         try:
             for attempt in range(3):
+                self._reap_tart_process(should_terminate_immediately=True)
                 self._spawn_tart_run()
                 try:
                     return self._wait_until_boot_ready(max(deadline - time.monotonic(), 5.0))
-                except DriverRuntimeError as boot_err:
-                    if attempt < 2 and "VZErrorDomain" in boot_err.message and time.monotonic() < deadline:
+                except DriverRuntimeError as boot_error:
+                    if attempt < 2 and "VZErrorDomain" in boot_error.message and time.monotonic() < deadline:
                         wait_until_vm_fully_stopped(self.tart_bin, self.vm_name, self.env)
                         continue
                     raise
@@ -263,44 +314,41 @@ class TartVmSession:
                 )
             if self._endpoint is None or not check_rfb_port_ready(self._endpoint):
                 return None
-            if self.exec_guest(readiness_probe, timeout_seconds=8.0, check=False).returncode == 0:
+            if self.exec_guest(readiness_probe, timeout_seconds=8.0, should_check=False).returncode == 0:
                 return self._endpoint
             return None
 
         return poll_until(_is_ready, timeout_seconds, f"VM '{self.vm_name}' VNC + guest desktop readiness", 0.25)
 
     def exec_guest(
-        self,
-        shell_command: str,
-        timeout_seconds: float = 25.0,
-        check: bool = True,
+        self, shell_command: str, timeout_seconds: float = 25.0, should_check: bool = True,
     ) -> subprocess.CompletedProcess[str]:
         """Executes `shell_command` inside the macOS guest via `tart exec`."""
         try:
             result = subprocess.run(
                 [self.tart_bin, "exec", self.vm_name, "bash", "-lc", shell_command],
-                capture_output=True,
-                text=True,
-                env=self.env,
-                timeout=timeout_seconds,
-                check=False,
+                capture_output=True, text=True, env=self.env, timeout=timeout_seconds, check=False,
             )
         except subprocess.TimeoutExpired:
             result = subprocess.CompletedProcess([], 124, "", "tart exec timed out")
-        if check and result.returncode != 0:
+        except OSError as os_error:
+            raise DriverRuntimeError(
+                f"Failed to invoke 'tart exec': {os_error}", "Verify Tart is installed and executable."
+            ) from os_error
+        if should_check and result.returncode != 0:
             raise DriverRuntimeError(
                 f"Guest command failed (code {result.returncode}): {result.stderr.strip() or result.stdout.strip()}",
                 "Verify guest tools inside tuikit-macos via 'tart exec tuikit-macos bash -lc id'.",
             )
         return result
 
-    def stage_host_file(self, source_path: Path, filename: str, executable: bool = False) -> Path:
+    def stage_host_file(self, source_path: Path, filename: str, is_executable: bool = False) -> Path:
         """Copies a host file into the VirtioFS shared directory."""
-        dest = self.shared_dir / filename
-        shutil.copy2(source_path, dest)
-        if executable:
-            os.chmod(dest, 0o755)
-        return dest
+        destination = self.shared_dir / filename
+        shutil.copy2(source_path, destination)
+        if is_executable:
+            os.chmod(destination, 0o755)
+        return destination
 
     def read_guest_clipboard(self) -> str:
         """Reads the macOS guest pasteboard via `LANG=en_US.UTF-8 pbpaste`."""
@@ -312,31 +360,32 @@ class TartVmSession:
         clip_file.write_text(content, encoding="utf-8")
         self.exec_guest(f'LANG=en_US.UTF-8 pbcopy < "{GUEST_SHARED_ROOT}/_guest_clipboard_payload.txt"', 10.0)
 
-    def stop(self) -> None:
-        """Idempotently stops `vm_name`, reaps `tart run`, and removes temporary shared files."""
-        with self._lock:
-            if self._stopped:
-                return
-            self._stopped = True
+    def _stop_active_vm(self) -> None:
+        did_tart_stop = False
         try:
             subprocess.run(
                 [self.tart_bin, "stop", self.vm_name],
-                capture_output=True,
-                text=True,
-                env=self.env,
-                timeout=30,
-                check=False,
+                capture_output=True, text=True, env=self.env, timeout=30, check=False,
             )
-            if self._proc is not None:
-                try:
-                    self._proc.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    self._proc.kill()
-                    self._proc.wait(timeout=5)
+            did_tart_stop = True
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+        self._reap_tart_process(should_terminate_immediately=not did_tart_stop)
+        if did_tart_stop:
             try:
                 wait_until_vm_fully_stopped(self.tart_bin, self.vm_name, self.env)
             except DriverRuntimeError:
                 pass
+
+    def stop(self) -> None:
+        """Idempotently stops `vm_name`, reaps `tart run`, and removes temporary shared files."""
+        if self._is_stopped:
+            return
+        self._is_stopped = True
+        atexit.unregister(self.stop)
+        self._restore_signal_handlers()
+        try:
+            if self._has_started_vm or self._proc is not None:
+                self._stop_active_vm()
         finally:
-            self._restore_signal_handlers()
             shutil.rmtree(self.shared_dir, ignore_errors=True)

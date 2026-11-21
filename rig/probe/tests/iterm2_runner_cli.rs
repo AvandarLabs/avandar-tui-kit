@@ -19,7 +19,13 @@ fn collect_files_recursively(directory: &Path, files: &mut Vec<PathBuf>) {
     let entries = fs::read_dir(directory).expect("directory must be readable");
     for entry in entries {
         let path = entry.expect("dir entry").path();
-        if path.file_name().and_then(|n| n.to_str()) == Some("__pycache__") {
+        if path
+            .file_name()
+            .is_some_and(|file_name| file_name == "__pycache__" || file_name == ".DS_Store")
+        {
+            continue;
+        }
+        if path.extension().is_some_and(|extension| extension == "pyc") {
             continue;
         }
         if path.is_dir() {
@@ -70,84 +76,74 @@ mod unix_tests {
     use std::process::{Command, Output};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::runner_script_path;
+    use super::{repository_root, runner_script_path};
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     const MOCK_TART_PY: &str = r#"#!/usr/bin/env python3
-import os, pathlib, re, socket, subprocess, sys, threading
+import json, os, pathlib, re, socket, sys
 
 calls_path = os.environ.get("MOCK_TART_CALLS_FILE", "")
 if calls_path:
-    with open(calls_path, "a", encoding="utf-8") as out:
-        out.write("TART\t" + "\t".join(sys.argv[1:]) + "\n")
-
-sub = sys.argv[1] if len(sys.argv) > 1 else ""
-if sub == "list":
+    open(calls_path, "a", encoding="utf-8").write("TART\t" + "\t".join(sys.argv[1:]) + "\n")
+subcommand = sys.argv[1] if len(sys.argv) > 1 else ""
+if subcommand == "list":
     print('[{"Source":"local","Name":"tuikit-macos","State":"stopped"}]')
-    sys.exit(0)
-if sub == "stop":
-    state_file = os.environ.get("MOCK_TART_STOP_FLAG", "")
-    if state_file:
-        pathlib.Path(state_file).write_text("stopped", encoding="utf-8")
-    sys.exit(0)
-if sub == "run":
-    shared = ""
-    for arg in sys.argv[2:]:
-        if arg.startswith("--dir=tuikit:"):
-            shared = arg.split(":", 1)[1]
-    pathlib.Path(os.environ["MOCK_TART_SHARED_PTR"]).write_text(shared, encoding="utf-8")
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.bind(("127.0.0.1", 0))
-    srv.listen(8)
-    port = srv.getsockname()[1]
-    stop_flag = os.environ["MOCK_TART_STOP_FLAG"]
-    def accept_loop():
-        srv.settimeout(0.1)
-        while not os.path.exists(stop_flag):
-            try:
-                conn, _ = srv.accept()
-                conn.sendall(b"RFB 003.008\n")
-                conn.close()
-            except OSError:
-                pass
-        srv.close()
-    print(f"VNC server is running at vnc://:mockpw@127.0.0.1:{port}", flush=True)
-    accept_loop()
-    sys.exit(0)
-if sub == "exec":
-    shared = pathlib.Path(os.environ["MOCK_TART_SHARED_PTR"]).read_text(encoding="utf-8")
-    cmd = sys.argv[-1]
-    if "MOCK_ITERM2_EXEC_HOOK" in cmd or "open -a" in cmd:
-        if os.environ.get("MOCK_TART_SKIP_PROBE") == "1":
-            sys.exit(0)
-        m = re.search(r"(/[^\s'\"]+\.jsonl)", cmd)
-        if m:
-            rel = pathlib.Path(m.group(1)).name
-            log_file = pathlib.Path(shared) / rel
+elif subcommand == "stop":
+    if os.environ.get("MOCK_TART_STOP_FLAG"):
+        pathlib.Path(os.environ["MOCK_TART_STOP_FLAG"]).write_text("stopped", encoding="utf-8")
+elif subcommand == "run":
+    shared_dir = next((arg_item.split(":", 1)[1] for arg_item in sys.argv[2:] if arg_item.startswith("--dir=tuikit:")), "")
+    pathlib.Path(os.environ["MOCK_TART_SHARED_PTR"]).write_text(shared_dir, encoding="utf-8")
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(8)
+    print(f"VNC server is running at vnc://:mockpw@127.0.0.1:{server.getsockname()[1]}", flush=True)
+    server.settimeout(0.1)
+    while not os.path.exists(os.environ["MOCK_TART_STOP_FLAG"]):
+        try:
+            conn, _ = server.accept()
+            conn.sendall(b"RFB 003.008\n")
+            conn.close()
+        except OSError:
+            pass
+    server.close()
+elif subcommand == "exec":
+    shared_dir = pathlib.Path(os.environ["MOCK_TART_SHARED_PTR"]).read_text(encoding="utf-8")
+    guest_cmd = sys.argv[-1]
+    if "defaults read -g com.apple.swipescrolldirection" in guest_cmd:
+        print("1")
+    elif "defaults read com.apple.WindowManager EnableStandardClickToShowDesktop" in guest_cmd:
+        print("0")
+    elif "_iterm_prefs_updater.py" in guest_cmd:
+        assert (pathlib.Path(shared_dir) / "_iterm_prefs_cfg.json").is_file()
+    elif "open -a /Applications/iTerm.app" in guest_cmd and os.environ.get("MOCK_TART_SKIP_PROBE") != "1":
+        session_match = re.search(r"/tmp/tuikit_([A-Za-z0-9_]+)\.command", guest_cmd)
+        if session_match:
+            session_id = session_match.group(1)
+            spec_data = json.loads((pathlib.Path(shared_dir) / f"{session_id}.spec.json").read_text(encoding="utf-8"))
+            assert "--log" in spec_data["program_args"]
+            log_file = pathlib.Path(shared_dir) / f"{session_id}.jsonl"
             log_file.write_text('{"kind":"section","section":"identity","xtversion":"iTerm2 3.7.7"}\n{"kind":"ready"}\n{"kind":"summary","mode":"batch"}\n', encoding="utf-8")
-            pathlib.Path(str(log_file) + ".ready").write_text("", encoding="utf-8")
-            stem = rel[:-6]
-            (pathlib.Path(shared) / f"{stem}.exit.json").write_text('{"exitCode":0,"signal":0,"decrqm":"\\u001b[?1000;2$y\\u001b[?1002;2$y\\u001b[?1003;2$y\\u001b[?1006;2$y\\u001b[?2004;2$y\\u001b[?1004;2$y"}', encoding="utf-8")
-    elif "CGWindowListCopyWindowInfo" in cmd:
+            pathlib.Path(f"{log_file}.ready").write_text("", encoding="utf-8")
+            (pathlib.Path(shared_dir) / f"{session_id}.exit.json").write_text('{"exitCode":0,"signal":0,"decrqm":"\\u001b[?1000;2$y\\u001b[?1002;2$y\\u001b[?1003;2$y\\u001b[?1006;2$y\\u001b[?2004;2$y\\u001b[?1004;2$y"}', encoding="utf-8")
+    elif "CGWindowListCopyWindowInfo" in guest_cmd:
         print('[{"kCGWindowOwnerName":"iTerm2","kCGWindowLayer":0,"kCGWindowBounds":{"X":93,"Y":168,"Width":725,"Height":543}}]')
-    elif "CGEventSourceFlagsState" in cmd:
+    elif "CGEventSourceFlagsState" in guest_cmd:
         print("0x80120")
-    sys.exit(0)
-sys.exit(0)
 "#;
 
     const MOCK_VNCDO_SH: &str = r#"#!/usr/bin/env bash
 set -euo pipefail
 if [ -n "${MOCK_TART_CALLS_FILE:-}" ]; then
-  { printf 'VNCDO'; for a in "$@"; do printf '\t%s' "$a"; done; printf '\n'; } >> "$MOCK_TART_CALLS_FILE"
+  { printf 'VNCDO'; for arg_item in "$@"; do printf '\t%s' "$arg_item"; done; printf '\n'; } >> "$MOCK_TART_CALLS_FILE"
 fi
-prev=""
-for arg in "$@"; do
-  if [ "$prev" = "capture" ]; then
-    printf '\x89PNG\r\n\x1a\n' > "$arg"
+previous_token=""
+for arg_item in "$@"; do
+  if [ "$previous_token" = "capture" ]; then
+    printf '\x89PNG\r\n\x1a\n' > "$arg_item"
   fi
-  prev="$arg"
+  previous_token="$arg_item"
 done
 "#;
 
@@ -195,18 +191,48 @@ done
         }
     }
 
-    fn run_iterm2_script(args: &[&str], cwd: &Path, env_overrides: &[(&str, &str)]) -> Output {
-        let mut cmd = Command::new(runner_script_path());
-        cmd.args(args)
-            .current_dir(cwd)
+    fn run_iterm2_script(
+        args: &[&str],
+        working_dir: &Path,
+        env_overrides: &[(&str, &str)],
+    ) -> Output {
+        let mut command = Command::new(runner_script_path());
+        command
+            .args(args)
+            .current_dir(working_dir)
             .env_remove("RIG_ITERM2_TART_BIN")
             .env_remove("RIG_ITERM2_VNCDO_BIN")
             .env_remove("RIG_ITERM2_PROGRAM_BIN")
             .env_remove("RIG_ITERM2_LOG_DIR");
         for &(key, value) in env_overrides {
-            cmd.env(key, value);
+            command.env(key, value);
         }
-        cmd.output().expect("rig/iterm2/run.sh must execute")
+        command.output().expect("rig/iterm2/run.sh must execute")
+    }
+
+    #[test]
+    fn python_driver_unit_test_suite_passes() {
+        let output = Command::new("python3")
+            .args([
+                "-B",
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
+                "rig/iterm2/tests",
+                "-p",
+                "test_*.py",
+            ])
+            .current_dir(repository_root())
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .output()
+            .expect("python3 must execute Layer 6 unit test suite");
+        assert!(
+            output.status.success(),
+            "Layer 6 Python unit tests failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
@@ -248,6 +274,8 @@ done
             &["bad/name"],
             &["capability_probe", "unknown_scenario"],
             &["capability_probe", "--tmux", "invalid_mode"],
+            &["capability_probe", "--osc52"],
+            &["capability_probe", "--osc52", "--", "--extra"],
             &["capability_probe", "--log", "/tmp/manual.jsonl"],
         ];
         for args in cases {
@@ -322,7 +350,6 @@ done
                 ("PATH", bin_dir.to_str().expect("utf8")),
                 ("RIG_ITERM2_STRICT_PATH", "1"),
                 ("RIG_ITERM2_PROGRAM_BIN", stub_prog.to_str().expect("utf8")),
-                ("RIG_ITERM2_MOCK_GUEST", "1"),
                 ("MOCK_TART_CALLS_FILE", calls_file.to_str().expect("utf8")),
                 ("MOCK_TART_STOP_FLAG", stop_flag.to_str().expect("utf8")),
                 ("MOCK_TART_SHARED_PTR", shared_ptr.to_str().expect("utf8")),
@@ -339,6 +366,8 @@ done
         );
         assert!(String::from_utf8_lossy(&out.stderr).contains("\u{2705}"));
         let calls = fs::read_to_string(&calls_file).expect("calls");
+        assert!(calls.contains("_iterm_prefs_updater.py"));
+        assert!(calls.contains("rm -f /tmp/tuikit_iterm2_plist_backup.plist"));
         assert!(calls.contains("TART\tstop\ttuikit-macos"));
     }
 
@@ -355,7 +384,6 @@ done
                 ("PATH", bin_dir.to_str().expect("utf8")),
                 ("RIG_ITERM2_STRICT_PATH", "1"),
                 ("RIG_ITERM2_PROGRAM_BIN", stub_prog.to_str().expect("utf8")),
-                ("RIG_ITERM2_MOCK_GUEST", "1"),
                 ("RIG_ITERM2_LOG_DIR", log_dir.to_str().expect("utf8")),
                 ("MOCK_TART_SKIP_PROBE", "1"),
                 ("MOCK_TART_CALLS_FILE", calls_file.to_str().expect("utf8")),
@@ -366,6 +394,7 @@ done
         assert!(!out.status.success() && out.stdout.is_empty());
         assert!(log_dir.join("failure-screenshot.png").is_file());
         let calls = fs::read_to_string(&calls_file).expect("calls");
+        assert!(calls.contains("rm -f /tmp/tuikit_iterm2_plist_backup.plist"));
         assert!(calls.contains("TART\tstop\ttuikit-macos"));
     }
 }

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import re
-from typing import Mapping, Sequence
 
 VALID_TMUX_MODES: tuple[str, ...] = ("stock", "full", "cc-stock", "cc-full")
 VALID_SCENARIOS: tuple[str, ...] = (
@@ -78,50 +78,57 @@ def create_cli_theme(is_tty: bool, env: Mapping[str, str]) -> dict[str, str]:
     }
 
 
-def _help_scenarios_and_options(a: str, h: str, m: str, r: str) -> list[str]:
+def _help_scenarios_and_options(theme: Mapping[str, str]) -> list[str]:
+    accent = theme["accent"]
+    heading = theme["heading"]
+    muted = theme["muted"]
+    reset = theme["reset"]
     return [
-        f"{h}Scenarios:{r}",
-        f"  {a}all{r}                    Run batch, osc52, interactive, and panic in one cold-booted VM",
-        f"  {a}batch{r}                  Run non-interactive capability_probe sections and verify teardown",
-        f"  {a}osc52{r}                  Verify OSC 52 clipboard and tmux buffer behavior",
-        f"  {a}interactive{r}            Drive VNC pointer, keyboard, paste, focus, and Kitty Enter checks",
-        f"  {a}panic{r}                  Trigger F12 panic and verify terminal mode teardown",
-        f"  {a}matrix{r}                 Sweep M0 rows 1, 4, 5, 6, 7, 9, 10, 11, 12, 13 and restore guest defaults",
-        f"  {a}passthrough{r}            Run a custom <program> with --log managed by the driver",
+        f"{heading}Scenarios:{reset}",
+        f"  {accent}all{reset}                    Run batch, osc52, interactive, and panic in one cold-booted VM",
+        f"  {accent}batch{reset}                  Run non-interactive capability_probe sections and verify teardown",
+        f"  {accent}osc52{reset}                  Verify OSC 52 clipboard and tmux buffer behavior",
+        f"  {accent}interactive{reset}            Drive VNC pointer, keyboard, paste, focus, and Kitty Enter checks",
+        f"  {accent}panic{reset}                  Trigger F12 panic and verify terminal mode teardown",
+        f"  {accent}matrix{reset}                 Sweep M0 rows 1, 4, 5, 6, 7, 9, 10, 11, 12, 13 and restore guest defaults",
+        f"  {accent}passthrough{reset}            Run a custom <program> with --log managed by the driver",
         "",
-        f"{h}Options:{r}",
-        f"  {a}-h, --help{r}             Show this help text on stdout and exit 0",
-        f"  {a}--tmux <mode>{r}          Run inside private tmux: stock, full, cc-stock, or cc-full",
-        f"  {a}--timeout-ms <ms>{r}      Bounded per-phase condition timeout in milliseconds (default: 45000)",
-        f"  {a}--{r}                     Forward all remaining arguments verbatim to <program>",
-        f"  {m}(Note: --log <path> is managed automatically by the driver and must not be passed manually.){r}",
+        f"{heading}Options:{reset}",
+        f"  {accent}-h, --help{reset}             Show this help text on stdout and exit 0",
+        f"  {accent}--tmux <mode>{reset}          Run inside private tmux: stock, full, cc-stock, or cc-full",
+        f"  {accent}--timeout-ms <ms>{reset}      Bounded per-phase condition timeout in milliseconds (default: 45000)",
+        f"  {accent}--{reset}                     Forward all remaining arguments verbatim to <program>",
+        f"  {muted}(Note: --log <path> is managed automatically by the driver and must not be passed manually.){reset}",
     ]
 
 
 def build_help_text(theme: Mapping[str, str]) -> str:
     """Renders structured CLI help text for stdout."""
-    b, h, a, m, r = theme["bold"], theme["heading"], theme["accent"], theme["muted"], theme["reset"]
+    bold = theme["bold"]
+    heading = theme["heading"]
+    accent = theme["accent"]
+    reset = theme["reset"]
     return "\n".join(
         [
-            f"{h}Usage:{r}",
-            f"  {b}just iterm2{r} <program> [scenario] [--tmux <stock|full|cc-stock|cc-full>] [--timeout-ms <ms>] [-- extra_args...]",
-            f"  {b}./rig/iterm2/run.sh{r} <program> [scenario] [--tmux <stock|full|cc-stock|cc-full>] [--timeout-ms <ms>] [-- extra_args...]",
+            f"{heading}Usage:{reset}",
+            f"  {bold}just iterm2{reset} <program> [scenario] [--tmux <stock|full|cc-stock|cc-full>] [--timeout-ms <ms>] [-- extra_args...]",
+            f"  {bold}./rig/iterm2/run.sh{reset} <program> [scenario] [--tmux <stock|full|cc-stock|cc-full>] [--timeout-ms <ms>] [-- extra_args...]",
             "",
-            f"{h}Purpose:{r}",
+            f"{heading}Purpose:{reset}",
             "  Boot the headless tuikit-macos Tart VM over loopback VNC, drive iTerm2 (alone, in tmux,",
             "  or in tmux -CC), and emit a single machine-parseable JSON report on stdout (Layer 6).",
             "",
-            f"{h}Arguments:{r}",
-            f"  {a}<program>{r}              Cargo example binary name (for example: capability_probe)",
-            f"  {a}[scenario]{r}             Scenario name (default: 'all' for capability_probe, 'passthrough' otherwise)",
+            f"{heading}Arguments:{reset}",
+            f"  {accent}<program>{reset}              Cargo example binary name (for example: capability_probe)",
+            f"  {accent}[scenario]{reset}             Scenario name (default: 'all' for capability_probe, 'passthrough' otherwise)",
             "",
-            *_help_scenarios_and_options(a, h, m, r),
+            *_help_scenarios_and_options(theme),
             "",
-            f"{h}Streams:{r}",
+            f"{heading}Streams:{reset}",
             "  stdout                 Single machine-parseable JSON report object",
             "  stderr                 VM/scenario progress, warnings, errors, and final status summary",
             "",
-            f"{h}Examples:{r}",
+            f"{heading}Examples:{reset}",
             "  just iterm2 capability_probe",
             "  just iterm2 capability_probe matrix",
             "  just iterm2 --tmux full capability_probe all",
@@ -162,34 +169,46 @@ def _reject_manual_log_flag(tokens: Sequence[str]) -> None:
             )
 
 
+def _next_option_value(tokens: Sequence[str], token_index: int) -> str | None:
+    if token_index + 1 < len(tokens) and tokens[token_index + 1] != "--":
+        return tokens[token_index + 1]
+    return None
+
+
 def _consume_option_token(
     tokens: Sequence[str],
-    idx: int,
+    token_index: int,
     has_program: bool,
     tmux_mode: str | None,
     timeout_ms: int,
     extra_args: list[str],
 ) -> tuple[int, str | None, int]:
-    token = tokens[idx]
+    token = tokens[token_index]
     if token == "--tmux":
-        next_val = tokens[idx + 1] if idx + 1 < len(tokens) and tokens[idx + 1] != "--" else None
-        return idx + 2, _parse_tmux_mode(tmux_mode, next_val), timeout_ms
+        option_value = _next_option_value(tokens, token_index)
+        return token_index + 2, _parse_tmux_mode(tmux_mode, option_value), timeout_ms
     if token.startswith("--tmux="):
-        return idx + 1, _parse_tmux_mode(tmux_mode, token.split("=", 1)[1]), timeout_ms
+        return token_index + 1, _parse_tmux_mode(tmux_mode, token.split("=", 1)[1]), timeout_ms
     if token == "--timeout-ms":
-        next_val = tokens[idx + 1] if idx + 1 < len(tokens) and tokens[idx + 1] != "--" else None
-        return idx + 2, tmux_mode, _parse_positive_timeout(next_val)
+        option_value = _next_option_value(tokens, token_index)
+        return token_index + 2, tmux_mode, _parse_positive_timeout(option_value)
     if token.startswith("--timeout-ms="):
-        return idx + 1, tmux_mode, _parse_positive_timeout(token.split("=", 1)[1])
+        return token_index + 1, tmux_mode, _parse_positive_timeout(token.split("=", 1)[1])
     if has_program and token in BOOLEAN_PROBE_FLAGS:
         extra_args.append(token)
-        return idx + 1, tmux_mode, timeout_ms
-    if has_program and token in ("--osc52", "--osc52-form") and idx + 1 < len(tokens):
-        extra_args.extend([token, tokens[idx + 1]])
-        return idx + 2, tmux_mode, timeout_ms
+        return token_index + 1, tmux_mode, timeout_ms
+    if has_program and token in ("--osc52", "--osc52-form"):
+        option_value = _next_option_value(tokens, token_index)
+        if option_value is None:
+            raise CliUsageError(
+                f"Option '{token}' requires a value.",
+                f"Pass '{token} <value>' or '{token}=<value>' before '--'.",
+            )
+        extra_args.extend([token, option_value])
+        return token_index + 2, tmux_mode, timeout_ms
     if has_program and (token.startswith("--osc52=") or token.startswith("--osc52-form=")):
         extra_args.append(token)
-        return idx + 1, tmux_mode, timeout_ms
+        return token_index + 1, tmux_mode, timeout_ms
     raise CliUsageError(
         f"Unknown option '{token}'.",
         "Run with '--help' to see Layer 6 options, or place '--' before custom <program> flags.",
@@ -245,19 +264,19 @@ def parse_cli_args(argv: Sequence[str]) -> ParsedCliArgs:
     extra_args: list[str] = []
     tmux_mode: str | None = None
     timeout_ms = DEFAULT_TIMEOUT_MS
-    idx = 0
-    while idx < len(argv):
-        token = argv[idx]
+    token_index = 0
+    while token_index < len(argv):
+        token = argv[token_index]
         if token == "--":
-            extra_args.extend(argv[idx + 1 :])
+            extra_args.extend(argv[token_index + 1 :])
             break
         if token.startswith("-"):
-            idx, tmux_mode, timeout_ms = _consume_option_token(
-                argv, idx, bool(positionals), tmux_mode, timeout_ms, extra_args
+            token_index, tmux_mode, timeout_ms = _consume_option_token(
+                argv, token_index, bool(positionals), tmux_mode, timeout_ms, extra_args
             )
             continue
         positionals.append(token)
-        idx += 1
+        token_index += 1
     _reject_manual_log_flag(extra_args)
     return _validate_positionals_and_modes(positionals, tmux_mode, timeout_ms, extra_args)
 
@@ -267,31 +286,31 @@ def merge_probe_args(managed_args: Sequence[str], extra_args: Sequence[str]) -> 
     combined = [*managed_args, *extra_args]
     merged: list[str] = []
     seen_flags: set[str] = set()
-    idx = 0
-    while idx < len(combined):
-        token = combined[idx]
+    token_index = 0
+    while token_index < len(combined):
+        token = combined[token_index]
         inline_flag = token.split("=", 1)[0] if "=" in token and token.index("=") > 0 else None
         if token in BOOLEAN_PROBE_FLAGS:
             if token not in seen_flags:
                 seen_flags.add(token)
                 merged.append(token)
-            idx += 1
+            token_index += 1
             continue
         if token in VALUE_PROBE_FLAGS:
-            val = combined[idx + 1] if idx + 1 < len(combined) else None
+            flag_value = combined[token_index + 1] if token_index + 1 < len(combined) else None
             if token not in seen_flags:
                 seen_flags.add(token)
                 merged.append(token)
-                if val is not None:
-                    merged.append(val)
-            idx += 2
+                if flag_value is not None:
+                    merged.append(flag_value)
+            token_index += 2
             continue
         if inline_flag in VALUE_PROBE_FLAGS:
             if inline_flag not in seen_flags:
                 seen_flags.add(inline_flag)
                 merged.append(token)
-            idx += 1
+            token_index += 1
             continue
         merged.append(token)
-        idx += 1
+        token_index += 1
     return merged
