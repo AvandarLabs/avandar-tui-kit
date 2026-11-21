@@ -91,7 +91,7 @@ impl<'a> JsonParser<'a> {
         }
     }
 
-    fn skip_whitespace(&mut self) {
+    const fn skip_whitespace(&mut self) {
         while self.cursor < self.bytes.len() && self.bytes[self.cursor].is_ascii_whitespace() {
             self.cursor += 1;
         }

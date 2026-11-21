@@ -361,7 +361,7 @@ fn rig_sleep_ban_and_touched_docs_em_dash_and_local_path_bans_hold() {
         collect_rig_source_files(&workspace_root.join(relative_target), &mut rig_files);
     }
     rig_files.sort();
-    assert!(!rig_files.is_empty());
+    assert_ne!(rig_files.first(), None, "expected rig files");
     for file_path in rig_files {
         let file_contents = fs::read_to_string(&file_path).unwrap_or_else(|read_error| {
             panic!("failed to read {}: {read_error}", file_path.display())

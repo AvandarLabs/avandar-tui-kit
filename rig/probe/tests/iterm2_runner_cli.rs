@@ -50,7 +50,7 @@ fn runner_files_and_justfile_exist_with_zero_forbidden_tokens() {
     let forbidden_delay = concat!("sl", "eep");
     let mut files = Vec::new();
     collect_files_recursively(&repository_root().join("rig/iterm2"), &mut files);
-    assert!(!files.is_empty());
+    assert_ne!(files.first(), None, "expected iterm2 files");
     for file_path in files {
         let text = fs::read_to_string(&file_path)
             .unwrap_or_else(|_| panic!("expected UTF-8 text file at {}", file_path.display()));
@@ -306,7 +306,7 @@ done
             ],
         );
         assert_eq!(out_no_tart.status.code(), Some(1));
-        assert!(out_no_tart.stdout.is_empty());
+        assert_eq!(out_no_tart.stdout, b"");
         let err_tart = String::from_utf8(out_no_tart.stderr).expect("utf8");
         assert!(err_tart.contains("tart") && err_tart.contains("\n  \u{26a0}\u{fe0f} "));
 
