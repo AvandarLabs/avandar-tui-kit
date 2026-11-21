@@ -204,3 +204,31 @@ test('runHarnessCliMain archives formatted error JSON when runScenario throws', 
     );
   });
 });
+
+test('log_archive advances past existing on-disk sequence and avoids overwriting reports', async () => {
+  await withTempDirectory('tuikit-log-multiprocess-', async (tempDir) => {
+    const archiveDir = path.join(tempDir, 'shared');
+    fs.mkdirSync(archiveDir, { recursive: true });
+    fs.writeFileSync(path.join(archiveDir, 'xterm-04-prior-run.jsonl'), '{}\n', 'utf8');
+    const newLog = path.join(tempDir, 'fresh.jsonl');
+    fs.writeFileSync(newLog, '{"fresh":true}\n', 'utf8');
+
+    resetArchiveSessionSequence();
+    const env = { RIG_XTERM_LOG_DIR: archiveDir };
+    const archivedLog = archiveSessionProbeLog({ logPath: newLog, label: 'batch', env });
+    assert.equal(path.basename(archivedLog), 'xterm-05-batch.jsonl');
+
+    const parsedArgs = { program: 'capability_probe', scenario: 'batch', tmuxConfig: null };
+    const firstReport = archiveHarnessReport({ report: { run: 1 }, parsedArgs, env });
+    const secondReport = archiveHarnessReport({ report: { run: 2 }, parsedArgs, env });
+    assert.notEqual(firstReport, secondReport);
+    assert.deepEqual(JSON.parse(fs.readFileSync(firstReport, 'utf8')), { run: 1 });
+    assert.deepEqual(JSON.parse(fs.readFileSync(secondReport, 'utf8')), { run: 2 });
+
+    const firstError = archiveHarnessError({ error: new Error('first'), parsedArgs, env });
+    const secondError = archiveHarnessError({ error: new Error('second'), parsedArgs, env });
+    assert.notEqual(firstError, secondError);
+    assert.equal(JSON.parse(fs.readFileSync(firstError, 'utf8')).error, 'first');
+    assert.equal(JSON.parse(fs.readFileSync(secondError, 'utf8')).error, 'second');
+  });
+});

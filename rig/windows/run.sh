@@ -168,8 +168,21 @@ for job in data.get("jobs") or []:
 PY
 }
 
+prepare_output_directory() {
+  if [ -z "$output_dir" ]; then
+    output_dir="$repository_root/target/windows-ci/$run_id"
+  elif [[ "$output_dir" != /* ]]; then
+    output_dir="$caller_cwd/$output_dir"
+  fi
+  mkdir -p "$output_dir" || fail_error \
+    "Could not create output directory '$output_dir'." \
+    "Verify the parent directory of '$output_dir' is writable and retry."
+  output_dir="$(cd "$output_dir" && pwd)"
+}
+
 download_logs_and_artifacts() {
   local job_rows="$1"
+  rm -rf "$output_dir/artifacts"
   mkdir -p "$output_dir/jobs" "$output_dir/artifacts"
   downloaded_map_file="$output_dir/jobs/.downloaded.tsv"
   : > "$downloaded_map_file"
@@ -196,10 +209,8 @@ download_logs_and_artifacts() {
   fi
 }
 
-emit_summary_and_finish() {
-  local summary_state
-  summary_state="$(
-    RUN_JSON="$run_view_json" BRANCH_HINT="$branch_name" OUT_DIR="$output_dir" \
+build_summary_state() {
+  RUN_JSON="$run_view_json" BRANCH_HINT="$branch_name" OUT_DIR="$output_dir" \
     MAP_FILE="$downloaded_map_file" python3 - <<'PY'
 import json, os
 
@@ -211,20 +222,17 @@ with open(os.environ["MAP_FILE"], "r", encoding="utf-8") as handle:
         if len(parts) == 2:
             log_map[parts[0]] = parts[1]
 
-windows_jobs = []
-for job in data.get("jobs") or []:
-    name = job.get("name") or ""
-    if "windows" not in name.lower():
-        continue
-    job_id = job.get("databaseId")
-    windows_jobs.append({
-        "id": job_id,
-        "name": name,
+windows_jobs = [
+    {
+        "id": job.get("databaseId"),
+        "name": job.get("name") or "",
         "status": job.get("status"),
         "conclusion": job.get("conclusion"),
-        "log_path": log_map.get(str(job_id)),
-    })
-
+        "log_path": log_map.get(str(job.get("databaseId"))),
+    }
+    for job in (data.get("jobs") or [])
+    if "windows" in (job.get("name") or "").lower()
+]
 summary = {
     "run_id": data.get("databaseId"),
     "branch": os.environ["BRANCH_HINT"] or data.get("headBranch"),
@@ -241,7 +249,11 @@ all_ok = bool(windows_jobs) and all(
 print(json.dumps(summary, separators=(",", ":")))
 print("OK" if all_ok else "FAIL")
 PY
-  )"
+}
+
+emit_summary_and_finish() {
+  local summary_state
+  summary_state="$(build_summary_state)"
   rm -f "$downloaded_map_file"
   local json_line="${summary_state%%$'\n'*}"
   local outcome_token="${summary_state##*$'\n'}"
@@ -254,6 +266,7 @@ PY
     "Inspect downloaded logs under '$output_dir' (or re-run with '--wait' if still in progress)." 1
 }
 
+caller_cwd="$(pwd)"
 parse_arguments "$@"
 check_prerequisites
 
@@ -263,7 +276,6 @@ run_view_json=""
 downloaded_map_file=""
 
 resolve_target_run_id
-[ -n "$output_dir" ] || output_dir="$repository_root/target/windows-ci/$run_id"
 fetch_and_optionally_watch_run
 
 windows_rows="$(extract_windows_job_rows)"
@@ -271,5 +283,6 @@ windows_rows="$(extract_windows_job_rows)"
   "Workflow run $run_id contains no Windows jobs." \
   "Verify '.github/workflows/ci.yml' defines a job whose name includes 'Windows'."
 
+prepare_output_directory
 download_logs_and_artifacts "$windows_rows"
 emit_summary_and_finish

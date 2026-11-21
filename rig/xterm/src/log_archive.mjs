@@ -27,6 +27,25 @@ function buildArchivePrefix(tmuxMode) {
   return `xterm-tmux-${buildArchiveToken(tmuxMode, 'tmux')}`;
 }
 
+function findMaxArchivedSequenceOnDisk(archiveDir, filePrefix) {
+  if (!fs.existsSync(archiveDir)) {
+    return 0;
+  }
+  const requiredPrefix = `${filePrefix}-`;
+  let maxSequence = 0;
+  for (const entryName of fs.readdirSync(archiveDir)) {
+    if (!entryName.startsWith(requiredPrefix) || !entryName.endsWith('.jsonl')) {
+      continue;
+    }
+    const remainder = entryName.slice(requiredPrefix.length);
+    const sequenceMatch = /^(\d+)-/.exec(remainder);
+    if (sequenceMatch !== null) {
+      maxSequence = Math.max(maxSequence, Number.parseInt(sequenceMatch[1], 10));
+    }
+  }
+  return maxSequence;
+}
+
 /**
  * Builds a deterministic session archive label from `runtime`, `managedArgs`, and optional `explicitLabel`.
  */
@@ -61,9 +80,10 @@ export function archiveSessionProbeLog({
   if (archiveDir === null || !logPath || !fs.existsSync(logPath)) {
     return null;
   }
-  archivedSessionSequence += 1;
-  const sequenceToken = String(archivedSessionSequence).padStart(2, '0');
   const filePrefix = buildArchivePrefix(tmuxMode);
+  const maxOnDisk = findMaxArchivedSequenceOnDisk(archiveDir, filePrefix);
+  archivedSessionSequence = Math.max(archivedSessionSequence + 1, maxOnDisk + 1);
+  const sequenceToken = String(archivedSessionSequence).padStart(2, '0');
   const safeLabel = buildArchiveToken(label, 'session');
   const destinationPath = path.join(archiveDir, `${filePrefix}-${sequenceToken}-${safeLabel}.jsonl`);
   fs.mkdirSync(archiveDir, { recursive: true });
@@ -71,11 +91,32 @@ export function archiveSessionProbeLog({
   return destinationPath;
 }
 
-function writeFormattedJsonFile(archiveDir, fileName, payloadObject) {
+function writeUniqueFormattedJsonFile(archiveDir, baseStem, kindSuffix, payloadObject) {
   fs.mkdirSync(archiveDir, { recursive: true });
-  const destinationPath = path.join(archiveDir, fileName);
-  fs.writeFileSync(destinationPath, `${JSON.stringify(payloadObject, null, 2)}\n`, 'utf8');
-  return destinationPath;
+  const serializedJson = `${JSON.stringify(payloadObject, null, 2)}\n`;
+  for (let attempt = 1; attempt <= 9999; attempt += 1) {
+    const candidateName =
+      attempt === 1
+        ? `${baseStem}-${kindSuffix}.json`
+        : `${baseStem}-pid${process.pid}-${String(attempt).padStart(2, '0')}-${kindSuffix}.json`;
+    const candidatePath = path.join(archiveDir, candidateName);
+    try {
+      fs.writeFileSync(candidatePath, serializedJson, { encoding: 'utf8', flag: 'wx' });
+      return candidatePath;
+    } catch (writeError) {
+      if (writeError?.code !== 'EEXIST') {
+        throw writeError;
+      }
+    }
+  }
+  throw new Error(`Exhausted unique archive filenames for '${baseStem}-${kindSuffix}.json'.`);
+}
+
+function buildReportStem(parsedArgs) {
+  const filePrefix = buildArchivePrefix(parsedArgs.tmuxConfig);
+  const programToken = buildArchiveToken(parsedArgs.program, 'program');
+  const scenarioToken = buildArchiveToken(parsedArgs.scenario, 'scenario');
+  return `${filePrefix}-${programToken}-${scenarioToken}`;
 }
 
 /**
@@ -86,11 +127,7 @@ export function archiveHarnessReport({ report, parsedArgs, env = process.env } =
   if (archiveDir === null || !report || !parsedArgs) {
     return null;
   }
-  const filePrefix = buildArchivePrefix(parsedArgs.tmuxConfig);
-  const programToken = buildArchiveToken(parsedArgs.program, 'program');
-  const scenarioToken = buildArchiveToken(parsedArgs.scenario, 'scenario');
-  const fileName = `${filePrefix}-${programToken}-${scenarioToken}-report.json`;
-  return writeFormattedJsonFile(archiveDir, fileName, report);
+  return writeUniqueFormattedJsonFile(archiveDir, buildReportStem(parsedArgs), 'report', report);
 }
 
 /**
@@ -101,14 +138,10 @@ export function archiveHarnessError({ error, parsedArgs, env = process.env } = {
   if (archiveDir === null || !error || !parsedArgs) {
     return null;
   }
-  const filePrefix = buildArchivePrefix(parsedArgs.tmuxConfig);
-  const programToken = buildArchiveToken(parsedArgs.program, 'program');
-  const scenarioToken = buildArchiveToken(parsedArgs.scenario, 'scenario');
-  const fileName = `${filePrefix}-${programToken}-${scenarioToken}-error.json`;
   const errorPayload = {
     error: error?.message ?? String(error),
     stack: typeof error?.stack === 'string' ? error.stack : '',
     timestamp: new Date().toISOString(),
   };
-  return writeFormattedJsonFile(archiveDir, fileName, errorPayload);
+  return writeUniqueFormattedJsonFile(archiveDir, buildReportStem(parsedArgs), 'error', errorPayload);
 }

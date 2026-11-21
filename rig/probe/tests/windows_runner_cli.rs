@@ -79,6 +79,7 @@ case "${1:-}:${2:-}" in
   run:download)
     dir=""; prev=""
     for arg in "$@"; do [ "$prev" = "--dir" ] && dir="$arg"; prev="$arg"; done
+    [ ! -e "$dir/windows-event-logs/xterm-01-probe.jsonl" ] || { printf 'file exists\n' >&2; exit 1; }
     mkdir -p "$dir/windows-event-logs"
     printf '{"kind":"summary"}\n' > "$dir/windows-event-logs/xterm-01-probe.jsonl" ;;
   *) exit 1 ;;
@@ -299,21 +300,26 @@ esac
     }
 
     #[test]
-    fn windows_runner_watches_in_progress_run_and_downloads_logs_and_artifacts() {
+    fn windows_runner_watches_in_progress_run_and_downloads_into_relative_dir_twice() {
         let fixture = MockCliFixture::create("watch-ok");
         let out_dir = fixture.temp_dir.0.join("downloaded");
-        let out_arg = out_dir.to_str().expect("UTF-8");
         fs::write(&fixture.list_file, r#"[{"databaseId":4242,"status":"in_progress","conclusion":null,"headSha":"abc","url":"https://example.test/4242"}]"#).expect("list");
         fs::write(&fixture.view_file, r#"{"databaseId":4242,"headBranch":"feat/m0","status":"in_progress","conclusion":null,"headSha":"abc","url":"https://example.test/4242","jobs":[{"databaseId":9001,"name":"Windows","status":"in_progress","conclusion":null}]}"#).expect("view");
         fs::write(&fixture.after_watch_file, r#"{"databaseId":4242,"headBranch":"feat/m0","status":"completed","conclusion":"success","headSha":"abc","url":"https://example.test/4242","jobs":[{"databaseId":9001,"name":"Windows","status":"completed","conclusion":"success"},{"databaseId":9002,"name":"Linux","status":"completed","conclusion":"success"}]}"#).expect("after");
 
-        let ok = fixture.run_target(
-            &windows_script(),
-            &["--branch", "feat/m0", "--wait", "--output-dir", out_arg],
-            &[],
-        );
-        assert!(ok.status.success());
-        let stdout_line = String::from_utf8(ok.stdout).expect("UTF-8");
+        let args = [
+            "--branch",
+            "feat/m0",
+            "--wait",
+            "--output-dir",
+            "./downloaded",
+        ];
+        let first = fixture.run_target(&windows_script(), &args, &[]);
+        let second = fixture.run_target(&windows_script(), &args, &[]);
+        assert!(first.status.success() && second.status.success());
+        let second_stderr = String::from_utf8(second.stderr).expect("UTF-8");
+        assert!(!second_stderr.contains("No 'windows-event-logs*' artifacts"));
+        let stdout_line = String::from_utf8(second.stdout).expect("UTF-8");
         assert_eq!(stdout_line.lines().count(), 1);
         assert!(stdout_line.contains("\"run_id\":4242"));
         assert!(out_dir.join("jobs/Windows-9001.log").is_file());
@@ -322,6 +328,7 @@ esac
                 .join("artifacts/windows-event-logs/xterm-01-probe.jsonl")
                 .is_file()
         );
+        assert!(!repository_root().join("downloaded").exists());
         assert!(
             fs::read_to_string(&fixture.calls_file)
                 .expect("calls")

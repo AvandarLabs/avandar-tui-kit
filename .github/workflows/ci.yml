@@ -70,7 +70,9 @@ jobs:
 
       - name: xterm.js harness
         run: |
-          ./rig/linux/run.sh npm --prefix rig/xterm test
+          mkdir -p target/ci-event-logs/linux/harness-tests
+          RIG_XTERM_LOG_DIR="${GITHUB_WORKSPACE}/target/ci-event-logs/linux/harness-tests" \
+            ./rig/linux/run.sh npm --prefix rig/xterm test
           RIG_XTERM_LOG_DIR="${GITHUB_WORKSPACE}/target/ci-event-logs/linux" \
             ./rig/linux/run.sh ./rig/xterm/run.sh capability_probe \
             > target/ci-event-logs/linux/stdout-xterm.json
@@ -122,7 +124,7 @@ jobs:
           command -v tmux >/dev/null 2>&1 || HOMEBREW_NO_AUTO_UPDATE=1 brew install tmux
           npm --prefix rig/xterm ci
           npx --prefix rig/xterm playwright install chromium
-          mkdir -p target/ci-event-logs/macos
+          mkdir -p target/ci-event-logs/macos/harness-tests
 
       - name: Clippy, tests, and docs
         run: |
@@ -138,7 +140,8 @@ jobs:
 
       - name: xterm.js harness
         run: |
-          npm --prefix rig/xterm test
+          RIG_XTERM_LOG_DIR="${GITHUB_WORKSPACE}/target/ci-event-logs/macos/harness-tests" \
+            npm --prefix rig/xterm test
           RIG_XTERM_LOG_DIR="${GITHUB_WORKSPACE}/target/ci-event-logs/macos" \
             ./rig/xterm/run.sh capability_probe \
             > target/ci-event-logs/macos/stdout-xterm.json
@@ -190,7 +193,7 @@ jobs:
 
       - name: Install xterm.js harness dependencies
         run: |
-          New-Item -ItemType Directory -Force -Path target/ci-event-logs/windows | Out-Null
+          New-Item -ItemType Directory -Force -Path target/ci-event-logs/windows/harness-tests | Out-Null
           npm --prefix rig/xterm ci
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npx --prefix rig/xterm playwright install chromium
@@ -223,12 +226,14 @@ jobs:
 
       - name: xterm.js harness
         run: |
+          $env:RIG_XTERM_LOG_DIR = "${env:GITHUB_WORKSPACE}/target/ci-event-logs/windows/harness-tests"
           npm --prefix rig/xterm test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+          [Console]::InputEncoding = [Console]::OutputEncoding = $OutputEncoding = $utf8NoBom
           $env:RIG_XTERM_LOG_DIR = "${env:GITHUB_WORKSPACE}/target/ci-event-logs/windows"
           $stdoutJson = node rig/xterm/src/harness.mjs capability_probe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
           [System.IO.File]::WriteAllText("$PWD/target/ci-event-logs/windows/stdout-xterm.json", ($stdoutJson -join "`n") + "`n", $utf8NoBom)
 
       - name: Upload Windows event logs
