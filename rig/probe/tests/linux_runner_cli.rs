@@ -281,7 +281,7 @@ esac
             ],
         );
         assert_eq!(missing_output.status.code(), Some(1));
-        assert!(missing_output.stdout.is_empty());
+        assert_eq!(missing_output.stdout, b"");
         let missing_stderr = String::from_utf8(missing_output.stderr).expect("UTF-8");
         assert!(missing_stderr.contains("docker") && missing_stderr.contains("\n  ⚠️ "));
 
@@ -291,7 +291,7 @@ esac
             &[("MOCK_DOCKER_INFO_FAIL", "1"), ("NO_COLOR", "1")],
         );
         assert_eq!(daemon_output.status.code(), Some(1));
-        assert!(daemon_output.stdout.is_empty());
+        assert_eq!(daemon_output.stdout, b"");
         let daemon_stderr = String::from_utf8(daemon_output.stderr).expect("UTF-8");
         assert!(daemon_stderr.contains("❌") && daemon_stderr.contains("\n  ⚠️ "));
     }

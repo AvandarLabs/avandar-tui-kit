@@ -89,9 +89,9 @@ mod tests {
         assert_eq!(WIDTH_SAMPLES.len(), 33);
         let mut seen_names = HashSet::new();
         for entry in WIDTH_SAMPLES {
-            assert!(!entry.name.is_empty());
-            assert!(!entry.category.is_empty());
-            assert!(!entry.text.is_empty());
+            assert_ne!(entry.name, "");
+            assert_ne!(entry.category, "");
+            assert_ne!(entry.text, "");
             assert!(
                 seen_names.insert(entry.name),
                 "duplicate width sample name: {}",

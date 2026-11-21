@@ -191,7 +191,7 @@ fn execute_probe(args: &ProbeArgs) -> io::Result<()> {
 ///
 /// Panics intentionally in interactive mode when the user presses `F12`, exercising the
 /// panic-hook terminal teardown path.
-#[must_use]
+#[must_use = "return the ExitCode from main so the process exit status is preserved"]
 pub fn run_from_env() -> ExitCode {
     let parsed_args = match parse_probe_args(std::env::args().skip(1)) {
         Ok(valid_args) => valid_args,

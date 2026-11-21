@@ -235,7 +235,7 @@ esac
         for args in windows_invalid_cases {
             let output = run_script(&windows_script(), args, &temp_dir.0, &[("NO_COLOR", "1")]);
             assert_eq!(output.status.code(), Some(2), "args: {args:?}");
-            assert!(output.stdout.is_empty());
+            assert_eq!(output.stdout, b"");
             let stderr_text = String::from_utf8(output.stderr).expect("UTF-8");
             assert!(stderr_text.contains("Usage:") && stderr_text.contains("\n  ⚠️ "));
         }
@@ -246,7 +246,7 @@ esac
             &[("NO_COLOR", "1")],
         );
         assert_eq!(check_features_output.status.code(), Some(2));
-        assert!(check_features_output.stdout.is_empty());
+        assert_eq!(check_features_output.stdout, b"");
     }
 
     #[test]
@@ -294,7 +294,7 @@ esac
             &[("PATH", hermetic_path), ("NO_COLOR", "1")],
         );
         assert_eq!(missing_output.status.code(), Some(1));
-        assert!(missing_output.stdout.is_empty());
+        assert_eq!(missing_output.stdout, b"");
 
         let fixture = MockCliFixture::create("unauth-empty");
         let unauth_output = fixture.run_target(
@@ -306,7 +306,7 @@ esac
         fs::write(&fixture.list_file, "[]").expect("empty list");
         let empty_output = fixture.run_target(&windows_script(), &["--branch", "main"], &[]);
         assert_eq!(empty_output.status.code(), Some(1));
-        assert!(empty_output.stdout.is_empty());
+        assert_eq!(empty_output.stdout, b"");
     }
 
     #[test]

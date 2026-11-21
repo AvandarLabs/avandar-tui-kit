@@ -558,7 +558,7 @@ mod tests {
     fn flushes_incomplete_buffer_on_timeout_and_handles_non_key_interruptions() {
         let mut parser = ColorReplyParser::new();
 
-        assert!(parser.flush_incomplete().is_empty());
+        assert_eq!(parser.flush_incomplete(), Vec::<Event>::new());
 
         let esc_event = press_esc();
         let bracket_event = press_char(']', KeyModifiers::NONE);
@@ -572,7 +572,7 @@ mod tests {
             parser.flush_incomplete(),
             vec![esc_event, bracket_event, one_event]
         );
-        assert!(parser.flush_incomplete().is_empty());
+        assert_eq!(parser.flush_incomplete(), Vec::<Event>::new());
 
         assert_rejects_sequence(
             &mut parser,

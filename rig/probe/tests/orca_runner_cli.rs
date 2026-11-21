@@ -213,7 +213,7 @@ esac
     fn assert_jsonl_stdout_records(stdout_bytes: &[u8]) {
         let stdout_text = String::from_utf8(stdout_bytes.to_vec()).expect("stdout must be UTF-8");
         let stdout_lines: Vec<&str> = stdout_text.lines().collect();
-        assert!(!stdout_lines.is_empty());
+        assert_ne!(stdout_lines, Vec::<&str>::new());
         for line in &stdout_lines {
             let is_valid = line.starts_with("{\"kind\":\"section\"")
                 || line.starts_with("{\"kind\":\"summary\"");

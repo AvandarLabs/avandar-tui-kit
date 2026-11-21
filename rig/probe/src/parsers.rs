@@ -307,7 +307,7 @@ mod tests {
                 },
             ]
         );
-        assert!(parse_kitty_flags_replies(reply_bytes).is_empty());
+        assert_eq!(parse_kitty_flags_replies(reply_bytes), Vec::<u16>::new());
         assert_eq!(parse_cell_pixel_size(reply_bytes), None);
         assert_eq!(parse_xtversion_reply(reply_bytes), None);
         assert_eq!(parse_cursor_position(reply_bytes), None);
@@ -349,15 +349,20 @@ mod tests {
 
     #[test]
     fn incomplete_da1_or_malformed_csi_does_not_false_trigger_fence() {
-        assert!(!has_da1_reply(b"\x1b[?1002;1$y\x1b[?62;"));
-        assert!(!has_da1_reply(b"\x1b[?u"));
-        assert!(!has_da1_reply(b"\x1b[?c"));
-        assert!(!has_da1_reply(b"\x1b[?1;c"));
-        assert!(!has_da1_reply(b"\x1b[?;1c"));
-        assert!(!has_da1_reply(b"\x1b[?1;;2c"));
+        for malformed in [
+            &b"\x1b[?1002;1$y\x1b[?62;"[..],
+            b"\x1b[?u",
+            b"\x1b[?c",
+            b"\x1b[?1;c",
+            b"\x1b[?;1c",
+            b"\x1b[?1;;2c",
+        ] {
+            assert!(!has_da1_reply(malformed));
+        }
         assert!(has_da1_reply(b"leading-noise\x00\xff\x1b[?6c"));
 
-        assert!(parse_kitty_flags_replies(b"\x1b[?u\x1b[?;1u\x1b[?1;u\x1b[?999999u").is_empty());
+        let bad_kitty = b"\x1b[?u\x1b[?;1u\x1b[?1;u\x1b[?999999u";
+        assert_eq!(parse_kitty_flags_replies(bad_kitty), Vec::<u16>::new());
         assert_eq!(
             parse_cursor_position(b"\x1b[0;1R\x1b[1;0R\x1b[999999;1R"),
             None
@@ -370,10 +375,11 @@ mod tests {
             parse_cell_pixel_size(b"\x1b[6;0;9t\x1b[6;16;8t"),
             Some(CellPixelSize {
                 height_px: 16,
-                width_px: 8,
+                width_px: 8
             })
         );
-        assert!(parse_mode_reports(b"\x1b[?999999;1$y\x1b[?1000;999999$y").is_empty());
+        let bad_modes = b"\x1b[?999999;1$y\x1b[?1000;999999$y";
+        assert_eq!(parse_mode_reports(bad_modes), Vec::<ModeReport>::new());
 
         assert_eq!(
             parse_xtversion_reply(b"\x1bP>|foo\x1bP>|bar\x1b\\").as_deref(),

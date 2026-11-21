@@ -274,10 +274,9 @@ mod tests {
             listener.filter_event(esc_event.clone(), start + Duration::from_millis(1_950)),
             ArmedColorOutcome::Swallowed(None)
         );
-        assert!(
-            listener
-                .expire_if_due(start + Duration::from_millis(1_999))
-                .is_empty()
+        assert_eq!(
+            listener.expire_if_due(start + Duration::from_millis(1_999)),
+            Vec::<Event>::new()
         );
         assert_eq!(listener.expire_if_due(deadline), vec![esc_event]);
         assert!(listener.remaining_window(deadline).is_none());
