@@ -62,7 +62,7 @@ Every `justfile` recipe is a single command you can also run directly:
 | 2 | `just lint-targets` | `cargo clippy --workspace --all-targets --all-features --target x86_64-pc-windows-msvc --target x86_64-unknown-linux-gnu -- -D warnings` |
 | 3 | `just xterm <program> [scenario]` | `./rig/xterm/run.sh <program> [scenario]` |
 | 4 | `just xterm-tmux <config> <program> [scenario]` | `./rig/xterm/run-tmux.sh <config> <program> [scenario]` (`config` is `stock` or `full`) |
-| 5 | `just orca <program>` | `./rig/orca/run.sh <program>` (also accepts `--tmux` or `--tmux-config <stock\|full>`) |
+| 5 | `just orca [--tmux <stock\|full>] <program>` | `./rig/orca/run.sh [--tmux <stock\|full>] <program>` |
 | 6 | `just iterm2 <program> [scenario]` | `./rig/iterm2/run.sh <program> [scenario]` (also accepts `--tmux <stock\|full\|cc-stock\|cc-full>`) |
 | 7 | `just windows` | `./rig/windows/run.sh` (also accepts `--wait`, `--branch <name>`, `--run-id <id>`) |
 
@@ -94,7 +94,9 @@ xterm.js is the terminal inside Orca, so this layer carries the most weight.
 connects it over WebSocket to an example program running in a `node-pty`
 pseudo-terminal. Playwright delivers real mouse, wheel, keyboard, paste, and
 focus events to xterm.js, xterm.js encodes them as it would for a person, and
-the harness compares the normalized report against
+`./rig/xterm/run.sh` emits a JSON probe report on `stdout` while
+`node rig/xterm/src/expected_compare.mjs <report-or--> rig/expected/<config>.json`
+normalizes and verifies probe output against
 `rig/expected/xterm-{macos,linux,windows}.json`.
 
 It uses the browser build of xterm.js, not the headless one: the code that
@@ -109,11 +111,12 @@ plus CI verification on macOS, Linux, and Windows (`windows-2025`).
 
 ### 4. tmux in the xterm.js harness
 
-`just xterm-tmux` starts the example program inside a private `tmux` server
-(its own socket and no user config), once with `rig/tmux/stock.conf` (an empty
-file) and once with `rig/tmux/full.conf` (`mouse on`, `set-clipboard on`,
-`allow-passthrough on`, `extended-keys on`, `focus-events on`), and checks the
-normalized output against
+`just xterm-tmux` (`./rig/xterm/run-tmux.sh`) starts the example program inside
+a private `tmux` server (its own socket and no user config), once with
+`rig/tmux/stock.conf` (an empty file) and once with `rig/tmux/full.conf`
+(`mouse on`, `set-clipboard on`, `allow-passthrough on`, `extended-keys on`,
+`focus-events on`), and emits a JSON probe report on `stdout`;
+`expected_compare.mjs` normalizes and verifies that output against
 `rig/expected/xterm-tmux-{stock,full}-{macos,linux}.json`.
 
 Proved: **30 consecutive identical runs** in `stock` and **30 consecutive
@@ -123,12 +126,14 @@ Layer 3 on each platform.
 
 ### 5. Orca
 
-`just orca` (`rig/orca/run.sh`) creates an unfocused live Orca terminal
-through Orca's command line (`orca terminal spawn` without stealing keyboard
+`just orca` (`./rig/orca/run.sh`) creates an unfocused live Orca terminal
+through Orca's command line (`orca terminal create` without stealing keyboard
 focus), runs the example program alone or inside a private `tmux` server
-(`--tmux`), checks that Orca's reported `xterm.js` version still matches the
-version pinned in `rig/xterm/package.json`, and compares the output against
-`rig/expected/orca.json` and `rig/expected/orca-tmux.json`.
+(`--tmux <stock|full>`), and emits JSONL probe records on `stdout`.
+`expected_compare.mjs` normalizes and verifies that output against
+`rig/expected/orca.json` and `rig/expected/orca-tmux.json`, while
+`rig/probe/tests/expected_baselines.rs` asserts that `rig/expected/orca.json`'s
+`xtversion` matches `@xterm/xterm` in `rig/xterm/package.json`.
 
 Proved: `capability_probe` ran in live Orca `1.4.258`, alone and inside `tmux
 3.8`, reported `xterm.js(6.0.0)`, and matched both baselines.
@@ -156,13 +161,15 @@ One-time preparation of the `tuikit-macos` Tart guest:
 - macOS Sequoia click-wallpaper-to-show-desktop and notification banners
   quieted so pointer events never hide the terminal window.
 
-`just iterm2` (`rig/iterm2/run.sh`) boots `tuikit-macos` headless with
+`just iterm2` (`./rig/iterm2/run.sh`) boots `tuikit-macos` headless with
 `tart run --no-graphics --no-audio --no-clipboard --vnc-experimental` and a
 VirtioFS shared directory, waits on `tart exec` and RFB handshake readiness
 (zero fixed sleeps), calibrates the VNC Option modifier before key chords,
 backs up and restores guest `defaults` (`com.googlecode.iterm2` and
 `NSGlobalDomain`) around every run, captures a VNC screenshot automatically on
-failure, and stops the VM cleanly on exit.
+failure, emits a JSON probe report on `stdout` (verified with
+`expected_compare.mjs` against `rig/expected/iterm2*.json`), and stops the VM
+cleanly on exit.
 
 Proved: **10 consecutive cold-start runs** from a stopped `tuikit-macos` VM
 (`10/10` identical capability digests), plus full matrix verification across

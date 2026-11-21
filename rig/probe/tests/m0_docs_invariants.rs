@@ -152,11 +152,34 @@ fn terminals_doc_has_zero_verify_markers_and_records_conpty_and_tmux_3_3() {
         "tmux 3.8",
         "tmux -CC",
         "cmd.exe /D /S /C",
+        "`\"\\^^^\"\"`",
         "rig/expected",
     ] {
         assert!(
             terminals_doc.contains(required_fragment),
             "docs/terminals.md missing '{required_fragment}'"
+        );
+    }
+}
+
+#[test]
+fn testing_doc_aligns_runner_cli_flags_and_expected_compare() {
+    let testing_doc = read_repo_file("docs/testing.md");
+    for required_fragment in [
+        "orca terminal create",
+        "expected_compare.mjs",
+        "--tmux <stock|full>",
+        "expected_baselines.rs",
+    ] {
+        assert!(
+            testing_doc.contains(required_fragment),
+            "docs/testing.md missing '{required_fragment}'"
+        );
+    }
+    for forbidden_fragment in ["--tmux-config", "orca terminal spawn"] {
+        assert!(
+            !testing_doc.contains(forbidden_fragment),
+            "docs/testing.md contains nonexistent CLI syntax '{forbidden_fragment}'"
         );
     }
 }
