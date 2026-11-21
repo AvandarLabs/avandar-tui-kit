@@ -18,7 +18,7 @@ import {
 } from '../src/cell_coords.mjs';
 import { hasDeliveredPastePayload } from '../src/interactive_scenario.mjs';
 import { waitForLogRecords } from '../src/ready_waiter.mjs';
-import { mergeProbeArgs } from '../src/scenarios.mjs';
+import { cleanupManagedSession, mergeProbeArgs } from '../src/scenarios.mjs';
 
 const TEST_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const XTERM_ROOT = path.resolve(TEST_DIRECTORY, '..');
@@ -380,4 +380,17 @@ test('run.sh executes capability_probe all scenario with clean JSON stdout and v
   assert.equal(report.panic.terminalStateAfterPanic.mouseTrackingMode, 'none');
   assert.equal(report.panic.terminalStateAfterPanic.bracketedPasteMode, false);
   assert.equal(report.panic.terminalStateAfterPanic.sendFocusMode, false);
+});
+
+test('cleanupManagedSession closes bridge and deletes scratchDir when dispose throws', async () => {
+  const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tuikit-cleanup-'));
+  let hasClosedBridge = false;
+  const failingSession = { async dispose() { throw new Error('simulated dispose failure'); } };
+  const stubBridge = { async close() { hasClosedBridge = true; } };
+  await assert.rejects(
+    () => cleanupManagedSession(failingSession, stubBridge, scratchDir),
+    /simulated dispose failure/,
+  );
+  assert.equal(hasClosedBridge, true);
+  assert.equal(fs.existsSync(scratchDir), false);
 });

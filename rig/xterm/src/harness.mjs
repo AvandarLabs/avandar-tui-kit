@@ -44,7 +44,7 @@ export function createCliTheme(stream, env = process.env) {
   };
 }
 
-function buildModeHelpMetadata(theme, isTmux) {
+function createModeHelpMetadata(theme, isTmux) {
   if (isTmux) {
     return {
       usageLines: [
@@ -89,7 +89,7 @@ function buildModeHelpMetadata(theme, isTmux) {
  * Builds the structured `--help` text for `rig/xterm/run.sh` or `rig/xterm/run-tmux.sh`.
  */
 export function buildHarnessHelpText(theme, { isTmux = false } = {}) {
-  const modeHelp = buildModeHelpMetadata(theme, isTmux);
+  const modeHelp = createModeHelpMetadata(theme, isTmux);
   return [
     `${theme.heading}Usage:${theme.reset}`,
     ...modeHelp.usageLines,
@@ -200,9 +200,9 @@ function resolveCompiledProgramBinary(programName, stderrTheme) {
   return binaryPath;
 }
 
-function handleCliFailure(caughtError, stderrTheme, scriptName, requireTmuxConfig) {
+function handleCliFailure(caughtError, stderrTheme, scriptName, shouldRequireTmuxConfig) {
   if (caughtError instanceof CliUsageError) {
-    const helpBlock = buildHarnessHelpText(stderrTheme, { isTmux: requireTmuxConfig });
+    const helpBlock = buildHarnessHelpText(stderrTheme, { isTmux: shouldRequireTmuxConfig });
     process.stderr.write(`${helpBlock}\n\n`);
     writeErrorWithHint(stderrTheme, scriptName, caughtError.message, caughtError.recoveryHint);
     return 2;

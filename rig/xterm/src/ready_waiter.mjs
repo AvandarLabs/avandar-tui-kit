@@ -77,7 +77,7 @@ function attachDirectoryWatcher(directoryPath, onFilesystemChange) {
   }
 }
 
-function buildEarlyExitError(earlyExitLabel, exitError, exitOutcome) {
+function createEarlyExitError(earlyExitLabel, exitError, exitOutcome) {
   if (exitError) {
     return exitError;
   }
@@ -115,12 +115,12 @@ function registerConditionHandlers(options, settle) {
     processExitPromise.then(
       (exitOutcome) => {
         if (!checkCondition()) {
-          settle(buildEarlyExitError(earlyExitLabel, null, exitOutcome), null, handles);
+          settle(createEarlyExitError(earlyExitLabel, null, exitOutcome), null, handles);
         }
       },
       (exitError) => {
         if (!checkCondition()) {
-          settle(buildEarlyExitError(earlyExitLabel, exitError, null), null, handles);
+          settle(createEarlyExitError(earlyExitLabel, exitError, null), null, handles);
         }
       },
     );

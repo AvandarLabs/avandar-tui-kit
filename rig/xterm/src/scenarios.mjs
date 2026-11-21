@@ -99,35 +99,50 @@ function waitBrieflyForSessionExit(exitPromise, maxWaitMs = 1500) {
   });
 }
 
-async function cleanupManagedSession(session, bridge, scratchDir) {
-  await session?.dispose?.();
-  await waitBrieflyForSessionExit(session?.exitPromise);
-  await bridge.close();
-  fs.rmSync(scratchDir, {
-    recursive: true,
-    force: true,
-    maxRetries: 5,
-    retryDelay: 50,
-  });
+export async function cleanupManagedSession(session, bridge, scratchDir) {
+  let firstCleanupError = null;
+  try {
+    await session?.dispose?.();
+    await waitBrieflyForSessionExit(session?.exitPromise);
+  } catch (sessionError) {
+    firstCleanupError ??= sessionError;
+  }
+  try {
+    await bridge?.close?.();
+  } catch (bridgeError) {
+    firstCleanupError ??= bridgeError;
+  }
+  try {
+    fs.rmSync(scratchDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  } catch (removeError) {
+    firstCleanupError ??= removeError;
+  }
+  if (firstCleanupError !== null) {
+    throw firstCleanupError;
+  }
 }
 
 async function withManagedSession(runtime, managedArgs, runWithContext) {
   const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tuikit-xterm-'));
   const logPath = path.join(scratchDir, 'probe.jsonl');
-  const bridge = await startBrowserBridge({
-    cols: DEFAULT_TERMINAL_COLS,
-    rows: DEFAULT_TERMINAL_ROWS,
-    headless: true,
-    timeoutMs: runtime.timeoutMs,
-  });
+  let bridge = null;
   let session = null;
   try {
+    bridge = await startBrowserBridge({
+      cols: DEFAULT_TERMINAL_COLS,
+      rows: DEFAULT_TERMINAL_ROWS,
+      headless: true,
+      timeoutMs: runtime.timeoutMs,
+    });
     session = await runtime.createSession({
       programPath: runtime.programPath,
       programArgs: mergeProbeArgs(['--log', logPath, ...managedArgs], runtime.extraArgs),
       cols: DEFAULT_TERMINAL_COLS,
       rows: DEFAULT_TERMINAL_ROWS,
       bridge,
+      tmuxMode: runtime.tmuxMode,
+      timeoutMs: runtime.timeoutMs,
+      scratchDir,
     });
     return await runWithContext({
       bridge,
@@ -165,6 +180,19 @@ async function executeBatchScenario(runtime) {
   });
 }
 
+async function readActiveTmuxBuffer(runtime, session) {
+  if (runtime.tmuxMode === null) {
+    return null;
+  }
+  if (typeof session.readTmuxBuffer === 'function') {
+    return session.readTmuxBuffer();
+  }
+  if (typeof runtime.readTmuxBuffer === 'function') {
+    return runtime.readTmuxBuffer(session);
+  }
+  return null;
+}
+
 async function runSingleOsc52Probe(runtime, form, token) {
   const managedOsc52Args = ['--batch', '--osc52', token, '--osc52-form', form];
   return withManagedSession(runtime, managedOsc52Args, async (stepContext) => {
@@ -177,12 +205,7 @@ async function runSingleOsc52Probe(runtime, form, token) {
     assert.equal(exitOutcome.exitCode, 0, `osc52 (${form}) exited with ${exitOutcome.exitCode}`);
 
     const terminalState = await stepContext.bridge.getTerminalState(stepContext.timeoutMs);
-    const tmuxBuffer =
-      runtime.tmuxMode === null
-        ? null
-        : (await stepContext.session.readTmuxBuffer?.()) ??
-          (await runtime.readTmuxBuffer?.(stepContext.session)) ??
-          null;
+    const tmuxBuffer = await readActiveTmuxBuffer(runtime, stepContext.session);
 
     if (runtime.tmuxMode === null) {
       assert.ok(
@@ -234,8 +257,8 @@ async function executePanicScenario(runtime) {
 
     await stepContext.bridge.page.keyboard.press('F12');
     const exitOutcome = await stepContext.session.waitForExit(stepContext.timeoutMs);
-    const didFailExit = exitOutcome.exitCode !== 0 || exitOutcome.signal !== 0;
-    assert.ok(didFailExit, 'expected non-zero exit status when F12 panic triggers');
+    const hasNonZeroExit = exitOutcome.exitCode !== 0 || exitOutcome.signal !== 0;
+    assert.ok(hasNonZeroExit, 'expected non-zero exit status when F12 panic triggers');
 
     const terminalStateAfterPanic = await stepContext.bridge.getTerminalState(
       stepContext.timeoutMs,

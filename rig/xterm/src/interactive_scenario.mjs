@@ -90,7 +90,7 @@ function hasMouseRecord(records, mouseKind, column, row) {
 
 function assertPointerStepResults(pointerSteps, tmuxMode) {
   if (process.platform !== 'win32') {
-    const hoverMovedCount = pointerSteps.hover.filter((item) => item.mouse_kind === 'moved').length;
+    const hoverMovedCount = pointerSteps.hover.filter((record) => record.mouse_kind === 'moved').length;
     assert.equal(hoverMovedCount, 0, 'Rule M1 mode 1002 must not emit bare pointer-move events');
   }
   if (tmuxMode === 'stock') {
@@ -100,7 +100,7 @@ function assertPointerStepResults(pointerSteps, tmuxMode) {
       ...pointerSteps.wheel_down,
       ...pointerSteps.wheel_up,
     ];
-    const mouseCount = stockSteps.filter((item) => item.event_type === 'mouse').length;
+    const mouseCount = stockSteps.filter((record) => record.event_type === 'mouse').length;
     assert.equal(mouseCount, 0, 'Stock tmux (mouse off) must forward zero mouse events to probe');
     return;
   }
@@ -191,10 +191,10 @@ async function runKeyboardSteps(stepContext) {
       page.keyboard.press(keyChord),
     );
   }
-  assert.ok(keyboardSteps.arrow_up.some((item) => item.code === 'up'), 'missing ArrowUp key');
-  assert.ok(keyboardSteps.f1.some((item) => item.code === 'f1'), 'missing F1 key');
+  assert.ok(keyboardSteps.arrow_up.some((record) => record.code === 'up'), 'missing ArrowUp key');
+  assert.ok(keyboardSteps.f1.some((record) => record.code === 'f1'), 'missing F1 key');
   assert.ok(
-    keyboardSteps.ctrl_a.some((item) => item.code === 'char:a' && item.ctrl === true),
+    keyboardSteps.ctrl_a.some((record) => record.code === 'char:a' && record.ctrl === true),
     'missing Ctrl+a key',
   );
   return keyboardSteps;
@@ -210,17 +210,17 @@ const EXPECTED_PASTE_KEY_CODES = Object.freeze([
  */
 export function hasDeliveredPastePayload(recordsAfterStart) {
   let matchedKeyCount = 0;
-  for (const item of recordsAfterStart) {
-    if (item?.kind !== 'event') {
+  for (const record of recordsAfterStart) {
+    if (record?.kind !== 'event') {
       continue;
     }
-    if (item.event_type === 'paste') {
+    if (record.event_type === 'paste') {
       return true;
     }
     if (
-      item.event_type === 'key' &&
-      item.key_kind === 'press' &&
-      item.code === EXPECTED_PASTE_KEY_CODES[matchedKeyCount]
+      record.event_type === 'key' &&
+      record.key_kind === 'press' &&
+      record.code === EXPECTED_PASTE_KEY_CODES[matchedKeyCount]
     ) {
       matchedKeyCount += 1;
       if (matchedKeyCount === EXPECTED_PASTE_KEY_CODES.length) {
@@ -248,9 +248,9 @@ async function runPasteStep(stepContext, terminalStateAtReady) {
   if (process.platform !== 'win32' && terminalStateAtReady.bracketedPasteMode === true) {
     assert.ok(
       pasteEvents.some(
-        (item) =>
-          item.event_type === 'paste' &&
-          (item.text === 'alpha\rbeta' || item.text === 'alpha\nbeta'),
+        (record) =>
+          record.event_type === 'paste' &&
+          (record.text === 'alpha\rbeta' || record.text === 'alpha\nbeta'),
       ),
       'expected bracketed paste event with text "alpha\\rbeta" or "alpha\\nbeta"',
     );
@@ -270,11 +270,11 @@ async function runFocusSteps(stepContext) {
   );
   if (process.platform !== 'win32' && stepContext.tmuxMode !== 'stock') {
     assert.ok(
-      focusLostEvents.some((item) => item.event_type === 'focus' && item.focused === false),
+      focusLostEvents.some((record) => record.event_type === 'focus' && record.focused === false),
       'expected FocusLost event on terminal blur',
     );
     assert.ok(
-      focusGainedEvents.some((item) => item.event_type === 'focus' && item.focused === true),
+      focusGainedEvents.some((record) => record.event_type === 'focus' && record.focused === true),
       'expected FocusGained event on terminal focus',
     );
   }
@@ -288,12 +288,16 @@ async function finishInteractiveCleanExit(stepContext) {
 
   const allRecords = readJsonLines(stepContext.logPath);
   assert.ok(
-    allRecords.some((item) => item.kind === 'summary' && item.mode === 'interactive'),
+    allRecords.some((record) => record.kind === 'summary' && record.mode === 'interactive'),
     'missing interactive summary record',
   );
   assert.ok(
     allRecords.some(
-      (item) => item.kind === 'event' && item.event_type === 'key' && item.code === 'char:c' && item.ctrl,
+      (record) =>
+        record.kind === 'event' &&
+        record.event_type === 'key' &&
+        record.code === 'char:c' &&
+        record.ctrl,
     ),
     'missing clean-exit Ctrl+C key event record',
   );
