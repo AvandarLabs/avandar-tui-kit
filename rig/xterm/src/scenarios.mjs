@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { startBrowserBridge } from './bridge_server.mjs';
-import { executeInteractiveScenario } from './interactive_scenario.mjs';
+import { executeInteractiveScenario, shouldExpectOuterMouseEvents } from './interactive_scenario.mjs';
 import { startPtySession } from './pty_session.mjs';
 import { readJsonLines, waitForProbeReady } from './ready_waiter.mjs';
 
@@ -237,6 +237,18 @@ async function executeOsc52Scenario(runtime) {
   return { scenario: 'osc52', probes };
 }
 
+async function waitForPanicReadyTerminalModes(stepContext) {
+  if (process.platform === 'win32') {
+    return;
+  }
+  const hasExpectedOuterMode = shouldExpectOuterMouseEvents(stepContext)
+    ? () => window.__getTerminalState().mouseTrackingMode !== 'none'
+    : () => window.__getTerminalState().bracketedPasteMode === true;
+  await stepContext.bridge.page.waitForFunction(hasExpectedOuterMode, undefined, {
+    timeout: stepContext.timeoutMs,
+  });
+}
+
 async function executePanicScenario(runtime) {
   return withManagedSession(runtime, [], async (stepContext) => {
     await waitForProbeReady(
@@ -244,10 +256,11 @@ async function executePanicScenario(runtime) {
       stepContext.timeoutMs,
       stepContext.session.exitPromise,
     );
+    await waitForPanicReadyTerminalModes(stepContext);
     const terminalStateBeforePanic = await stepContext.bridge.getTerminalState(
       stepContext.timeoutMs,
     );
-    if (runtime.tmuxMode !== 'stock') {
+    if (shouldExpectOuterMouseEvents(stepContext) && process.platform !== 'win32') {
       assert.notEqual(
         terminalStateBeforePanic.mouseTrackingMode,
         'none',

@@ -12,17 +12,12 @@ import {
 } from './cell_coords.mjs';
 import { readCompleteJsonLines, readJsonLines, waitForLogRecords, waitForProbeReady } from './ready_waiter.mjs';
 
-function isFencePressRecord(record) {
-  return (
-    record?.kind === 'event' &&
-    record.event_type === 'key' &&
-    record.code === 'f2' &&
-    record.key_kind === 'press'
-  );
-}
-
 function isFenceKeyRecord(record) {
   return record?.kind === 'event' && record.event_type === 'key' && record.code === 'f2';
+}
+
+function isFencePressRecord(record) {
+  return isFenceKeyRecord(record) && record.key_kind === 'press';
 }
 
 async function sendFenceKey(page, shouldPreserveBlur) {
@@ -32,16 +27,8 @@ async function sendFenceKey(page, shouldPreserveBlur) {
   }
   await page.evaluate(() => {
     const helperTextarea = document.querySelector('.xterm-helper-textarea');
-    helperTextarea?.dispatchEvent(
-      new KeyboardEvent('keydown', {
-        key: 'F2',
-        code: 'F2',
-        keyCode: 113,
-        which: 113,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
+    const init = { key: 'F2', code: 'F2', keyCode: 113, which: 113, bubbles: true, cancelable: true };
+    helperTextarea?.dispatchEvent(new KeyboardEvent('keydown', init));
   });
 }
 
@@ -88,20 +75,33 @@ function hasMouseRecord(records, mouseKind, column, row) {
   );
 }
 
-function assertPointerStepResults(pointerSteps, tmuxMode) {
+export function shouldExpectOuterMouseEvents(stepContext) {
+  if (stepContext.tmuxMode === null) {
+    return true;
+  }
+  if (typeof stepContext.session?.tmuxServerInfo?.isMouseEnabled === 'boolean') {
+    return stepContext.session.tmuxServerInfo.isMouseEnabled;
+  }
+  return stepContext.tmuxMode === 'full';
+}
+
+/**
+ * Verifies pointer step logs for either mouse-disabled stock tmux (`< 3.8`) or mouse-enabled runs.
+ */
+export function assertPointerStepResults(pointerSteps, { shouldExpectMouseEvents = true } = {}) {
   if (process.platform !== 'win32') {
     const hoverMovedCount = pointerSteps.hover.filter((record) => record.mouse_kind === 'moved').length;
     assert.equal(hoverMovedCount, 0, 'Rule M1 mode 1002 must not emit bare pointer-move events');
   }
-  if (tmuxMode === 'stock') {
-    const stockSteps = [
-      ...pointerSteps.left_click,
-      ...pointerSteps.left_drag,
-      ...pointerSteps.wheel_down,
-      ...pointerSteps.wheel_up,
-    ];
-    const mouseCount = stockSteps.filter((record) => record.event_type === 'mouse').length;
-    assert.equal(mouseCount, 0, 'Stock tmux (mouse off) must forward zero mouse events to probe');
+  if (!shouldExpectMouseEvents) {
+    assert.deepEqual(pointerSteps.left_click, [], 'Stock tmux left_click must log empty array');
+    assert.deepEqual(pointerSteps.left_drag, [], 'Stock tmux left_drag must log empty array');
+    assert.deepEqual(pointerSteps.wheel_down, [], 'Stock tmux wheel_down must log empty array');
+    assert.deepEqual(pointerSteps.wheel_up, [], 'Stock tmux wheel_up must log empty array');
+    const allMouseCount = Object.values(pointerSteps)
+      .flat()
+      .filter((record) => record.event_type === 'mouse').length;
+    assert.equal(allMouseCount, 0, 'Stock tmux (mouse off) must forward zero mouse events');
     return;
   }
   assert.ok(hasMouseRecord(pointerSteps.left_click, 'down:left', 10, 5), 'missing left_click down');
@@ -170,7 +170,9 @@ async function runPointerSteps(stepContext, terminalState) {
   const basicSteps = await runBasicPointerSteps(stepContext, terminalState);
   const modifiedSteps = await runModifiedPointerSteps(stepContext, terminalState);
   const pointerSteps = { ...basicSteps, ...modifiedSteps };
-  assertPointerStepResults(pointerSteps, stepContext.tmuxMode);
+  assertPointerStepResults(pointerSteps, {
+    shouldExpectMouseEvents: shouldExpectOuterMouseEvents(stepContext),
+  });
   return pointerSteps;
 }
 
@@ -309,21 +311,33 @@ async function finishInteractiveCleanExit(stepContext) {
   return { exitCode: exitOutcome.exitCode, exitReason: 'clean_key_exit', terminalStateAfterExit };
 }
 
+async function prepareInteractiveSubrun(stepContext, fenceLabel) {
+  await waitForProbeReady(
+    stepContext.logPath,
+    stepContext.timeoutMs,
+    stepContext.session.exitPromise,
+  );
+  if (process.platform !== 'win32') {
+    const hasExpectedMode = shouldExpectOuterMouseEvents(stepContext)
+      ? () => window.__getTerminalState().mouseTrackingMode !== 'none'
+      : () => window.__getTerminalState().bracketedPasteMode === true;
+    await stepContext.bridge.page.waitForFunction(hasExpectedMode, undefined, {
+      timeout: stepContext.timeoutMs,
+    });
+  }
+  const terminalStateAtReady = await stepContext.bridge.getTerminalState(stepContext.timeoutMs);
+  await runFencedStep(stepContext, fenceLabel, async () => {});
+  return terminalStateAtReady;
+}
+
 async function runPrimaryInteractiveSubrun(runtime, withManagedSession) {
   return withManagedSession(runtime, [], async (stepContext) => {
-    await waitForProbeReady(
-      stepContext.logPath,
-      stepContext.timeoutMs,
-      stepContext.session.exitPromise,
-    );
-    const terminalStateAtReady = await stepContext.bridge.getTerminalState(stepContext.timeoutMs);
+    const terminalStateAtReady = await prepareInteractiveSubrun(stepContext, 'sync_ready');
     if (runtime.tmuxMode === null && process.platform !== 'win32') {
       assert.equal(terminalStateAtReady.mouseTrackingMode, 'drag');
       assert.equal(terminalStateAtReady.bracketedPasteMode, true);
       assert.equal(terminalStateAtReady.sendFocusMode, true);
     }
-    await runFencedStep(stepContext, 'sync_ready', async () => {});
-
     const pointerSteps = await runPointerSteps(stepContext, terminalStateAtReady);
     const keyboardSteps = await runKeyboardSteps(stepContext);
     const pasteEvents = await runPasteStep(stepContext, terminalStateAtReady);
@@ -331,6 +345,7 @@ async function runPrimaryInteractiveSubrun(runtime, withManagedSession) {
     const cleanExit = await finishInteractiveCleanExit(stepContext);
 
     return {
+      tmuxServerInfo: stepContext.session.tmuxServerInfo ?? null,
       terminalStateAtReady,
       pointerSteps,
       keyboardSteps,
@@ -345,26 +360,18 @@ async function runPrimaryInteractiveSubrun(runtime, withManagedSession) {
 
 async function runKittyEnterSubrun(runtime, withManagedSession) {
   return withManagedSession(runtime, ['--push-kitty'], async (stepContext) => {
-    await waitForProbeReady(
-      stepContext.logPath,
-      stepContext.timeoutMs,
-      stepContext.session.exitPromise,
-    );
-    await stepContext.bridge.getTerminalState(stepContext.timeoutMs);
-    await runFencedStep(stepContext, 'sync_kitty_ready', async () => {});
-
+    await prepareInteractiveSubrun(stepContext, 'sync_kitty_ready');
     const page = stepContext.bridge.page;
-    const kittyEnterSteps = {
-      alt_enter: await runFencedStep(stepContext, 'kitty_alt_enter', () =>
-        page.keyboard.press('Alt+Enter'),
-      ),
-      shift_enter: await runFencedStep(stepContext, 'kitty_shift_enter', () =>
-        page.keyboard.press('Shift+Enter'),
-      ),
-      ctrl_enter: await runFencedStep(stepContext, 'kitty_ctrl_enter', () =>
-        page.keyboard.press('Control+Enter'),
-      ),
-    };
+    const kittyEnterSteps = {};
+    for (const [stepName, chord] of [
+      ['alt_enter', 'Alt+Enter'],
+      ['shift_enter', 'Shift+Enter'],
+      ['ctrl_enter', 'Control+Enter'],
+    ]) {
+      kittyEnterSteps[stepName] = await runFencedStep(stepContext, `kitty_${stepName}`, () =>
+        page.keyboard.press(chord),
+      );
+    }
     await finishInteractiveCleanExit(stepContext);
     return kittyEnterSteps;
   });
@@ -377,9 +384,5 @@ async function runKittyEnterSubrun(runtime, withManagedSession) {
 export async function executeInteractiveScenario(runtime, withManagedSession) {
   const primaryResult = await runPrimaryInteractiveSubrun(runtime, withManagedSession);
   const kittyEnterSteps = await runKittyEnterSubrun(runtime, withManagedSession);
-  return {
-    scenario: 'interactive',
-    ...primaryResult,
-    kittyEnterSteps,
-  };
+  return { scenario: 'interactive', ...primaryResult, kittyEnterSteps };
 }

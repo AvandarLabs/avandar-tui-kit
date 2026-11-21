@@ -45,6 +45,10 @@ check: fmt-check lint test doc
 xterm *args:
     ./rig/xterm/run.sh "$@"
 
+# Run an example program inside a private tmux server in the xterm.js harness (Layer 4).
+xterm-tmux *args:
+    ./rig/xterm/run-tmux.sh "$@"
+
 # Run an example program in an unfocused live Orca terminal (Layer 5).
 orca *args:
     ./rig/orca/run.sh "$@"
