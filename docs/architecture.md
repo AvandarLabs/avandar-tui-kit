@@ -17,6 +17,7 @@ crates/
 docs/
 ├── archive/            completed specs, moved from specs/ for reference
 ├── architecture.md     this file
+├── code-walkthroughs/  dated code walkthroughs copied from diff-review
 ├── decisions.md        one section per decision worth remembering
 ├── inventory/          every extractable UI element in the source apps
 ├── milestones.md       the order the crates are built in, and what ends each
