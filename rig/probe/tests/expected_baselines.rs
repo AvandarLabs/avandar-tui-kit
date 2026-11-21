@@ -34,7 +34,7 @@ const REQUIRED_TOP_LEVEL_KEYS: &[&str] = &[
     "widths",
 ];
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum JsonValue {
     Null,
     Bool(bool),
@@ -139,9 +139,10 @@ impl<'a> JsonParser<'a> {
             b'r' => '\r',
             b't' => '\t',
             b'u' => {
-                let hex = std::str::from_utf8(&self.bytes[self.cursor..self.cursor + 4]).unwrap();
+                let hex_digits =
+                    std::str::from_utf8(&self.bytes[self.cursor..self.cursor + 4]).unwrap();
                 self.cursor += 4;
-                char::from_u32(u32::from_str_radix(hex, 16).unwrap()).unwrap()
+                char::from_u32(u32::from_str_radix(hex_digits, 16).unwrap()).unwrap()
             }
             other => panic!("unsupported JSON escape '\\{}'", char::from(other)),
         }
@@ -187,28 +188,32 @@ impl<'a> JsonParser<'a> {
             b'[' => self.parse_array(),
             b'{' => self.parse_object(),
             b't' => {
+                assert!(self.bytes[self.cursor..].starts_with(b"true"));
                 self.cursor += 4;
                 JsonValue::Bool(true)
             }
             b'f' => {
+                assert!(self.bytes[self.cursor..].starts_with(b"false"));
                 self.cursor += 5;
                 JsonValue::Bool(false)
             }
             b'n' => {
+                assert!(self.bytes[self.cursor..].starts_with(b"null"));
                 self.cursor += 4;
                 JsonValue::Null
             }
             _ => {
                 self.skip_whitespace();
-                let start = self.cursor;
+                let number_start = self.cursor;
                 if self.bytes.get(self.cursor) == Some(&b'-') {
                     self.cursor += 1;
                 }
                 while self.cursor < self.bytes.len() && self.bytes[self.cursor].is_ascii_digit() {
                     self.cursor += 1;
                 }
-                let text = std::str::from_utf8(&self.bytes[start..self.cursor]).unwrap();
-                JsonValue::Number(text.parse::<i64>().unwrap())
+                let number_text =
+                    std::str::from_utf8(&self.bytes[number_start..self.cursor]).unwrap();
+                JsonValue::Number(number_text.parse::<i64>().unwrap())
             }
         }
     }
@@ -232,8 +237,9 @@ fn repository_root() -> PathBuf {
 
 fn load_baseline_object(file_name: &str) -> BTreeMap<String, JsonValue> {
     let file_path = repository_root().join("rig/expected").join(file_name);
-    let raw_text = fs::read_to_string(&file_path)
-        .unwrap_or_else(|err| panic!("failed to read {}: {err}", file_path.display()));
+    let raw_text = fs::read_to_string(&file_path).unwrap_or_else(|read_error| {
+        panic!("failed to read {}: {read_error}", file_path.display())
+    });
     assert!(!raw_text.contains('\u{2014}'), "{file_name} has em dash");
     parse_json_document(&raw_text)
         .as_object()
@@ -242,15 +248,17 @@ fn load_baseline_object(file_name: &str) -> BTreeMap<String, JsonValue> {
 }
 
 fn assert_widths_section(file_name: &str, widths_value: &JsonValue) {
-    let widths_obj = widths_value.as_object().expect("widths object");
+    let widths_object = widths_value.as_object().expect("widths object");
     assert_eq!(
-        widths_obj["all_toolkit_glyphs_single_cell"].as_bool(),
+        widths_object["all_toolkit_glyphs_single_cell"].as_bool(),
         Some(true)
     );
-    let samples_obj = widths_obj["samples"].as_object().expect("samples object");
-    assert_eq!(samples_obj.len(), WIDTH_SAMPLES.len());
+    let samples_object = widths_object["samples"]
+        .as_object()
+        .expect("samples object");
+    assert_eq!(samples_object.len(), WIDTH_SAMPLES.len());
     for sample in WIDTH_SAMPLES {
-        let cells = samples_obj[sample.name].as_i64().expect(sample.name);
+        let cells = samples_object[sample.name].as_i64().expect(sample.name);
         if sample.category == "toolkit_glyph" {
             assert_eq!(cells, 1, "{file_name}: {}", sample.name);
         } else if sample.category == "east_asian" {
@@ -259,10 +267,10 @@ fn assert_widths_section(file_name: &str, widths_value: &JsonValue) {
     }
 }
 
-fn assert_identity_and_sections(file_name: &str, root_obj: &BTreeMap<String, JsonValue>) {
-    let actual_keys: Vec<&str> = root_obj.keys().map(String::as_str).collect();
+fn assert_identity_and_sections(file_name: &str, root_object: &BTreeMap<String, JsonValue>) {
+    let actual_keys: Vec<&str> = root_object.keys().map(String::as_str).collect();
     assert_eq!(actual_keys, REQUIRED_TOP_LEVEL_KEYS, "{file_name}");
-    let identity = root_obj["identity"].as_object().expect("identity");
+    let identity = root_object["identity"].as_object().expect("identity");
     for forbidden_key in [
         "arch",
         "has_no_color",
@@ -274,22 +282,26 @@ fn assert_identity_and_sections(file_name: &str, root_obj: &BTreeMap<String, Jso
     }
     assert_eq!(identity["is_stdin_tty"].as_bool(), Some(true));
     assert_eq!(identity["is_stdout_tty"].as_bool(), Some(true));
-    let bg = root_obj["background_color"].as_object().expect("bg");
-    assert!(!bg.contains_key("elapsed_ms"));
-    assert!(bg["answered"].as_bool().is_some());
+    let background_color = root_object["background_color"]
+        .as_object()
+        .expect("background_color");
+    assert!(!background_color.contains_key("elapsed_ms"));
+    assert!(background_color["answered"].as_bool().is_some());
     assert!(
-        root_obj["cell_size"].as_object().expect("cell_size")["answered"]
+        root_object["cell_size"].as_object().expect("cell_size")["answered"]
             .as_bool()
             .is_some()
     );
-    assert_widths_section(file_name, &root_obj["widths"]);
+    assert_widths_section(file_name, &root_object["widths"]);
 }
 
 #[test]
 fn expected_directory_contains_exact_thirteen_valid_baselines() {
-    let expected_dir = repository_root().join("rig/expected");
-    let mut actual_files: Vec<String> = fs::read_dir(&expected_dir)
-        .unwrap_or_else(|err| panic!("missing {}: {err}", expected_dir.display()))
+    let expected_directory = repository_root().join("rig/expected");
+    let mut actual_files: Vec<String> = fs::read_dir(&expected_directory)
+        .unwrap_or_else(|read_error| {
+            panic!("missing {}: {read_error}", expected_directory.display())
+        })
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
         .collect();
     actual_files.sort();
@@ -301,58 +313,61 @@ fn expected_directory_contains_exact_thirteen_valid_baselines() {
 
 #[test]
 fn expected_baselines_preserve_empirical_terminal_invariants() {
-    let pkg_raw = fs::read_to_string(repository_root().join("rig/xterm/package.json")).unwrap();
-    let pinned_xterm = parse_json_document(&pkg_raw).as_object().unwrap()["dependencies"]
-        .as_object()
-        .unwrap()["@xterm/xterm"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let package_json_raw =
+        fs::read_to_string(repository_root().join("rig/xterm/package.json")).unwrap();
+    let pinned_xterm_version =
+        parse_json_document(&package_json_raw).as_object().unwrap()["dependencies"]
+            .as_object()
+            .unwrap()["@xterm/xterm"]
+            .as_str()
+            .unwrap()
+            .to_owned();
 
-    let orca = load_baseline_object("orca.json");
+    let orca_baseline = load_baseline_object("orca.json");
     assert_eq!(
-        orca["identity"].as_object().unwrap()["xtversion"].as_str(),
-        Some(format!("xterm.js({pinned_xterm})").as_str())
+        orca_baseline["identity"].as_object().unwrap()["xtversion"].as_str(),
+        Some(format!("xterm.js({pinned_xterm_version})").as_str())
     );
-    assert_eq!(orca["osc52"], JsonValue::Null);
-    assert_eq!(orca["interactive"], JsonValue::Null);
+    assert_eq!(orca_baseline["osc52"], JsonValue::Null);
+    assert_eq!(orca_baseline["interactive"], JsonValue::Null);
     assert_eq!(
         load_baseline_object("orca-tmux.json")["interactive"],
         JsonValue::Null
     );
 
-    let iterm2 = load_baseline_object("iterm2.json");
+    let iterm2_baseline = load_baseline_object("iterm2.json");
     assert_eq!(
-        iterm2["identity"].as_object().unwrap()["xtversion"].as_str(),
+        iterm2_baseline["identity"].as_object().unwrap()["xtversion"].as_str(),
         Some("iTerm2 3.7.7")
     );
     assert_eq!(
-        iterm2["kitty_keyboard"].as_object().unwrap()["answered"].as_bool(),
+        iterm2_baseline["kitty_keyboard"].as_object().unwrap()["answered"].as_bool(),
         Some(true)
     );
 
-    let win = load_baseline_object("xterm-windows.json");
-    let win_paste = win["interactive"].as_object().unwrap()["paste"]
+    let windows_baseline = load_baseline_object("xterm-windows.json");
+    let windows_paste = windows_baseline["interactive"].as_object().unwrap()["paste"]
         .as_object()
         .unwrap();
-    assert_eq!(win_paste["hasPasteEvent"].as_bool(), Some(false));
-    assert_eq!(win_paste["keyPressCount"].as_i64(), Some(10));
-    assert_eq!(win_paste["arrivedInSingleBurst"].as_bool(), Some(true));
+    assert_eq!(windows_paste["hasPasteEvent"].as_bool(), Some(false));
+    assert_eq!(windows_paste["keyPressCount"].as_i64(), Some(10));
+    assert_eq!(windows_paste["arrivedInSingleBurst"].as_bool(), Some(true));
 }
 
 #[test]
 fn ci_workflow_verifies_all_seven_ci_hosted_expected_baselines() {
-    let root = repository_root();
-    for script_rel in [
+    let workspace_root = repository_root();
+    for script_relative_path in [
         "rig/xterm/src/expected_compare.mjs",
         "rig/xterm/src/expected_normalize.mjs",
     ] {
-        let script_text = fs::read_to_string(root.join(script_rel)).unwrap();
+        let script_text = fs::read_to_string(workspace_root.join(script_relative_path)).unwrap();
         assert!(!script_text.contains('\u{2014}'));
         assert!(!script_text.contains(concat!("sl", "eep")));
     }
 
-    let ci_contents = fs::read_to_string(root.join(".github/workflows/ci.yml")).unwrap();
+    let workflow_contents =
+        fs::read_to_string(workspace_root.join(".github/workflows/ci.yml")).unwrap();
     for expected_ci_baseline in [
         "rig/expected/xterm-linux.json",
         "rig/expected/xterm-tmux-stock-linux.json",
@@ -362,6 +377,17 @@ fn ci_workflow_verifies_all_seven_ci_hosted_expected_baselines() {
         "rig/expected/xterm-tmux-full-macos.json",
         "rig/expected/xterm-windows.json",
     ] {
-        assert!(ci_contents.contains(expected_ci_baseline));
+        assert!(workflow_contents.contains(expected_ci_baseline));
+    }
+}
+
+#[test]
+fn json_parser_rejects_malformed_boolean_and_null_literals() {
+    for malformed_literal in ["truX", "falsX", "nulX", "tr", "fa", "nu"] {
+        let parse_outcome = std::panic::catch_unwind(|| parse_json_document(malformed_literal));
+        assert!(
+            parse_outcome.is_err(),
+            "expected parser panic for malformed literal '{malformed_literal}'"
+        );
     }
 }

@@ -99,6 +99,7 @@ export function buildExpectedCompareHelpText(theme) {
     `${theme.heading}Options:${theme.reset}`,
     `  ${theme.accent}-h, --help${theme.reset}             Show this help text on stdout and exit 0`,
     `  ${theme.accent}--normalize <input>${theme.reset}    Print canonical normalized JSON to stdout and exit 0`,
+    `  ${theme.accent}--${theme.reset}                     Treat remaining arguments as positional file paths`,
     '',
     `${theme.heading}Streams:${theme.reset}`,
     '  stdout                 Help text or canonical normalized JSON (when --normalize is set)',
@@ -111,16 +112,28 @@ export function buildExpectedCompareHelpText(theme) {
   ].join('\n');
 }
 
-function consumeNormalizeOption(argv, argIndex, token) {
+function hasHelpFlagBeforeDoubleDash(argv) {
+  for (const token of argv) {
+    if (token === '--') {
+      return false;
+    }
+    if (token === '-h' || token === '--help') {
+      return true;
+    }
+  }
+  return false;
+}
+
+function consumeNormalizeOption(argv, argumentIndex, token) {
   if (token === '--normalize') {
-    const valueToken = argv[argIndex + 1] ?? '';
+    const valueToken = argv[argumentIndex + 1] ?? '';
     if (valueToken.length === 0 || (valueToken.startsWith('-') && valueToken !== '-')) {
       throw new CliUsageError(
         "Option '--normalize' requires an <input> file path or '-'.",
         'Usage: node rig/xterm/src/expected_compare.mjs --normalize <input-report-or-->',
       );
     }
-    return { targetPath: valueToken, nextIndex: argIndex + 1 };
+    return { targetPath: valueToken, nextIndex: argumentIndex + 1 };
   }
   const inlinePath = token.slice('--normalize='.length);
   if (inlinePath.length === 0) {
@@ -129,52 +142,71 @@ function consumeNormalizeOption(argv, argIndex, token) {
       'Usage: node rig/xterm/src/expected_compare.mjs --normalize <input-report-or-->',
     );
   }
-  return { targetPath: inlinePath, nextIndex: argIndex };
+  return { targetPath: inlinePath, nextIndex: argumentIndex };
+}
+
+function collectCompareTokens(argv) {
+  const positionalArguments = [];
+  let normalizeTarget = null;
+  for (let argumentIndex = 0; argumentIndex < argv.length; argumentIndex += 1) {
+    const token = argv[argumentIndex];
+    if (token === '--') {
+      positionalArguments.push(...argv.slice(argumentIndex + 1));
+      break;
+    }
+    if (token === '--normalize' || token.startsWith('--normalize=')) {
+      if (normalizeTarget !== null) {
+        throw new CliUsageError("Duplicate '--normalize' option.", "Pass '--normalize' at most once.");
+      }
+      const consumed = consumeNormalizeOption(argv, argumentIndex, token);
+      normalizeTarget = consumed.targetPath;
+      argumentIndex = consumed.nextIndex;
+      continue;
+    }
+    if (token !== '-' && token.startsWith('-')) {
+      throw new CliUsageError(
+        `Unknown option '${token}'.`,
+        "Run with '--help' to see valid options, or place '--' before file paths starting with '-'.",
+      );
+    }
+    positionalArguments.push(token);
+  }
+  return { positionalArguments, normalizeTarget };
 }
 
 /**
  * Parses CLI tokens for `expected_compare.mjs`, throwing `CliUsageError` on invalid usage.
  */
 export function parseExpectedCompareArgs(argv) {
-  if (argv.includes('-h') || argv.includes('--help')) {
+  if (hasHelpFlagBeforeDoubleDash(argv)) {
     return { isHelp: true, isNormalizeOnly: false, actualPath: null, expectedPath: null };
   }
-  const positionalArgs = [];
-  let normalizeTarget = null;
-  for (let argIndex = 0; argIndex < argv.length; argIndex += 1) {
-    const token = argv[argIndex];
-    if (token === '--normalize' || token.startsWith('--normalize=')) {
-      if (normalizeTarget !== null) {
-        throw new CliUsageError("Duplicate '--normalize' option.", "Pass '--normalize' at most once.");
-      }
-      const consumed = consumeNormalizeOption(argv, argIndex, token);
-      normalizeTarget = consumed.targetPath;
-      argIndex = consumed.nextIndex;
-      continue;
-    }
-    if (token !== '-' && token.startsWith('-')) {
-      throw new CliUsageError(`Unknown option '${token}'.`, "Run with '--help' to see valid options.");
-    }
-    positionalArgs.push(token);
-  }
+  const { positionalArguments, normalizeTarget } = collectCompareTokens(argv);
   if (normalizeTarget !== null) {
-    if (positionalArgs.length > 0) {
+    if (positionalArguments.length > 0) {
       throw new CliUsageError(
-        `Unexpected extra argument '${positionalArgs[0]}' with '--normalize'.`,
+        `Unexpected extra argument '${positionalArguments[0]}' with '--normalize'.`,
         'Usage: node rig/xterm/src/expected_compare.mjs --normalize <input-report-or-->',
       );
     }
     return { isHelp: false, isNormalizeOnly: true, actualPath: normalizeTarget, expectedPath: null };
   }
-  if (positionalArgs.length !== 2) {
+  if (positionalArguments.length !== 2) {
     throw new CliUsageError(
-      positionalArgs.length < 2
+      positionalArguments.length < 2
         ? 'Expected <actual-report> and <expected-baseline.json> arguments.'
-        : `Unexpected positional argument '${positionalArgs[2]}'.`,
+        : `Unexpected positional argument '${positionalArguments[2]}'.`,
       'Usage: node rig/xterm/src/expected_compare.mjs <actual-report-or--> <expected-baseline.json>',
     );
   }
-  return { isHelp: false, isNormalizeOnly: false, actualPath: positionalArgs[0], expectedPath: positionalArgs[1] };
+  const [actualPath, expectedPath] = positionalArguments;
+  if (expectedPath === '-') {
+    throw new CliUsageError(
+      "Standard input '-' is valid only for <actual-report-or-->, not <expected-baseline.json>.",
+      'Pass a baseline file path (for example rig/expected/orca.json) as <expected-baseline.json>.',
+    );
+  }
+  return { isHelp: false, isNormalizeOnly: false, actualPath, expectedPath };
 }
 
 function readInputSourceText(sourcePath, stdinText) {

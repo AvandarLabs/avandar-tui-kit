@@ -3,24 +3,23 @@
  * and Layer 6 (`rig/iterm2`) capability probe outputs into the canonical `rig/expected` schema.
  */
 
-const CANONICAL_WIDTH_SAMPLE_ORDER = Object.freeze([
-  'ascii_a', 'precomposed_acute', 'combining_acute',
-  'cjk_han', 'hangul_syllable', 'fullwidth_latin_a',
+const TOOLKIT_GLYPH_SAMPLE_ORDER = [
   'ellipsis', 'middle_dot', 'chevron', 'pointer_triangle',
   'box_horizontal', 'box_vertical', 'box_top_left', 'box_tee_right', 'box_bottom_left',
   'block_eighth_1', 'block_eighth_3', 'block_eighth_4', 'block_eighth_6', 'block_full',
   'braille_dot_1', 'braille_full', 'private_use_icon',
+];
+
+const CANONICAL_WIDTH_SAMPLE_ORDER = Object.freeze([
+  'ascii_a', 'precomposed_acute', 'combining_acute',
+  'cjk_han', 'hangul_syllable', 'fullwidth_latin_a',
+  ...TOOLKIT_GLYPH_SAMPLE_ORDER,
   'plain_emoji', 'family_zwj', 'regional_flag_us',
   'heart_vs16', 'heart_plain', 'thumbs_up_skin_tone', 'thumbs_up_plain',
   'rainbow_flag', 'white_flag_base', 'zwsp',
 ]);
 
-const TOOLKIT_GLYPH_NAMES = new Set([
-  'ellipsis', 'middle_dot', 'chevron', 'pointer_triangle',
-  'box_horizontal', 'box_vertical', 'box_top_left', 'box_tee_right', 'box_bottom_left',
-  'block_eighth_1', 'block_eighth_3', 'block_eighth_4', 'block_eighth_6', 'block_full',
-  'braille_dot_1', 'braille_full', 'private_use_icon',
-]);
+const TOOLKIT_GLYPH_NAMES = new Set(TOOLKIT_GLYPH_SAMPLE_ORDER);
 
 const CANONICAL_POINTER_STEPS = Object.freeze([
   'hover', 'left_click', 'left_drag', 'wheel_down', 'wheel_up', 'right_click',
@@ -39,6 +38,26 @@ function createInvalidInputError(messageText, recoveryHint) {
   return parseError;
 }
 
+function parseJsonLines(rawText) {
+  const rawLines = rawText.split(/\r?\n/);
+  const parsedRecords = [];
+  for (let lineIndex = 0; lineIndex < rawLines.length; lineIndex += 1) {
+    const trimmedLine = rawLines[lineIndex].trim();
+    if (trimmedLine.length === 0) {
+      continue;
+    }
+    try {
+      parsedRecords.push(JSON.parse(trimmedLine));
+    } catch (lineError) {
+      throw createInvalidInputError(
+        `Invalid JSON on line ${lineIndex + 1}: ${lineError.message}`,
+        'Ensure the input file contains valid JSON or newline-delimited JSONL records.',
+      );
+    }
+  }
+  return parsedRecords;
+}
+
 function parseTextInput(rawText) {
   const trimmedText = rawText.trim();
   if (trimmedText.length === 0) {
@@ -49,30 +68,29 @@ function parseTextInput(rawText) {
   }
   try {
     const parsedSingle = JSON.parse(trimmedText);
-    if (parsedSingle?.kind === 'section' || parsedSingle?.kind === 'summary') {
-      return [parsedSingle];
+    return parsedSingle?.kind === 'section' || parsedSingle?.kind === 'summary'
+      ? [parsedSingle]
+      : parsedSingle;
+  } catch (wholeJsonError) {
+    const firstNonEmptyLine = trimmedText.split(/\r?\n/, 1)[0].trim();
+    if (firstNonEmptyLine === '{' || firstNonEmptyLine === '[') {
+      throw createInvalidInputError(
+        `Invalid JSON report: ${wholeJsonError.message}`,
+        'Ensure the JSON report is syntactically valid.',
+      );
     }
-    return parsedSingle;
-  } catch {
-    return trimmedText
-      .split(/\r?\n/)
-      .map((lineText) => lineText.trim())
-      .filter((lineText) => lineText.length > 0)
-      .map((lineText, lineIndex) => {
-        try {
-          return JSON.parse(lineText);
-        } catch (lineError) {
-          throw createInvalidInputError(
-            `Invalid JSON on line ${lineIndex + 1}: ${lineError.message}`,
-            'Ensure the input file contains valid JSON or newline-delimited JSONL records.',
-          );
-        }
-      });
+    return parseJsonLines(rawText);
   }
 }
 
 function isPlainObject(candidateValue) {
   return candidateValue !== null && typeof candidateValue === 'object' && !Array.isArray(candidateValue);
+}
+
+function requirePlainSection(sectionValue, sectionName, recoveryHint = 'Verify probe output.') {
+  if (!isPlainObject(sectionValue)) {
+    throw createInvalidInputError(`Missing '${sectionName}' section in probe report.`, recoveryHint);
+  }
 }
 
 function orderKeysDeterministically(sourceObject, preferredOrder) {
@@ -91,12 +109,11 @@ function orderKeysDeterministically(sourceObject, preferredOrder) {
 }
 
 function normalizeIdentitySection(identityRecord) {
-  if (!isPlainObject(identityRecord)) {
-    throw createInvalidInputError(
-      "Missing 'identity' section in probe report.",
-      'Run capability_probe to completion so all batch sections are recorded.',
-    );
-  }
+  requirePlainSection(
+    identityRecord,
+    'identity',
+    'Run capability_probe to completion so all batch sections are recorded.',
+  );
   return {
     os: String(identityRecord.os ?? ''),
     xtversion: identityRecord.xtversion ?? null,
@@ -109,9 +126,7 @@ function normalizeIdentitySection(identityRecord) {
 }
 
 function normalizeMouseModesSection(mouseRecord) {
-  if (!isPlainObject(mouseRecord)) {
-    throw createInvalidInputError("Missing 'mouse_modes' section in probe report.", 'Verify probe output.');
-  }
+  requirePlainSection(mouseRecord, 'mouse_modes');
   const mapReports = (reports) =>
     (reports ?? []).map((entry) => ({ mode: Number(entry.mode), state: String(entry.state) }));
   return {
@@ -123,9 +138,7 @@ function normalizeMouseModesSection(mouseRecord) {
 }
 
 function normalizeKittySection(kittyRecord) {
-  if (!isPlainObject(kittyRecord)) {
-    throw createInvalidInputError("Missing 'kitty_keyboard' section in probe report.", 'Verify probe output.');
-  }
+  requirePlainSection(kittyRecord, 'kitty_keyboard');
   return {
     answered: Boolean(kittyRecord.answered),
     initial_flags: kittyRecord.initial_flags ?? null,
@@ -135,9 +148,7 @@ function normalizeKittySection(kittyRecord) {
 }
 
 function normalizeModesSection(modesSection) {
-  if (!isPlainObject(modesSection)) {
-    throw createInvalidInputError("Missing 'modes' section in probe report.", 'Verify probe output.');
-  }
+  requirePlainSection(modesSection, 'modes');
   const sourceByModeName = {};
   if (Array.isArray(modesSection.modes)) {
     for (const modeItem of modesSection.modes) {
@@ -158,9 +169,7 @@ function normalizeModesSection(modesSection) {
 }
 
 function normalizeWidthsSection(widthsSection) {
-  if (!isPlainObject(widthsSection)) {
-    throw createInvalidInputError("Missing 'widths' section in probe report.", 'Verify probe output.');
-  }
+  requirePlainSection(widthsSection, 'widths');
   const rawSamplesMap = {};
   if (Array.isArray(widthsSection.samples)) {
     for (const sampleItem of widthsSection.samples) {
@@ -172,16 +181,13 @@ function normalizeWidthsSection(widthsSection) {
   const orderedNames = orderKeysDeterministically(rawSamplesMap, CANONICAL_WIDTH_SAMPLE_ORDER);
   const canonicalSamples = {};
   for (const sampleName of orderedNames) {
-    canonicalSamples[sampleName] = rawSamplesMap[sampleName];
+    canonicalSamples[sampleName] = rawSamplesMap[sampleName] ?? null;
   }
   const presentToolkitNames = orderedNames.filter((sampleName) => TOOLKIT_GLYPH_NAMES.has(sampleName));
   const areAllToolkitSingleCell =
     presentToolkitNames.length > 0 &&
     presentToolkitNames.every((sampleName) => canonicalSamples[sampleName] === 1);
-  return {
-    all_toolkit_glyphs_single_cell: areAllToolkitSingleCell,
-    samples: canonicalSamples,
-  };
+  return { all_toolkit_glyphs_single_cell: areAllToolkitSingleCell, samples: canonicalSamples };
 }
 
 function normalizeOsc52Probes(osc52Input) {
@@ -214,7 +220,7 @@ function normalizeOsc52Probes(osc52Input) {
 
 function summarizePointerStepValue(stepValue) {
   if (isPlainObject(stepValue) && typeof stepValue.hasDown === 'boolean') {
-    const mods = stepValue.modifiers ?? {};
+    const stepModifiers = stepValue.modifiers ?? {};
     return {
       hasMoved: Boolean(stepValue.hasMoved),
       hasDown: Boolean(stepValue.hasDown),
@@ -222,68 +228,66 @@ function summarizePointerStepValue(stepValue) {
       hasUp: Boolean(stepValue.hasUp),
       hasScrollDown: Boolean(stepValue.hasScrollDown),
       hasScrollUp: Boolean(stepValue.hasScrollUp),
-      modifiers: { shift: Boolean(mods.shift), alt: Boolean(mods.alt), ctrl: Boolean(mods.ctrl) },
+      modifiers: { shift: Boolean(stepModifiers.shift), alt: Boolean(stepModifiers.alt), ctrl: Boolean(stepModifiers.ctrl) },
     };
   }
   const mouseEvents = (stepValue ?? []).filter((record) => record?.event_type === 'mouse');
-  const hasPrefix = (prefix) => mouseEvents.some((rec) => String(rec.mouse_kind).startsWith(prefix));
+  const hasPrefix = (prefix) => mouseEvents.some((record) => String(record.mouse_kind).startsWith(prefix));
+  const hasModifier = (modifierKey) => mouseEvents.some((record) => record[modifierKey] === true);
   return {
-    hasMoved: mouseEvents.some((rec) => rec.mouse_kind === 'moved'),
+    hasMoved: mouseEvents.some((record) => record.mouse_kind === 'moved'),
     hasDown: hasPrefix('down:'),
     hasDrag: hasPrefix('drag:'),
     hasUp: hasPrefix('up:'),
-    hasScrollDown: mouseEvents.some((rec) => rec.mouse_kind === 'scroll_down'),
-    hasScrollUp: mouseEvents.some((rec) => rec.mouse_kind === 'scroll_up'),
-    modifiers: {
-      shift: mouseEvents.some((rec) => rec.shift === true),
-      alt: mouseEvents.some((rec) => rec.alt === true),
-      ctrl: mouseEvents.some((rec) => rec.ctrl === true),
-    },
+    hasScrollDown: mouseEvents.some((record) => record.mouse_kind === 'scroll_down'),
+    hasScrollUp: mouseEvents.some((record) => record.mouse_kind === 'scroll_up'),
+    modifiers: { shift: hasModifier('shift'), alt: hasModifier('alt'), ctrl: hasModifier('ctrl') },
   };
 }
 
 function summarizeKeyboardMap(stepsObject, preferredSteps) {
   const sourceSteps = stepsObject ?? {};
   const normalizedKeyboard = {};
+  const isKeyPressItem = (item) =>
+    isPlainObject(item) &&
+    (!('event_type' in item) || (item.event_type === 'key' && item.key_kind === 'press'));
   for (const stepName of orderKeysDeterministically(sourceSteps, preferredSteps)) {
     const rawItems = sourceSteps[stepName] ?? [];
-    normalizedKeyboard[stepName] = rawItems
-      .filter((item) => !('event_type' in item) || (item.event_type === 'key' && item.key_kind === 'press'))
-      .map((item) => ({
-        code: String(item.code),
-        shift: Boolean(item.shift),
-        alt: Boolean(item.alt),
-        ctrl: Boolean(item.ctrl),
-      }));
+    normalizedKeyboard[stepName] = rawItems.filter(isKeyPressItem).map((item) => ({
+      code: String(item.code),
+      shift: Boolean(item.shift),
+      alt: Boolean(item.alt),
+      ctrl: Boolean(item.ctrl),
+    }));
   }
   return normalizedKeyboard;
 }
 
 function summarizePasteSection(interactiveSection) {
   if (isPlainObject(interactiveSection.paste) && typeof interactiveSection.paste.hasPasteEvent === 'boolean') {
-    const pasteObj = interactiveSection.paste;
+    const pasteSummary = interactiveSection.paste;
     return {
-      hasPasteEvent: pasteObj.hasPasteEvent,
-      keyPressCount: Number(pasteObj.keyPressCount),
-      arrivedInSingleBurst: Boolean(pasteObj.arrivedInSingleBurst),
+      hasPasteEvent: pasteSummary.hasPasteEvent,
+      keyPressCount: Number(pasteSummary.keyPressCount),
+      arrivedInSingleBurst: Boolean(pasteSummary.arrivedInSingleBurst),
     };
   }
-  const pasteRecords = (interactiveSection.pasteEvents ?? []).filter((rec) => rec.event_type === 'paste');
+  const pasteRecords = (interactiveSection.pasteEvents ?? []).filter((record) => record.event_type === 'paste');
   const keyPressRecords = (interactiveSection.pasteEvents ?? []).filter(
-    (rec) => rec.event_type === 'key' && rec.key_kind === 'press',
+    (record) => record.event_type === 'key' && record.key_kind === 'press',
   );
   const hasPasteEvent = pasteRecords.length > 0;
   const keyPressCount = keyPressRecords.length;
   const arrivedInSingleBurst = hasPasteEvent
     ? pasteRecords.length === 1 && keyPressCount === 0
-    : keyPressCount > 0 && keyPressRecords.every((rec) => rec.burst_press_count === keyPressCount);
+    : keyPressCount > 0 && keyPressRecords.every((record) => record.burst_press_count === keyPressCount);
   return { hasPasteEvent, keyPressCount, arrivedInSingleBurst };
 }
 
 function summarizeFocusAndTeardown(interactiveSection, batchSection, panicSection) {
   const focusSource = interactiveSection.focus ?? interactiveSection;
   const hasFocusFlag = (events, targetState) =>
-    (events ?? []).some((rec) => rec.event_type === 'focus' && rec.focused === targetState);
+    (events ?? []).some((record) => record.event_type === 'focus' && record.focused === targetState);
   const focus =
     typeof focusSource.hasFocusLost === 'boolean'
       ? { hasFocusLost: focusSource.hasFocusLost, hasFocusGained: Boolean(focusSource.hasFocusGained) }
@@ -292,12 +296,10 @@ function summarizeFocusAndTeardown(interactiveSection, batchSection, panicSectio
           hasFocusGained: hasFocusFlag(focusSource.focusGainedEvents, true),
         };
   if (isPlainObject(interactiveSection.teardown)) {
+    const { cleanExitResetMouse, panicExitResetMouse } = interactiveSection.teardown;
     return {
       focus,
-      teardown: {
-        cleanExitResetMouse: Boolean(interactiveSection.teardown.cleanExitResetMouse),
-        panicExitResetMouse: Boolean(interactiveSection.teardown.panicExitResetMouse),
-      },
+      teardown: { cleanExitResetMouse: Boolean(cleanExitResetMouse), panicExitResetMouse: Boolean(panicExitResetMouse) },
     };
   }
   const cleanState = interactiveSection.terminalStateAfterExit ?? interactiveSection.teardownState ?? null;
@@ -325,14 +327,8 @@ function normalizeInteractiveSection(interactiveSection, batchSection, panicSect
   for (const stepName of orderKeysDeterministically(rawPointer, CANONICAL_POINTER_STEPS)) {
     pointer[stepName] = summarizePointerStepValue(rawPointer[stepName]);
   }
-  const keyboard = summarizeKeyboardMap(
-    interactiveSection.keyboard ?? interactiveSection.keyboardSteps,
-    CANONICAL_KEYBOARD_STEPS,
-  );
-  const kittyEnter = summarizeKeyboardMap(
-    interactiveSection.kitty_enter ?? interactiveSection.kittyEnterSteps,
-    CANONICAL_KITTY_ENTER_STEPS,
-  );
+  const keyboard = summarizeKeyboardMap(interactiveSection.keyboard ?? interactiveSection.keyboardSteps, CANONICAL_KEYBOARD_STEPS);
+  const kittyEnter = summarizeKeyboardMap(interactiveSection.kitty_enter ?? interactiveSection.kittyEnterSteps, CANONICAL_KITTY_ENTER_STEPS);
   const paste = summarizePasteSection(interactiveSection);
   const { focus, teardown } = summarizeFocusAndTeardown(interactiveSection, batchSection, panicSection);
   return { pointer, keyboard, kitty_enter: kittyEnter, paste, focus, teardown };
@@ -372,24 +368,26 @@ export function normalizeProbeReport(rawInput) {
   const parsedInput = typeof rawInput === 'string' ? parseTextInput(rawInput) : rawInput;
   const { sectionsMap, batchSection, osc52Input, interactiveSection, panicSection } =
     extractSectionsByName(parsedInput);
-  const bgRecord = sectionsMap.background_color;
-  const cellRecord = sectionsMap.cell_size;
-  if (!isPlainObject(bgRecord) || !isPlainObject(cellRecord)) {
-    throw createInvalidInputError(
-      "Missing 'background_color' or 'cell_size' section in probe report.",
-      'Ensure capability_probe completed all automated batch sections.',
-    );
+  const primaryBackgroundRecord = sectionsMap.background_color;
+  const cellSizeRecord = sectionsMap.cell_size;
+  if (!isPlainObject(primaryBackgroundRecord) || !isPlainObject(cellSizeRecord)) {
+    const missingHint = 'Ensure capability_probe completed all automated batch sections.';
+    throw createInvalidInputError("Missing 'background_color' or 'cell_size' section in probe report.", missingHint);
   }
+  const backgroundColorRecord =
+    !primaryBackgroundRecord.answered && isPlainObject(sectionsMap.background_color_late)
+      ? sectionsMap.background_color_late
+      : primaryBackgroundRecord;
   return {
     identity: normalizeIdentitySection(sectionsMap.identity),
     mouse_modes: normalizeMouseModesSection(sectionsMap.mouse_modes),
     kitty_keyboard: normalizeKittySection(sectionsMap.kitty_keyboard),
     modes: normalizeModesSection(sectionsMap.modes),
     background_color: {
-      answered: Boolean(bgRecord.answered),
-      is_dark: bgRecord.answered ? Boolean(bgRecord.is_dark) : null,
+      answered: Boolean(backgroundColorRecord.answered),
+      is_dark: backgroundColorRecord.answered ? Boolean(backgroundColorRecord.is_dark) : null,
     },
-    cell_size: { answered: Boolean(cellRecord.answered) },
+    cell_size: { answered: Boolean(cellSizeRecord.answered) },
     widths: normalizeWidthsSection(sectionsMap.widths),
     osc52: normalizeOsc52Probes(osc52Input),
     interactive: normalizeInteractiveSection(interactiveSection, batchSection, panicSection),
