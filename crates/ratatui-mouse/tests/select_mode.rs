@@ -581,3 +581,86 @@ fn cancelling_without_selection_cancels_the_pending_pointer_release() {
     );
     assert_eq!(release.outcome, MouseOutcome::Ignored);
 }
+
+#[test]
+fn pointer_click_allows_keyboard_cell_selection_to_restart() {
+    let mut scroll = ScrollPosition::default();
+    let mut harness = ControllerHarness::new(create_surfaces(&["one two"], &mut scroll));
+    let _ = enter(&mut harness, Some(ContentPoint { line: 0, column: 0 }));
+    let _ = key(&mut harness, KeyCode::Char('v'));
+    let _ = harness.mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        14,
+        5,
+        KeyModifiers::NONE,
+    );
+    let _ = harness.mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        14,
+        5,
+        KeyModifiers::NONE,
+    );
+    assert!(harness.controller.selection().is_none());
+    assert_eq!(
+        harness.controller.select_mode_target(),
+        Some(&TestTarget::Left)
+    );
+    let _ = key(&mut harness, KeyCode::Char('v'));
+    let _ = key(&mut harness, KeyCode::Right);
+    assert_eq!(
+        harness
+            .controller
+            .selected_text(&mut harness.surfaces)
+            .as_deref(),
+        Some("on")
+    );
+}
+
+#[test]
+fn pointer_selection_stops_previous_word_or_line_keyboard_extension() {
+    for command_to_replace in [
+        SelectionCommand::SelectWord,
+        SelectionCommand::ToggleLineSelection,
+    ] {
+        let mut scroll = ScrollPosition::default();
+        let mut harness = ControllerHarness::new(create_surfaces(&["one two"], &mut scroll));
+        let _ = enter(&mut harness, Some(ContentPoint { line: 0, column: 0 }));
+        let _ = command(&mut harness, command_to_replace);
+        let _ = harness.mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            14,
+            5,
+            KeyModifiers::NONE,
+        );
+        let _ = harness.mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            15,
+            5,
+            KeyModifiers::NONE,
+        );
+        assert_eq!(
+            harness.controller.selection().unwrap().unit(),
+            SelectionUnit::Cell
+        );
+        let _ = key(&mut harness, KeyCode::Right);
+        assert_pointer_selection_unchanged(&mut harness);
+        let _ = harness.mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            15,
+            5,
+            KeyModifiers::NONE,
+        );
+        let _ = key(&mut harness, KeyCode::Right);
+        assert_pointer_selection_unchanged(&mut harness);
+    }
+}
+
+fn assert_pointer_selection_unchanged(harness: &mut ControllerHarness<TextSurfaces<'_>>) {
+    assert_eq!(
+        harness
+            .controller
+            .selected_text(&mut harness.surfaces)
+            .as_deref(),
+        Some("tw")
+    );
+}

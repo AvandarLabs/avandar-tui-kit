@@ -477,7 +477,10 @@ when the cursor leaves the visible rows. Half-page moves use at least one row.
 
 An active selection keeps its original expanded anchor as motions grow or
 shrink it, including reversals across wide characters and wrapped rows.
-Stopping extension leaves the selection available for copying. Copy always
+Stopping extension leaves the selection available for copying. Starting a mouse
+selection stops keyboard extension, so its replacement selection cannot inherit
+the keyboard's previous growth unit; a later keyboard toggle starts a new anchor.
+Copy always
 ends the mode and removes its selection, independently of mouse-release copy
 settings; blank-only text produces no clipboard outcome. Cancel clears before
 leaving, and `exit_select_mode` drops the mode and selection explicitly.

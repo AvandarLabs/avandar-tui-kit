@@ -21,6 +21,7 @@ impl<T: Clone + PartialEq> MouseController<T> {
         press: PointerPress,
         surface: &mut dyn SelectableSurface,
     ) -> Gesture<T> {
+        self.stop_keyboard_selection();
         let point = press.content_point.expect("surface press has content");
         let previous = self.selection.take().filter(|selection| {
             selection.target == *target
