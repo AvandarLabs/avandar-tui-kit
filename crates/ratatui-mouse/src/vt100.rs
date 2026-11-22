@@ -2,7 +2,33 @@
 
 use std::ops::RangeInclusive;
 
-use crate::{ContentPoint, ContentRange, SelectableSurface, WordCharacters};
+use crate::{
+    ContentPoint, ContentRange, MouseEncoding, MouseTracking, PaneMouseRequest, SelectableSurface,
+    WordCharacters,
+};
+
+impl PaneMouseRequest {
+    /// What the program writing to `screen` asked for.
+    #[must_use]
+    pub fn from_screen(screen: &::vt100::Screen) -> Self {
+        Self {
+            tracking: match screen.mouse_protocol_mode() {
+                ::vt100::MouseProtocolMode::None => MouseTracking::Off,
+                ::vt100::MouseProtocolMode::Press => MouseTracking::Press,
+                ::vt100::MouseProtocolMode::PressRelease => MouseTracking::PressRelease,
+                ::vt100::MouseProtocolMode::ButtonMotion => MouseTracking::ButtonMotion,
+                ::vt100::MouseProtocolMode::AnyMotion => MouseTracking::AnyMotion,
+            },
+            encoding: match screen.mouse_protocol_encoding() {
+                ::vt100::MouseProtocolEncoding::Default => MouseEncoding::Default,
+                ::vt100::MouseProtocolEncoding::Utf8 => MouseEncoding::Utf8,
+                ::vt100::MouseProtocolEncoding::Sgr => MouseEncoding::Sgr,
+            },
+            is_alternate_screen: screen.alternate_screen(),
+            is_application_cursor: screen.application_cursor(),
+        }
+    }
+}
 
 /// A surface over a terminal emulator's screen and its scrollback.
 ///
@@ -179,6 +205,10 @@ impl SelectableSurface for Vt100Surface<'_> {
                 - i128::try_from(self.screen.scrollback()).unwrap_or(i128::MAX),
         )
         .unwrap_or(0)
+    }
+
+    fn pane_request(&self) -> Option<PaneMouseRequest> {
+        Some(PaneMouseRequest::from_screen(self.screen))
     }
 }
 

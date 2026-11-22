@@ -1,11 +1,11 @@
 # Mouse reporting
 
 `ratatui-mouse` provides reporting setup, frame hit areas, content coordinates,
-click counting, settings, borrowed text surfaces, selection reports, and
-highlight geometry for ratatui apps using crossterm. It is a library building
-block: the app owns its event loop, drawing stream, terminal lifecycle, and
-panic hook. The current crate exposes the reporting lifecycle and pure interaction primitives; selection gestures and
-event routing are planned in the [mouse specification](specs/ratatui-mouse.md).
+click counting, settings, borrowed text surfaces, selection reports, highlight
+geometry, and pane routing and encoders for ratatui apps using crossterm. It is
+a library building block: the app owns its event loop, drawing stream, terminal
+lifecycle, and panic hook. Selection gestures and controller event handling are planned in the
+[mouse specification](specs/ratatui-mouse.md).
 
 ## Using reporting
 
@@ -72,7 +72,8 @@ There are no default features. Shared ratatui and crossterm versions keep app
 and toolkit types compatible. `unicode-segmentation` finds grapheme boundaries
 for app-held-text selection. The optional `vt100` dependency is enabled only
 by the `vt100` feature for emulator-backed surfaces. It exposes
-`Vt100Surface`; pane-request detection and routing follow in later M1 parts.
+`Vt100Surface` and `PaneMouseRequest::from_screen` for reading a pane
+program's tracking, encoding, alternate-screen, and application-cursor modes.
 
 The modes integration tests exercise exact bytes, short writes, write and
 flush error sources, cleanup after partial enable, and the guard's drop and
@@ -125,8 +126,9 @@ of three rows, the click limits above, Shift or Alt for selection, 50 ms edge
 scrolling with at most ten rows per step and no edge margin, and a 16 ms
 redraw interval. Copy on release, keeping copied selections, clearing on key
 press or resize, pass-through, wheel arrows, and built-in select-mode keys
-are enabled. Those selection and routing settings are consumed by later M1
-parts. `WordCharacters` recognizes Unicode letters and digits plus configured
+are enabled. Pure pane routing consumes the routing settings; controller
+gestures consume the remaining selection settings in later M1 parts.
+`WordCharacters` recognizes Unicode letters and digits plus configured
 punctuation, defaulting to `_-./~:@+%#?&=` so paths and URLs form words.
 
 The geometry and click integration tests exercise stacking, empty and extreme
@@ -151,8 +153,8 @@ so adapters can temporarily inspect off-screen content while preserving their
 origin. `SurfaceSet<T>` borrows the surface for an app-defined target;
 `NoSurfaces` handles apps with no selectable text. The trait's default
 `pane_request` returns `None`. `PaneMouseRequest`, `MouseTracking`, and
-`MouseEncoding` describe terminal panes' requests; routing and encoders follow
-in later M1 parts.
+`MouseEncoding` describe terminal panes' requests. The pure routing and encoding
+functions below consume these requests.
 
 `LineSurface` borrows `AsRef<str>` rows and a `ScrollPosition`. Each row is a
 visual content line. `with_wrapped_rows` marks rows joined to their successor;
@@ -176,6 +178,8 @@ terminal emulator screen and its retained scrollback. Line zero is the oldest
 retained history row, followed by the live screen. The origin is the first
 visible content row, and scrolling returns the signed movement actually made.
 An alternate screen has no history and cannot scroll beyond its screen rows.
+`pane_request` returns the program's current modes, including when tracking is
+off, so the adapter is always recognized as a terminal pane.
 
 The adapter reads the emulator's own cells, wide-character continuation flags,
 and soft-wrap flags, preserving combining text and copying a wide character
@@ -242,3 +246,43 @@ rectangles and the buffer's bounds, preserving cell symbols and unspecified
 style attributes. `DEFAULT_HIGHLIGHT_STYLE` adds reversed video without choosing
 colors. These operations perform no terminal I/O and use the pure-logic test
 layers.
+
+## Pane routing and encoding
+
+`press_route` and `wheel_route` are pure decisions for a pane request, held
+modifiers, select-mode flag, and settings. Select mode, any configured
+selection modifier, or disabled pass-through takes priority. Presses select
+in those cases; the wheel is reported to the app for history scrolling.
+Otherwise active mouse tracking forwards presses and wheel events. With
+tracking off, presses select; the wheel becomes arrow keys only on the
+alternate screen with wheel-to-arrows enabled, and otherwise returns to the
+app. Shift or Alt alone selects with the default settings.
+
+`build_mouse_report` converts crossterm events into one-based coordinates
+relative to the pane's content area. It rejects positions outside that area,
+empty areas, unsupported events, and coordinates the requested protocol cannot
+represent. Default encoding supports coordinates through 223; UTF-8 supports
+through 2015. SGR supports larger coordinates, retains the released button's
+code, and ends releases with lowercase `m`. Default and UTF-8 releases use
+button code 3. All formats preserve Shift, Alt, and Control, button-held
+motion, and all four wheel directions.
+
+Tracking filters apply independently of routing. Press-only tracking drops
+releases, drags, and wheel events. Press-and-release tracking also accepts the
+wheel; button-motion and any-motion tracking additionally accept drags.
+Tracking off drops every event. Bare `Moved` events are always ignored,
+including when a pane requested any motion: panes receive button motion on
+every platform, preserving the host terminal's pointer interactions.
+
+`build_wheel_arrow_keys` emits one up key per negative row or one down key per
+positive row; zero rows emits nothing. Normal cursor mode uses `CSI A` and
+`CSI B`, while application cursor mode uses `SS3 A` and `SS3 B`. All these
+helpers return decisions or bytes. The app owns the gesture and writes any
+forwarded bytes to its child program. No helper reads or writes a terminal.
+
+Pass-through tests cover both routing tables, custom selection modifiers,
+tracking filters, protocol boundaries and empty or extreme rectangles, every
+button and wheel direction with all Shift/Alt/Control combinations, both
+cursor-key modes, and requests derived from a real vt100 parser. Host and
+Linux pure-logic tests and cross-target lint apply; later M1 integration
+scenarios exercise the forwarded bytes with real terminals.

@@ -374,15 +374,15 @@ Selection mutation stays crate-private; do not expose new public constructors.
 `build_wheel_arrow_keys`, and feature-gated `PaneMouseRequest::from_screen`,
 all with signatures from the spec's Pass-through and vt100 blocks.
 
-- [ ] Write `routing_priority_selects_before_forwarding`: cover every row of
+- [x] Write `routing_priority_selects_before_forwarding`: cover every row of
   both routing tables with selection mode, either default modifier separately,
   pass-through disabled, tracking off/on, alternate screen, and wheel arrows.
-- [ ] Write `encoders_use_pane_coordinates_and_protocol_limits`: for area
+- [x] Write `encoders_use_pane_coordinates_and_protocol_limits`: for area
   `(10,5,20,8)`, left Down at `(10,5)` in SGR is `b"\x1b[<0;1;1M"` and Up
   is `b"\x1b[<0;1;1m"`. Assert Shift/Alt/Control codes 4/8/16, drag +32,
   wheel 64..67, default coordinate limit 223, UTF-8 limit 2015, and SGR's
   larger coordinates. Rejected coordinates/events return None without overflow.
-- [ ] Write `tracking_filters_and_cursor_arrows`: Press tracking excludes
+- [x] Write `tracking_filters_and_cursor_arrows`: Press tracking excludes
   releases/drags/wheel; AnyMotion never encodes bare Moved; rows -3/3 emit
   three `CSI A`/`CSI B`, with application mode using `SS3 A`/`SS3 B`.
   Feed each supported mode/encoding into a real vt100 parser and assert mapping.
@@ -393,7 +393,7 @@ all with signatures from the spec's Pass-through and vt100 blocks.
   assert_eq!(press_route(&sgr_request, KeyModifiers::ALT, false, &MouseSettings::default()), PressRoute::Select);
   ```
 
-- [ ] Run `cargo test -p ratatui-mouse --all-features --test passthrough`,
+- [x] Run `cargo test -p ratatui-mouse --all-features --test passthrough`,
   confirm red, implement pure routing/encoding, then rerun and `just check`.
   Commit as `feat(mouse): add pane mouse routing and encoding`.
 

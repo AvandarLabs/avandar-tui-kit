@@ -36,6 +36,9 @@ pub use outcome::{MouseOutcome, MouseReport, PointerPress};
 pub use selection::{Selection, SelectionStage, SelectionUnit};
 pub use settings::{MouseSettings, WordCharacters};
 
-pub use passthrough::{MouseEncoding, MouseTracking, PaneMouseRequest};
+pub use passthrough::{
+    MouseEncoding, MouseTracking, PaneMouseRequest, PressRoute, WheelRoute, build_mouse_report,
+    build_wheel_arrow_keys, press_route, wheel_route,
+};
 pub use surface::{LineSurface, NoSurfaces, ScrollPosition, SelectableSurface, SurfaceSet};
 pub use words::{character_columns_in_line, text_in_columns, word_columns_in_line};
