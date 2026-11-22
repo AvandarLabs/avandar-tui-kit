@@ -22,11 +22,12 @@ what a terminal does. Its first user is `dif` (`AvandarLabs/avandar`).
 3. **Pass-through.** A program in a pane that asked for the mouse gets it, in
    the format it asked for. A full-screen program that did not ask gets arrow
    keys from the wheel.
-4. **The host terminal keeps working.** Hover reporting stays off, so the
-   terminal's own hover and link features are untouched, and a mouse mode is
-   never reset during a session.
-5. **Keyboard first.** Stock tmux forwards no mouse events, so everything the
-   mouse does is reachable from keys.
+4. **The host terminal keeps working.** On macOS and Linux the crate leaves
+   hover reporting off, preserving the terminal's hover and link features.
+   Windows ConPTY enables hover reporting itself; the crate ignores bare
+   moves. No mouse mode is reset between setup and teardown.
+5. **Keyboard first.** Everything the mouse does is reachable from keys,
+   including when a terminal or multiplexer intercepts mouse events.
 6. **A part, not a framework.** The crate owns no loop, thread, clipboard,
    focus or key binding of the app. It reports and the app decides.
 
@@ -107,12 +108,15 @@ One module per file, each within the size budget in `docs/rules/rust.md`.
 ## Mouse modes
 
 Each rule is backed by a measurement in `terminals.md`, taken in iTerm2 3.7.7,
-xterm.js 6.0.0 and tmux 3.8.
+xterm.js 6.0.0, tmux 3.8 on macOS and tmux 3.3a on Linux. The sequence
+rules below apply to macOS and Linux; Windows uses the console API as
+described below. tmux 3.3a does not answer mode queries, so its behavior is
+verified through injected events and the outer terminal's state.
 
 | # | Rule | Why |
 | --- | --- | --- |
 | M1 | Turning the mouse on writes exactly `CSI ?1000h`, `CSI ?1002h`, `CSI ?1006h`, in that order | Modes 1000, 1002 and 1003 are one slot with three values, so the last one written is the one in force. After this sequence all three terminals report button-motion tracking (1002) and SGR coordinates (1006). |
-| M2 | Mode 1003 is never written | It reports every pointer move. It floods the app, and it takes the pointer away from the terminal's own hover and link handling. |
+| M2 | Mode 1003 is never enabled by the crate | It reports every pointer move. It floods the app, and it takes the pointer away from the terminal's own hover and link handling. |
 | M3 | crossterm's `EnableMouseCapture` is never used to write the sequence | Its sequence ends by setting 1003, which becomes the value in the slot. |
 | M4 | No mouse mode is reset between setup and teardown | Resetting any of 1000, 1002 or 1003, even one that was never set, switches reporting off entirely in all three. |
 | M5 | Teardown writes `CSI ?9l`, `?1000l`, `?1002l`, `?1003l`, `?1005l`, `?1006l`, `?1015l`, `?1016l` | This is the sequence measured to leave every tracking mode and every coordinate format off in all three. It also clears what a buggy earlier setup left behind. |
@@ -129,12 +133,24 @@ hook.
 
 ### tmux
 
-tmux accepts the sequences under the same one-slot rule. With its stock
-configuration it forwards no mouse events to the app, so the app receives
-nothing and loses nothing: see [Keyboard equivalents](#keyboard-equivalents).
-With `mouse on` it forwards events once the app has asked for them. Both
-halves are marked to verify with injected events in `terminals.md`, and the
-tmux layer of the test plan is where they are proved.
+tmux forwards pane mouse events after the app enables reporting, in both
+stock and full configurations. `mouse off` disables tmux's own status-bar,
+pane-border and copy-mode mouse handling, not reports requested by the pane
+app. The stock configuration is an empty file: tmux 3.3a defaults `mouse` to
+`off`, while tmux 3.8 defaults it to `on`.
+
+M0 measured two limits in xterm.js, in both configurations:
+
+- tmux 3.8 forwards Alt presses and releases but drops Alt-drag motion.
+  tmux 3.3a forwards all three. Use Shift where the outer terminal delivers
+  it, or select mode, when Alt-drag motion is unavailable.
+- tmux 3.3a can absorb the press of a rapid right click or Control-click
+  while forwarding its release. A release without an active gesture must
+  not create a click or copy.
+
+Mode queries work in tmux 3.8 but go unanswered in 3.3a. Test queries have a
+bounded wait and record missing replies; production code never queries.
+Keyboard equivalents remain required in every configuration.
 
 ### Windows
 
@@ -152,8 +168,12 @@ for mouse reports itself.
   The platform split is one file in `modes`.
 - Pointer moves with no button, if the pseudo-console delivers them, are
   ignored like every other hover event.
-- Which tracking mode the pseudo-console asks xterm.js for is not measured
-  yet. See [Open questions](#open-questions).
+- M0 measured ConPTY enabling outer modes 1003 and 1006 in xterm.js:
+  tracking is `any`, and bare `Moved` events reach crossterm. This affects
+  the host's hover features even though the crate ignores those events.
+- `DECRQM` replies do not cross ConPTY. X1 checks the outer xterm.js state
+  instead: `any` tracking with SGR after setup, and no tracking after quit
+  or panic. Missing mode-query replies are recorded, not treated as resets.
 
 ## Hit areas
 
@@ -283,6 +303,14 @@ area, the surface scrolls on a timer, so holding still keeps scrolling.
   as past the edge for such layouts.
 
 ### The wheel
+
+Direction is the direction crossterm reports, never flipped by the crate.
+M0 confirmed that macOS applies the natural-scrolling setting before iTerm2
+encodes wheel events. Hardware wheel-down therefore arrives as `ScrollUp`
+with natural scrolling on and as `ScrollDown` with it off. xterm.js reports
+positive DOM `deltaY` as `ScrollDown` and negative as `ScrollUp`. Orca's own
+scroll-setting interaction remains unmeasured because its CLI cannot move a
+pointer.
 
 | When | The wheel |
 | --- | --- |
@@ -473,9 +501,10 @@ What is forwarded depends on tracking:
 | Button motion | Yes | Yes | Yes | Yes |
 | Any motion | Yes | Yes | Yes | Yes |
 
-A program that asked for any motion gets button motion: the host terminal is
-never asked for hover, so there are no bare moves to forward. This is
-documented as the one thing a pane's program cannot get.
+A program that asked for any motion gets button motion. On macOS and Linux
+the crate never asks the host for hover; on Windows ConPTY does, but the
+controller ignores bare moves rather than forwarding them. This limit is
+documented for programs inside panes on every platform.
 
 ### The wheel as arrow keys
 
@@ -486,20 +515,23 @@ That is what iTerm2 and xterm.js do for such programs themselves.
 
 ### Selecting in a pane whose program has the mouse
 
-The decision is that holding Shift selects instead of passing through. Three
-routes reach selection, and only the last works everywhere:
+Holding Shift or Alt selects instead of passing through. M0 confirmed Alt
+clicks and drags in xterm.js on Linux and Windows, satisfying the condition
+in the recorded decision to enable both modifiers by default. These are
+crossterm modifier bits; a physical key's meaning depends on the host.
 
 | Route | Where it works |
 | --- | --- |
-| Shift held at the press | iTerm2 and xterm.js on macOS, where Shift and a click reach the app. Not xterm.js on Linux or Windows: there xterm.js keeps Shift for its own selection and the app never sees the event. |
-| The host terminal's own selection | Wherever the terminal offers one while an app has the mouse (Shift in xterm.js on Linux and Windows). It selects screen cells across the whole app, borders included, cannot scroll a pane, and copies through the terminal. |
+| Shift held at the press | iTerm2 and xterm.js on macOS. xterm.js on Linux and Windows reserves Shift for native selection, so the app receives no selection gesture. |
+| Alt held at the press | xterm.js on macOS, Linux and Windows. tmux 3.8 in xterm.js drops Alt-drag motion; tmux 3.3a forwards it. In iTerm2, Cmd-click and Cmd-drag arrive with `alt=true`; Option-click and Option-drag are intercepted by iTerm2. |
+| The host terminal's own selection | Shift-drag in xterm.js on Linux and Windows; Option-drag in iTerm2 (Option+Cmd-drag is rectangular). This selects screen cells across the app, borders included, cannot scroll a pane, and copies through the terminal. xterm.js on macOS offers no native selection modifier by default. |
 | **Select mode** | Everywhere, with or without a mouse. See below. |
 
 The app's platform says nothing about the terminal's: a Linux app over SSH
-may be drawn by xterm.js on macOS. So the crate does not change behavior by
-platform. It makes select mode a required part of every app that embeds a
-pane, and the mouse then selects in that pane with no modifier at all. A
-second modifier is proposed under [Open questions](#open-questions).
+may be drawn by xterm.js on macOS. The crate therefore uses the same default
+modifier bits on every platform. A pane's program does not receive presses
+with either configured selection modifier. Select mode remains required of
+every app that embeds a pane and allows mouse selection without a modifier.
 
 ## Select mode and keyboard equivalents
 
@@ -556,16 +588,17 @@ program shows how.
 | Triple click a line | Select mode: `V` | Crate |
 | Drag past an edge to scroll while selecting | Select mode: motions scroll the surface | Crate |
 | Wheel while selecting | Select mode: Ctrl+U, Ctrl+D, PageUp, PageDown | Crate |
-| Shift and click to extend | Select mode: more motions | Crate |
+| Shift or Alt and click to extend | Select mode: more motions | Crate |
 | Release to copy | Select mode: `y` or Enter | Crate, through the same `Copy` outcome |
 | Click elsewhere to clear | Select mode: Esc | Crate |
-| Shift and drag in a pane whose program has the mouse | Select mode | Crate |
+| Shift or Alt and drag in a pane whose program has the mouse | Select mode | Crate |
 | Click, drag or wheel passed into a pane's program | The program's own keys, typed into the pane | The program |
 | Wheel as arrow keys for a full-screen program | The arrow keys | The program |
 | Drag a divider | The app's resize commands, if it has dividers | App |
 
 An app built on this crate is not done until it binds the rows marked "App".
-In stock tmux those rows and select mode are the whole interface.
+Those rows and select mode keep the app usable when mouse events or drag
+motions are intercepted by the terminal or tmux.
 
 ## What the crate returns, and what stays the app's decision
 
@@ -625,7 +658,7 @@ where dif has one.
 | `should_keep_selection_after_copy` | true | Leave the copied selection highlighted |
 | `should_clear_on_key_press` | true | A key press outside select mode clears the selection. A bare modifier never does. |
 | `should_clear_on_resize` | true | A resize clears the selection |
-| `selection_modifiers` | Shift | Held at a press on a pane, they select instead of passing through. Any one of them is enough. |
+| `selection_modifiers` | Shift and Alt (`KeyModifiers::SHIFT \| KeyModifiers::ALT`) | Held at a press on a pane, they select instead of passing through. Any one of them is enough. |
 | `is_passthrough_enabled` | true | Forward the mouse to panes whose programs asked for it |
 | `is_wheel_to_arrows_enabled` | true | Send arrow keys for the wheel to full-screen programs that did not ask for the mouse |
 | `should_handle_select_mode_keys` | true | Use the built-in select mode key map |
@@ -1418,7 +1451,9 @@ programs in `architecture.md`.
   PageUp and PageDown scroll it, `q` quits, `!` panics.
 - **Flags:** `--log <path>`, `--query-modes` (after setup and after
   teardown, ask the terminal for modes 9, 1000, 1002, 1003, 1005, 1006, 1015
-  and 1016 and log the answers), `--settings <json>` to override defaults.
+  and 1016 and log the answers or their absence after a bounded wait;
+  ConPTY and tmux 3.3a do not return these replies), `--settings <json>` to
+  override defaults.
 - **The log** has one line per: sequence written, event received, report
   returned (outcome, pressed target, redraw flag), deadline scheduled, tick
   that did work, and the selection after each change (target, range, unit,
@@ -1434,7 +1469,7 @@ Pure functions, tested by calling them, on all three platforms.
 | Modes | The setup bytes are exactly M1. They do not contain `1003`. They contain no reset. The teardown bytes are exactly M5. The guard writes setup once and teardown once, on drop and on `disable`. On Windows no sequence is written. |
 | Hit areas | The topmost area wins. Borders and gaps hit nothing. An empty area is never hit. Clamping gives the nearest cell and the signed overshoot, with and without a margin. |
 | Clicks | 1, 2, 3, 1. A press one cell away continues the run and two cells away restarts it. A slow press, another target or a drag restarts it. |
-| Gestures | The owner gets drags and the release from outside its area. A second press cancels the first gesture with no click. A vanished owner cancels. Each row of the gesture table. |
+| Gestures | A release without an active gesture produces no click or copy. Bare `Moved` events produce no outcome, selection change or forwarded bytes. The owner gets drags and the release from outside its area. A second press cancels the first gesture with no click. A vanished owner cancels. Each row of the gesture table. |
 | Stages | A press and release is a click. A drag that returns to its first cell is a one-character selection. A double click selects on the press. Blank text is dropped. |
 | Word and line drags | The original word or line stays selected on both sides. |
 | Edge scrolling | The first step is due at once, later ones one interval apart, the step grows with distance and stops at the maximum, the deadline clears at the end of the content, drag events alone never scroll. |
@@ -1446,7 +1481,7 @@ Pure functions, tested by calling them, on all three platforms.
 | Highlight | One, two and three rectangles. Clipping at each edge. Wide characters snapped. |
 | Pass-through | Both routing tables, row by row. Every encoding for press, release, drag and wheel with each modifier. Coordinates relative to the pane. Limits of the default and UTF-8 encodings. Arrow keys in both cursor modes. |
 | Select mode | Every command. The cursor scrolling the surface. Unbound keys swallowed. The key map, including that a release maps to nothing. |
-| Settings | Each setting changes what its row says and nothing else. |
+| Settings | Each setting changes what its row says and nothing else. Shift and Alt each select by default instead of passing through; neither requires the other. |
 
 ### Layer 2: cross-target lint
 
@@ -1461,9 +1496,9 @@ and reads the log.
 
 | # | Scenario | Asserts |
 | --- | --- | --- |
-| X1 | Start, then quit | xterm.js reports drag tracking after setup and no tracking after quit. With `--query-modes`, 1002 and 1006 are set, 1003 is reset. |
+| X1 | Start, then quit | macOS and Linux: outer xterm.js reports drag tracking and SGR after setup, no tracking after quit; available mode replies show 1002 and 1006 set, 1000 and 1003 reset. Windows: ConPTY enables outer `any` tracking (1003) and SGR (1006), then no tracking after quit; mode queries go unanswered. |
 | X2 | Panic with `!` | xterm.js reports no tracking afterwards |
-| X3 | Move the pointer with no button | No event is logged (macOS and Linux) |
+| X3 | Move the pointer with no button | macOS and Linux: no mouse event is logged. Windows: raw `Moved` events may be logged but cause no outcome, selection change or forwarded bytes, including with pass-through on. |
 | X4 | Click each pane, the tab strip, the divider | `Pressed` then `Clicked` for the right target |
 | X5 | Drag across three rows of the left pane | One `Copy` whose text is exactly the expected characters |
 | X6 | Double click the path, triple click the wrapped line | `Copy` with the whole path, and with the whole line as one line |
@@ -1471,21 +1506,35 @@ and reads the log.
 | X8 | Wheel over each pane | `Wheel` with the wheel step, for the pane under the pointer, focused or not |
 | X9 | Wheel during a drag | The selection's end moves and no `Wheel` is reported |
 | X10 | `m`, then click, drag and wheel on the right pane | `Forward` with the exact bytes for each request, in pane coordinates |
-| X11 | `m`, then Shift and drag on the right pane | macOS: a selection and a `Copy`. Linux and Windows: the measured behavior, recorded in `terminals.md` (no event reaches the app, and xterm.js makes its own selection). |
+| X11 | `m`, then separately Shift-drag and Alt-drag on the right pane | Shift: macOS selects and returns `Copy`; Linux and Windows reserve the gesture for native selection, with no app selection or forwarded gesture. Alt: all three platforms select and return `Copy`, without `Forward`. tmux exceptions are below. |
 | X12 | `a`, then wheel on the right pane | `Forward` with arrow keys |
 | X13 | Keys only: Tab, `s`, motions, `v`, `V`, `W`, `y` | `Copy` with the expected text, and no mouse event in the log |
 | X14 | Right click, Control and click | `Pressed` and `Clicked` with the button and modifier |
 
-On Windows (layer 7) the same scenarios run through the pseudo-console on
-the hosted runners, the event logs are uploaded, and X1 records which
-tracking mode xterm.js ended up in.
+On Windows (layer 7) all fourteen scenarios run through the pseudo-console
+on hosted runners and the event logs are uploaded. X1 asserts M0's measured
+`any` tracking rather than treating the mode as unknown, and X3 proves the
+controller ignores the hover events ConPTY supplies.
 
 ### Layer 4: tmux in the harness
 
 | Configuration | Scenarios | Asserts |
 | --- | --- | --- |
-| Stock tmux | X1, X2, X13 | No mouse event is ever logged, and the keyboard path copies. Setup and teardown still leave tmux's modes as M1 and M5 say. |
-| Full tmux | X1 to X14 | The same as outside tmux, through tmux |
+| Stock tmux | X1 to X14 | Pane clicks, drags and wheel are forwarded after setup, and the keyboard path copies. Apply the measured exceptions below. |
+| Full tmux | X1 to X14 | The same pane behavior and exceptions as stock, with tmux's own mouse handling enabled. |
+
+For X1 and X2, distinguish the pane's reporting from tmux's own outer
+tracking: teardown resets the app's modes, while tmux may keep outer mouse
+tracking for its own UI. Query replies are checked where available (3.8);
+with 3.3a, record no reply and verify forwarding and outer state against the
+M0 configuration baseline, never infer a reset from silence.
+
+For X11, Shift follows the outer terminal's behavior. Alt-drag selects in
+3.3a; in 3.8 assert that the app sees the press and release but no drag
+motion, no drag selection or copy, and no forwarded gesture. The X13
+keyboard path must still copy the expected text. For X14, assert 3.3a's
+measured rapid-click behavior: a release whose press was absorbed creates
+no click or copy. In 3.8, assert the normal press and click reports.
 
 ### Layer 5: Orca
 
@@ -1497,11 +1546,18 @@ leaves reset. Then `mouse_lab` runs X1 with `--query-modes` and X13.
 ### Layer 6: iTerm2 in the virtual machine
 
 Through VNC, as real pointer events: X1 to X10 and X12 to X14, alone and
-inside tmux with both configurations. Three checks belong to iTerm2:
+inside tmux with both configurations, applying the tmux query and teardown
+rules above. These additional checks belong to iTerm2:
 
 - With `--query-modes`, 1002 and 1006 are set and 1003 is reset after setup.
 - Moving the pointer with no button logs nothing.
-- X11 with Shift gives a selection.
+- X11 with Shift gives a selection. Cmd-drag also gives a selection because
+  crossterm reports Cmd as Alt in iTerm2.
+- Option-drag and Option+Cmd-drag stay native (contiguous and rectangular
+  selection respectively): the app receives no gesture, and the VM clipboard
+  contains the expected screen text.
+- Wheel direction matches M0 with natural scrolling off and on. The crate
+  routes each received direction unchanged.
 
 Right click and Control with a click are not reported by iTerm2 with its
 default settings, so X14 asserts that nothing arrives and that nothing
@@ -1564,7 +1620,8 @@ What changes for a dif user, all of it from the gesture model:
 - The mouse reaches a program in the agent pane that asks for it, and the
   wheel sends arrow keys to a full-screen program there.
 - A new palette command, "Select text", starts select mode in the focused
-  pane, which is how dif becomes usable in stock tmux.
+  pane, making selection reachable even when a modifier or drag motion is
+  intercepted by the host terminal or tmux.
 
 The loop changes in two lines: the poll timeout becomes the smaller of dif's
 50 ms and the time to `next_deadline()`, and `tick` is called on each pass.
@@ -1575,36 +1632,30 @@ Then pass-through on and the select mode command.
 
 ## Open questions
 
-1. **Selection where Shift never reaches the app** (xterm.js on Linux and
-   Windows). *Decided: select mode covers it and is required. Alt joins
-   Shift in the default `selection_modifiers` on every platform once the
-   harness on Linux and Windows shows that Alt with a click and Alt with a
-   drag reach the app.* xterm.js reserves only Shift there, and on macOS
-   Option with a click is already measured to arrive. The cost is that a
-   pane's program never receives Alt with the mouse, which few programs use.
-   Until that measurement the default stays Shift alone. The decision is
-   recorded in `decisions.md`.
-2. **Which tracking mode the Windows pseudo-console asks xterm.js for.** The
-   crate has to turn mouse input on through the console API, and what the
-   pseudo-console then requests is its choice. If it requests every move
-   (mode 1003), hover events reach the app and the terminal's hover features
-   are affected on Windows. *Recommendation: build it as specified, measure
-   it in X1 on the runners, ignore bare moves either way, and record the
-   answer in `terminals.md`. If it is 1003, that is documented as the Windows
-   behavior: the alternative is no mouse on Windows.*
-3. **Wheel direction in iTerm2.** An injected wheel-down arrived as wheel-up,
-   which `terminals.md` marks to verify. *Recommendation: the crate reports
-   the direction the terminal sends and never flips it.* Natural scrolling is
-   the user's system setting, and the terminal has already applied it.
-4. **Which modifier gives iTerm2's own selection while an app has the
-   mouse.** Not measured. *Recommendation: measure it in the virtual machine
-   and put it in the crate's docs for users.* It changes no design.
-5. **Depending on `ratatui-core` instead of `ratatui`.** The crate needs only
-   core types, and ratatui advises libraries to depend on the core crate.
-   *Recommendation: switch before the crate goes to crates.io, not before.*
-   Inside the workspace the two give the same types, and one ratatui entry in
-   the root manifest is simpler until then.
-6. **Clearing a pane's selection when it prints.** The numbering keeps a
-   selection on its text until the scrollback is full. *Recommendation: leave
-   it to the app, and have `avandar-tui-pty` report when output arrived so an
-   app can clear at the cap if it wants.*
+The question numbers are retained for roadmap references. Questions 1 to 4
+are settled by M0 and the existing decision; questions 5 and 6 remain deferred.
+Measurements are recorded in [`../terminals.md`](../terminals.md) and the
+[configuration baselines](../../rig/expected/). This section was reconciled
+with the completed M0 findings on 2026-11-21.
+
+1. **Selection where Shift never reaches the app.** M0 confirmed Alt-click
+   and Alt-drag in xterm.js on Linux and Windows. The recorded decision's
+   condition is met: `selection_modifiers` defaults to Shift and Alt on every
+   platform. iTerm2 intercepts Option and reports Cmd as Alt; tmux 3.8 drops
+   Alt-drag motion in xterm.js. Select mode remains the required universal
+   route. See [Selecting in a pane whose program has the mouse](#selecting-in-a-pane-whose-program-has-the-mouse).
+2. **Windows tracking mode.** ConPTY enables outer 1003 and 1006, producing
+   bare `Moved` events. The controller ignores them, including for
+   pass-through. X1 asserts outer `any` tracking and teardown; X3 verifies
+   ignored hover. Mode-query replies do not cross ConPTY.
+3. **Wheel direction in iTerm2.** macOS applies natural scrolling before
+   iTerm2 sends the event. The crate never flips the received direction.
+   The interaction with Orca's own scroll setting remains unmeasured because
+   its CLI cannot move a pointer; it does not change the routing rule.
+4. **iTerm2 native selection.** Option-drag selects contiguously and
+   Option+Cmd-drag selects a rectangle, without delivering app mouse events.
+   Shift-drag and Cmd-drag reach the app. These limits belong in crate docs.
+5. **Depending on `ratatui-core` instead of `ratatui`.** Deferred to M2,
+   before crates.io publication. M1 keeps the workspace's ratatui dependency.
+6. **Clearing a pane's selection when it prints.** Deferred to M7: leave
+   the policy to the app, with the pty crate reporting when output arrives.
