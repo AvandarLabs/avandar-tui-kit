@@ -117,7 +117,12 @@ impl<T: Clone + PartialEq> MouseController<T> {
         request: PaneMouseRequest,
         rows: i32,
     ) -> Option<MouseOutcome<T>> {
-        match wheel_route(&request, mouse.modifiers, false, &self.settings) {
+        match wheel_route(
+            &request,
+            mouse.modifiers,
+            self.select_mode_target() == Some(target),
+            &self.settings,
+        ) {
             WheelRoute::Forward => Some(forward_event(target, mouse, area, request)),
             WheelRoute::ArrowKeys if rows != 0 => Some(MouseOutcome::Forward {
                 target: target.clone(),

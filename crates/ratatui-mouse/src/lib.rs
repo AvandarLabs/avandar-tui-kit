@@ -14,6 +14,7 @@ pub mod hit;
 pub mod modes;
 pub mod outcome;
 pub mod passthrough;
+pub mod select_mode;
 pub mod selection;
 pub mod settings;
 pub mod surface;
@@ -44,3 +45,5 @@ pub use passthrough::{
 };
 pub use surface::{LineSurface, NoSurfaces, ScrollPosition, SelectableSurface, SurfaceSet};
 pub use words::{character_columns_in_line, text_in_columns, word_columns_in_line};
+
+pub use select_mode::{SelectionCommand, SelectionMotion, selection_command_from_key};

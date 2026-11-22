@@ -113,6 +113,11 @@ impl<T: Clone + PartialEq> MouseController<T> {
         areas: &HitAreas<T>,
         surfaces: &mut S,
     ) {
+        if self.select_mode_target().cloned().is_some_and(|target| {
+            areas.area_of(&target).is_none() || surfaces.surface_mut(&target).is_none()
+        }) {
+            self.exit_select_mode();
+        }
         if self
             .gesture_owner()
             .is_some_and(|target| areas.area_of(target).is_none())

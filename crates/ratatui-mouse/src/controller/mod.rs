@@ -12,6 +12,7 @@ use crate::{
 };
 
 mod forward;
+mod keyboard;
 mod plain;
 mod select;
 mod timing;
@@ -24,6 +25,7 @@ pub struct MouseController<T> {
     selection: Option<Selection<T>>,
     clicks: ClickCounter<T>,
     timing: timing::Timing,
+    select_mode: Option<keyboard::SelectMode<T>>,
 }
 
 enum Gesture<T> {
@@ -60,6 +62,7 @@ impl<T: Clone + PartialEq> MouseController<T> {
             selection: None,
             clicks: ClickCounter::new(),
             timing: timing::Timing::new(),
+            select_mode: None,
         }
     }
 
@@ -88,9 +91,12 @@ impl<T: Clone + PartialEq> MouseController<T> {
         surfaces: &mut S,
     ) -> MouseReport<T> {
         let previous_selection = self.selection_visual();
+        let previous_cursor = self.select_mode_cursor();
         self.validate_state(areas, surfaces);
         let report = self.dispatch_event(event, now, areas, surfaces);
-        self.complete_report(report, previous_selection != self.selection_visual(), now)
+        let has_changed = previous_selection != self.selection_visual()
+            || previous_cursor != self.select_mode_cursor();
+        self.complete_report(report, has_changed, now)
     }
 
     fn dispatch_event<S: SurfaceSet<T>>(
@@ -100,6 +106,11 @@ impl<T: Clone + PartialEq> MouseController<T> {
         areas: &HitAreas<T>,
         surfaces: &mut S,
     ) -> MouseReport<T> {
+        if let Event::Key(key) = event
+            && self.select_mode.is_some()
+        {
+            return create_mouse_report(self.handle_select_key(key, areas, surfaces), None);
+        }
         let outcome = match event {
             Event::FocusLost | Event::Resize(_, _) => {
                 self.cancel_gesture();
@@ -157,6 +168,7 @@ impl<T: Clone + PartialEq> MouseController<T> {
     /// Drops the selection and cancels its pending gesture, if any.
     /// Returns whether a selection existed.
     pub fn clear_selection(&mut self) -> bool {
+        self.stop_keyboard_selection();
         if matches!(self.gesture, Some(Gesture::Select(_))) {
             self.gesture = None;
             self.timing.edge = None;
@@ -186,6 +198,10 @@ impl<T: Clone + PartialEq> MouseController<T> {
     /// Drops state for a target that has gone away, returning whether any existed.
     pub fn forget_target(&mut self, target: &T) -> bool {
         let has_click_history = self.clicks.forget_target(target);
+        let has_select_mode = self.select_mode_target() == Some(target);
+        if has_select_mode {
+            self.exit_select_mode();
+        }
         let has_gesture = self.gesture_owner() == Some(target);
         let has_selection = self
             .selection
@@ -197,7 +213,7 @@ impl<T: Clone + PartialEq> MouseController<T> {
         if has_selection {
             self.clear_selection();
         }
-        has_gesture || has_selection || has_click_history
+        has_gesture || has_selection || has_click_history || has_select_mode
     }
 
     fn start_gesture<S: SurfaceSet<T>>(
@@ -216,6 +232,12 @@ impl<T: Clone + PartialEq> MouseController<T> {
         let MouseEventKind::Down(button) = mouse.kind else {
             return create_mouse_report(MouseOutcome::Ignored, None);
         };
+        if self
+            .select_mode_target()
+            .is_some_and(|owner| owner != target)
+        {
+            self.exit_select_mode();
+        }
         let surface = surfaces.surface_mut(target);
         let origin = surface.as_ref().map(|surface| surface.origin());
         let press = self.create_pointer_press((mouse, button), target, now, area, origin);
@@ -233,7 +255,12 @@ impl<T: Clone + PartialEq> MouseController<T> {
     ) -> MouseOutcome<T> {
         let request = surface.as_ref().and_then(|surface| surface.pane_request());
         if let Some(request) = request.filter(|request| {
-            press_route(request, mouse.modifiers, false, &self.settings) == PressRoute::Forward
+            press_route(
+                request,
+                mouse.modifiers,
+                self.select_mode_target() == Some(target),
+                &self.settings,
+            ) == PressRoute::Forward
         }) {
             self.clear_selection();
             self.gesture = Some(Gesture::Forward(forward::ForwardGesture {

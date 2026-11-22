@@ -128,8 +128,8 @@ redraw interval. Copy on release, keeping copied selections, clearing on key
 press or resize, pass-through, wheel arrows, and built-in select-mode keys
 are enabled. Pure pane routing consumes the routing settings; controller
 gestures consume selection and copy settings. Wheel routing, timed edge
-scrolling, and redraws consume their corresponding settings; keyboard select
-mode arrives in a later M1 part.
+scrolling, redraws, and keyboard select mode consume their corresponding
+settings.
 `WordCharacters` recognizes Unicode letters and digits plus configured
 punctuation, defaulting to `_-./~:@+%#?&=` so paths and URLs form words.
 
@@ -436,3 +436,66 @@ cover each wheel direction and route, owner snapshots, endpoint changes,
 redraw coalescing, nearest deadlines, cancellation, content boundaries, late
 ticks, and zero or extreme settings. These changes perform no terminal I/O;
 host and Linux pure-logic tests plus Windows/Linux cross-target lint apply.
+
+
+## Keyboard select mode
+
+`enter_select_mode(target, start, areas, surfaces)` starts a keyboard cursor
+on one selectable target. Without an explicit point, it starts at the first
+visible column of the last visible content row. Missing areas, surfaces, and
+empty content refuse entry. Explicit points clamp to existing content and
+snap to the start of a whole character. `select_mode_target` and
+`select_mode_cursor` let the app draw its own cursor; the controller never
+owns rendering or terminal I/O. Entry requests an immediate redraw because
+its API takes no timestamp. Subsequent cursor and selection changes use the
+same injected-time redraw scheduling as mouse gestures.
+
+`SelectionCommand` and `SelectionMotion` describe selection independently of
+keys. The pure `selection_command_from_key` maps presses and repeats through
+the following defaults; releases and unbound keys map to `None`.
+
+| Keys | Command |
+| --- | --- |
+| h/j/k/l, arrows | Move one character or visual row |
+| w/b | Next or previous word start |
+| 0/Home, $/End | Start or end of the logical line, including its wrapped rows |
+| Ctrl+U/D, PageUp/Down | Move half a viewport or a full viewport |
+| g/G | First or last content row |
+| v/Space, V | Start or stop extending a cell or logical-line selection |
+| W | Select the word under the cursor, falling back to its character |
+| y/Enter | Return selected text through `Copy` and leave select mode |
+| Esc/q | Clear the selection, then leave when there is none |
+
+Whole characters supply horizontal boundaries, so either half of a wide
+character stays one cursor stop and one complete selection endpoint. Left and
+right cross visual-row boundaries. Logical-line endpoints come from the
+surface; interior wrapped-row bounds use the rendered area's width and the
+surface's horizontal origin. This preserves trailing blank cells that the
+copying API trims. The app must register the content rectangle used to wrap
+those rows. Vertical motion clamps at content limits and calls `scroll_by`
+when the cursor leaves the visible rows. Half-page moves use at least one row.
+
+An active selection keeps its original expanded anchor as motions grow or
+shrink it, including reversals across wide characters and wrapped rows.
+Stopping extension leaves the selection available for copying. Copy always
+ends the mode and removes its selection, independently of mouse-release copy
+settings; blank-only text produces no clipboard outcome. Cancel clears before
+leaving, and `exit_select_mode` drops the mode and selection explicitly.
+`forget_target` and validation on events, commands, and ticks also remove a
+mode whose target disappears.
+
+While select mode is on, every key press and repeat is consumed before the
+pane can receive it, including unbound keys and bare modifiers. Releases are
+ignored. Disabling `should_handle_select_mode_keys` disables only the built-in
+mapping: the app can still call `apply_command` and keys remain intercepted.
+On the mode's target, mouse presses and wheel routing use selection policy
+even when its program requests mouse reporting. A press on another target
+exits the mode before that target's normal routing runs. No terminal protocol
+extension or Alt binding is required.
+
+The select-mode integration tests use borrowed `LineSurface` adapters, with
+pane requests delegated alongside real text behavior. They cover every key and
+motion, custom mapping, cursor redraw coalescing, copy and cancellation,
+wrapped trailing blanks, wide endpoints, viewport limits, and target removal.
+This is pure event and surface logic, so host and Linux tests and cross-target
+lint apply.

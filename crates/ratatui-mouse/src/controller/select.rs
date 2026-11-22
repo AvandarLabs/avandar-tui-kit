@@ -132,7 +132,7 @@ impl<T: Clone + PartialEq> MouseController<T> {
         outcome
     }
 
-    fn expand_point(
+    pub(super) fn expand_point(
         &self,
         surface: &mut dyn SelectableSurface,
         point: ContentPoint,
