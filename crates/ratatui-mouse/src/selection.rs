@@ -27,6 +27,7 @@ pub enum SelectionStage {
 /// Selected text on one target. A selection never spans targets.
 pub struct Selection<T> {
     pub(crate) target: T,
+    pub(crate) anchor: ContentRange,
     pub(crate) range: ContentRange,
     pub(crate) unit: SelectionUnit,
     pub(crate) stage: SelectionStage,

@@ -4,7 +4,7 @@
 click counting, settings, borrowed text surfaces, selection reports, highlight
 geometry, and pane routing and encoders for ratatui apps using crossterm. It is
 a library building block: the app owns its event loop, drawing stream, terminal
-lifecycle, and panic hook. Selection gestures and controller event handling are planned in the
+lifecycle, and panic hook. Gesture behavior follows the
 [mouse specification](specs/ratatui-mouse.md).
 
 ## Using reporting
@@ -127,7 +127,8 @@ scrolling with at most ten rows per step and no edge margin, and a 16 ms
 redraw interval. Copy on release, keeping copied selections, clearing on key
 press or resize, pass-through, wheel arrows, and built-in select-mode keys
 are enabled. Pure pane routing consumes the routing settings; controller
-gestures consume the remaining selection settings in later M1 parts.
+gestures consume selection and copy settings. Timed scrolling and redraws
+arrive in later M1 parts.
 `WordCharacters` recognizes Unicode letters and digits plus configured
 punctuation, defaulting to `_-./~:@+%#?&=` so paths and URLs form words.
 
@@ -221,7 +222,8 @@ integration tasks.
 stage through read-only accessors. Its construction and mutation stay inside
 the crate for the controller. `SelectionUnit` distinguishes cells, words, and
 logical lines; `SelectionStage` distinguishes an initial press, an active drag,
-and a finished selection. Selection transitions are supplied by later M1 parts.
+and a finished selection. The controller supplies these transitions as
+described below.
 
 `MouseReport<T>` carries a `MouseOutcome<T>`, an independently reported pressed
 target for focus handling, and a redraw flag. Outcomes describe presses,
@@ -318,14 +320,64 @@ A new press replaces an active gesture; an orphan release is ignored.
 `gesture_owner`, `cancel_gesture`, and `forget_target` let apps inspect or drop
 this state. Forgetting also drops that target's completed-click history so a
 recreated target starts a fresh click run, while other targets' history stays.
-Selection storage, `selection`, `selected_text`, and
-`clear_selection` are present, but selection gestures, wheel handling, timed
-redraws, and keyboard select mode arrive in later M1 slices. Until the
-selection slice, surface presses that do not forward use the plain path.
-This slice does not request redraws itself; apps handle their action outcomes.
+Wheel handling, timed redraws, and keyboard select mode arrive in later M1
+slices. This slice does not request redraws itself; apps handle their action
+outcomes.
 
 Controller tests use non-Copy targets and cover press ownership, clicks and
 click-run reset, owner relocation and disappearance, lost releases, explicit
 cancellation, fixed forwarding requests, pane-relative bytes, tracking
 filters, and ignored bare motion. This is pure logic with no terminal I/O:
 host and Linux tests plus cross-target lint apply.
+
+## Controller selection gestures
+
+A nonforwarded left press on a selectable surface starts a selection owned by
+that target. The initial cell press has `Pressed` state but `selected_text`
+returns `None`: a release without a drag reports `Clicked` and drops that
+placeholder. Apps should skip highlighting when `selected_text` returns
+`None`. Once a drag arrives, the selection stays `Dragging`, even when it returns to its
+starting cell. Releasing it finishes and can copy one whole character.
+
+Double presses select a whole word immediately, falling back to the character
+on punctuation or blanks outside the configured word characters. Triple
+presses select the whole logical line, including all its soft-wrapped rows.
+Word and line drags join the original expanded unit with the expanded unit
+under the pointer. Crossing the anchor never loses the original unit. Any
+drag resets the click run; a click with one cell of drift still continues it.
+All stored range endpoints cover complete characters, including both cells
+of a wide grapheme, before apps project highlights.
+
+Holding any configured selection modifier, Shift or Alt by default, extends a
+finished selection on its own target. Its original anchor and growth unit
+remain fixed, even after a backward drag or repeated extensions. An extension
+press stays `Pressed` until a drag arrives, but already exposes its selected
+text and finishes on release. A press on another target starts a fresh
+gesture and clears the previous selection.
+Modifier changes during a gesture never change its route.
+
+On release, empty or whitespace-only text is dropped without copying. Other
+selections become `Done`. With `should_copy_on_release`, the outcome is
+`Copy { target, text }`; the app owns clipboard I/O. Disabling copy keeps the
+finished selection, while disabling `should_keep_selection_after_copy` clears
+it after an actual copy. `selected_text` also reads active word, line, and
+drag selections without finishing them.
+
+Cancellation removes an unfinished selection without copying: focus loss,
+resize, a missing owner area or surface, a replacement press, explicit
+`cancel_gesture`, and `forget_target` all follow this rule. Clearing an active
+selection also cancels its pending release. Current owner areas clamp motion
+and release after layout changes, so selection cannot spill into another
+target. A completed selection is removed if its area or surface disappears.
+
+Outside keyboard select mode, a key press or repeat clears selections when
+`should_clear_on_key_press` is enabled. Bare modifier keys and key releases
+never clear them. Resize always cancels a gesture, but only clears a completed
+selection when `should_clear_on_resize` is enabled. Focus loss preserves a
+completed selection. These paths never emit phantom copies.
+
+Selection controller tests use real borrowed `LineSurface` adapters and cover
+stages, returning drags, wide endpoints and clipped highlights, word and
+wrapped-line anchors, modifier extension, copy settings, clearing, layout
+changes, and cancellation. These are pure state transitions with no terminal
+I/O, so host and Linux tests and cross-target lint apply.
