@@ -9,7 +9,10 @@ pub mod content;
 mod error;
 pub mod hit;
 pub mod modes;
+pub mod passthrough;
 pub mod settings;
+pub mod surface;
+pub mod words;
 
 pub use clicks::ClickCounter;
 pub use content::{ContentPoint, ContentRange};
@@ -20,3 +23,7 @@ pub use modes::{
     enable_mouse_reporting,
 };
 pub use settings::{MouseSettings, WordCharacters};
+
+pub use passthrough::{MouseEncoding, MouseTracking, PaneMouseRequest};
+pub use surface::{LineSurface, NoSurfaces, ScrollPosition, SelectableSurface, SurfaceSet};
+pub use words::{character_columns_in_line, text_in_columns, word_columns_in_line};

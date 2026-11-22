@@ -38,6 +38,8 @@ unsafe_code = "forbid"
 missing_docs = "warn"
 
 [workspace.lints.clippy]
+# Cell coordinates must use ratatui CellWidth per grapheme.
+disallowed_methods = "warn"
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
 # Doc comments name types and crates in prose; backticking every one is noise.

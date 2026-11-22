@@ -220,16 +220,16 @@ red/green loops. Commands below run from the toolkit root unless labelled dif.
 `ClampedPosition`, `clamp_position_into(Rect, Position, u16) -> Option<ClampedPosition>`,
 and `ClickCounter<T>::register_press(&T, Position, Instant, &MouseSettings) -> u8`.
 
-- [ ] Write `topmost_hit_clamp_and_content_roundtrip`: later pushed modal
+- [x] Write `topmost_hit_clamp_and_content_roundtrip`: later pushed modal
   areas win; empty rectangles hit nothing; `area_of` returns the latest area;
   `Rect(10,5,20,8)` clamps `(3,2)` to `(10,5)` with overshoot `-3`, and
   `(60,20)` to `(29,12)` with overshoot `8`. Screen/content conversion
   round-trips with nonzero horizontal and vertical origin. Reversed ranges
   normalize, inclusive containment and union preserve both ends.
-- [ ] Write `click_run_obeys_time_target_distance_and_reset`: counts are
+- [x] Write `click_run_obeys_time_target_distance_and_reset`: counts are
   `[1,2,3,1]`; a 500 ms gap and one cell in both axes still continue; a
   larger gap, two cells, a different target, or reset restarts at 1.
-- [ ] Add `empty_and_extreme_geometry_does_not_overflow`: zero width/height,
+- [x] Add `empty_and_extreme_geometry_does_not_overflow`: zero width/height,
   near-u16 coordinate limits, negative content origins, and margins at least
   the area's height do not panic or produce out-of-area cells.
   ```rust
@@ -239,18 +239,20 @@ and `ClickCounter<T>::register_press(&T, Position, Instant, &MouseSettings) -> u
   assert_eq!(counts, [1, 2, 3, 1]);
   ```
 
-- [ ] Run `cargo test -p ratatui-mouse --test geometry --test clicks` and
+- [x] Run `cargo test -p ratatui-mouse --test geometry --test clicks` and
   confirm the expected red assertion for each behavior.
-- [ ] Implement the interfaces with safe widened/saturating arithmetic and
+- [x] Implement the interfaces with safe widened/saturating arithmetic and
   spec defaults. Keep click storage target-generic with `Clone + PartialEq`,
   without imposing `Copy`, `Eq`, `Hash`, or `Ord` on app targets.
-- [ ] Run the same tests and `just check`; expect pass. Commit as
+- [x] Run the same tests and `just check`; expect pass. Commit as
   `feat(mouse): add hit areas content coordinates and click counting`.
 
 ## Task 3: Cell-aware text and LineSurface
 
 **Files:** Create `src/{words,surface}.rs`, `src/surface/line.rs`,
 `tests/{words,line_surface}.rs`, `tests/common/{mod,surface_contract}.rs`;
+create the exact pass-through request value types in `src/passthrough.rs`
+required by `SelectableSurface::pane_request` (routing/encoding stays Task 6);
 create `clippy.toml`; modify exports, root workspace lint configuration if
 needed, and `docs/mouse.md`.
 
@@ -261,11 +263,11 @@ needed, and `docs/mouse.md`.
 with `with_wrapped_rows(&[bool])`. The surface trait signatures are exactly
 the spec's Surfaces block, including `&mut self` text lookups and `i32` scrolls.
 
-- [ ] Write `words_use_cells_and_keep_original_graphemes`: for `"a界b"`,
+- [x] Write `words_use_cells_and_keep_original_graphemes`: for `"a界b"`,
   character columns 1 and 2 both yield `(1,2)` and text selecting either cell
   is `"界"`; `"file.rs:12"` is one default word. Quotes/brackets are excluded,
   blanks/past-end return None, and combining text remains byte-for-byte intact.
-- [ ] Write shared `assert_surface_contract(&mut dyn SelectableSurface)`
+- [x] Write shared `assert_surface_contract(&mut dyn SelectableSurface)`
   over common visual rows `["alpha", "beta  ", "a界b", "wrappe", "d  "]`
   with wrapped flags `[false,false,false,true,false]`, width six, two visible rows,
   and the viewport initially scrolled away from the start. The full inclusive
@@ -278,16 +280,16 @@ the spec's Surfaces block, including `&mut self` text lookups and `i32` scrolls.
   assert_eq!(word_columns_in_line("file.rs:12", 4, &WordCharacters::default()), Some((0, 9)));
   ```
 
-- [ ] Run `cargo test -p ratatui-mouse --test words --test line_surface`;
+- [x] Run `cargo test -p ratatui-mouse --test words --test line_surface`;
   prove the behavioral red failures, then implement grapheme/cell traversal
   and the borrowed row adapter. Handle empty rows and absent wrap entries
   safely; invalid optional wrap metadata must not cause indexing panics.
-- [ ] Disallow `unicode_width::UnicodeWidthStr::width`,
+- [x] Disallow `unicode_width::UnicodeWidthStr::width`,
   `unicode_width::UnicodeWidthChar::width`, `ratatui::text::Span::width`, and
   `ratatui::text::Line::width`, using resolved defining paths if clippy requires
   them, and enable workspace `clippy::disallowed_methods` checking. Verify
   lint configuration is accepted rather than relying on an untested spelling.
-- [ ] Run both suites and `just check`; expect pass. Document the surface
+- [x] Run both suites and `just check`; expect pass. Document the surface
   contract as a reusable test recipe for app-defined surfaces, without adding
   an unapproved public test-support feature. Commit as
   `feat(mouse): add cell-aware text and selectable line surfaces`.

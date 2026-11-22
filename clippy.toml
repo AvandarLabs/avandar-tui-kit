@@ -1,0 +1,7 @@
+# Selection columns must match ratatui buffer cells per grapheme.
+disallowed-methods = [
+    { path = "unicode_width::UnicodeWidthStr::width", reason = "Use ratatui::buffer::CellWidth per grapheme." },
+    { path = "unicode_width::UnicodeWidthChar::width", reason = "Use ratatui::buffer::CellWidth per grapheme." },
+    { path = "ratatui_core::text::span::Span::width", reason = "Use ratatui::buffer::CellWidth per grapheme." },
+    { path = "ratatui_core::text::line::Line::width", reason = "Use ratatui::buffer::CellWidth per grapheme." },
+]

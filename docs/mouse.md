@@ -1,8 +1,8 @@
 # Mouse reporting
 
 `ratatui-mouse` provides reporting setup, frame hit areas, content coordinates,
-click counting, and settings for ratatui apps using crossterm. It is a library
-building block: the app owns its event loop, drawing stream, terminal lifecycle,
+click counting, settings, and borrowed text surfaces for ratatui apps using
+crossterm. It is a library building block: the app owns its event loop, drawing stream, terminal lifecycle,
 and panic hook. The current crate exposes
 the reporting lifecycle and pure interaction primitives; selection and event
 routing are planned in the [mouse specification](specs/ratatui-mouse.md).
@@ -69,10 +69,10 @@ it drops local guards. A second teardown during unwinding is safe.
 ## Dependencies and verification
 
 There are no default features. Shared ratatui and crossterm versions keep app
-and toolkit types compatible. `unicode-segmentation` supports the planned
-app-held-text selection APIs. The optional `vt100` dependency is enabled only
-by the `vt100` feature for planned emulator-backed surfaces; this first
-reporting slice exposes no emulator API.
+and toolkit types compatible. `unicode-segmentation` finds grapheme boundaries
+for app-held-text selection. The optional `vt100` dependency is enabled only
+by the `vt100` feature for planned emulator-backed surfaces; the current
+crate exposes the pane-request value types but no emulator adapter yet.
 
 The modes integration tests exercise exact bytes, short writes, write and
 flush error sources, cleanup after partial enable, and the guard's drop and
@@ -133,3 +133,56 @@ The geometry and click integration tests exercise stacking, empty and extreme
 rectangles, edge-margin overlap, both origin axes, inclusive ranges, click
 thresholds and resets, and custom word punctuation. These primitives perform
 no terminal I/O and require only the pure-logic test layers.
+
+## Cell-aware text and borrowed surfaces
+
+The `words` functions work in inclusive cell columns, using ratatui's
+`CellWidth` per grapheme, matching its buffer rendering. Selecting either half
+of a wide grapheme returns the original whole cluster. Combining sequences and
+emoji are copied from the original bytes without normalization. Controls and
+standalone zero-width graphemes occupy no selectable cells, matching ratatui's
+rendered text traversal. Word classification follows the cluster's first
+character, keeping attached combining marks with their base. Default
+punctuation makes paths, URLs, and `file.rs:12` single words; quotes, brackets,
+and blanks are boundaries.
+
+`SelectableSurface` uses stable content coordinates and mutable text lookups
+so adapters can temporarily inspect off-screen content while preserving their
+origin. `SurfaceSet<T>` borrows the surface for an app-defined target;
+`NoSurfaces` handles apps with no selectable text. The trait's default
+`pane_request` returns `None`. `PaneMouseRequest`, `MouseTracking`, and
+`MouseEncoding` describe terminal panes' requests; routing and encoders follow
+in later M1 parts.
+
+`LineSurface` borrows `AsRef<str>` rows and a `ScrollPosition`. Each row is a
+visual content line. `with_wrapped_rows` marks rows joined to their successor;
+missing flags mean unwrapped and excess flags are ignored. A final row cannot
+wrap beyond the available content. Copy joins soft wraps, inserts real
+newlines, trims trailing blanks at logical-line ends, and copies ranges taller
+than the viewport without scrolling. `line_at` spans all visual rows of a
+logical line, including stored trailing cells. Empty rows have a column-zero
+endpoint. An empty surface has an empty `line_bounds`; lookups of nonexistent
+characters return the requested singleton cell, while words return `None`.
+
+Scrolling preserves the horizontal column and returns the signed rows actually
+moved at either limit. Construction clamps a stale row offset to the last full
+viewport. A zero-height viewport uses one row for limits. Borrowing the adapter
+ends before the app accesses its scroll state again.
+
+### Reusing the surface contract in app tests
+
+The reusable fixture is
+[`tests/common/surface_contract.rs`](../crates/ratatui-mouse/tests/common/surface_contract.rs),
+with [`line_surface.rs`](../crates/ratatui-mouse/tests/line_surface.rs) showing
+how to call `assert_surface_contract(&mut dyn SelectableSurface)`. Copy that
+test-only recipe into an app's test helpers, construct its surface over the
+five `ROWS` with `WRAPPED_ROWS`, six columns and two visible rows, and start
+scrolled to a positive origin. The checks cover copying the full history,
+preserved origin axes, wide cells, logical-line joining, and actual signed
+scroll counts at both ends. Logical endpoints may include adapter-specific
+padding; their selected text must agree. There is no public test-support
+feature or runtime dependency on this fixture.
+
+This slice performs no terminal I/O. Host and Linux pure-logic tests and
+cross-target lint apply; real terminal scenarios are exercised by later M1
+integration tasks.
