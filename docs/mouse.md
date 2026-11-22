@@ -1,11 +1,11 @@
 # Mouse reporting
 
 `ratatui-mouse` provides reporting setup, frame hit areas, content coordinates,
-click counting, settings, and borrowed text surfaces for ratatui apps using
-crossterm. It is a library building block: the app owns its event loop, drawing stream, terminal lifecycle,
-and panic hook. The current crate exposes
-the reporting lifecycle and pure interaction primitives; selection and event
-routing are planned in the [mouse specification](specs/ratatui-mouse.md).
+click counting, settings, borrowed text surfaces, selection reports, and
+highlight geometry for ratatui apps using crossterm. It is a library building
+block: the app owns its event loop, drawing stream, terminal lifecycle, and
+panic hook. The current crate exposes the reporting lifecycle and pure interaction primitives; selection gestures and
+event routing are planned in the [mouse specification](specs/ratatui-mouse.md).
 
 ## Using reporting
 
@@ -210,3 +210,35 @@ feature or runtime dependency on this fixture.
 This slice performs no terminal I/O. Host and Linux pure-logic tests and
 cross-target lint apply; real terminal scenarios are exercised by later M1
 integration tasks.
+
+## Selection data, reports, and highlighting
+
+`Selection<T>` exposes its target, inclusive content range, growth unit, and
+stage through read-only accessors. Its construction and mutation stay inside
+the crate for the controller. `SelectionUnit` distinguishes cells, words, and
+logical lines; `SelectionStage` distinguishes an initial press, an active drag,
+and a finished selection. Gesture transitions are supplied by later M1 parts.
+
+`MouseReport<T>` carries a `MouseOutcome<T>`, an independently reported pressed
+target for focus handling, and a redraw flag. Outcomes describe presses,
+clicks, plain drags and releases, unused wheel movement, text for copying, or
+pane input bytes. `PointerPress` preserves screen and optional content
+coordinates, button, modifiers, and click count. The app performs clipboard
+and pane I/O in response to these values.
+
+Draw a highlight after rendering the surface text. `HighlightRects::from_range`
+converts an inclusive content range, the surface's origin, and its content area
+into at most three rectangles in screen order: a partial first row, full
+middle rows, and a partial last row. A single-row range produces one rectangle.
+Each part is clipped on both axes, including horizontal scrolling and numeric
+coordinate limits. Empty or fully offscreen selections produce no rectangles.
+The conversion uses fixed storage and does not inspect individual cells.
+
+Ranges must already cover complete characters before conversion: the helper
+has no surface from which to infer grapheme boundaries. Use the surface's
+`character_at` result to snap both ends before highlighting, so a selected wide
+character includes both cells. `render` patches the caller's style within the
+rectangles and the buffer's bounds, preserving cell symbols and unspecified
+style attributes. `DEFAULT_HIGHLIGHT_STYLE` adds reversed video without choosing
+colors. These operations perform no terminal I/O and use the pure-logic test
+layers.

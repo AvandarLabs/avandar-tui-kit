@@ -303,11 +303,11 @@ the spec's Surfaces block, including `&mut self` text lookups and `i32` scrolls.
 and `SelectableSurface` implementation. Task 6 adds
 `PaneMouseRequest::from_screen(&vt100::Screen) -> Self` once its types exist.
 
-- [ ] Write `history_wraps_and_offset_restoration` using a real
+- [x] Write `history_wraps_and_offset_restoration` using a real
   `vt100::Parser::new(3,8,20)` fed enough output to create more than three
   history rows. Set a nonzero offset; select a soft-wrapped logical line
   across history/live-screen boundaries; assert exact text and original offset.
-- [ ] Write `line_numbers_follow_oldest_history_until_capacity`: recreate
+- [x] Write `line_numbers_follow_oldest_history_until_capacity`: recreate
   the adapter between output bursts; selected text stays stable until history
   reaches capacity. Also exercise alternate-screen zero history, both halves
   of a wide character, and the shared surface contract.
@@ -320,17 +320,17 @@ and `SelectableSurface` implementation. Task 6 adds
   assert_eq!(parser.screen().scrollback(), saved_offset);
   ```
 
-- [ ] Run `cargo test -p ratatui-mouse --features vt100 --test vt100_surface`;
+- [x] Run `cargo test -p ratatui-mouse --features vt100 --test vt100_surface`;
   prove red failures before implementation. If public vt100 APIs cannot
   support a required behavior, stop and report the concrete spec conflict;
   do not fork, patch, or silently drop a requirement. Gate the integration
   test file with `#![cfg(feature = "vt100")]` so empty-feature checks compile.
-- [ ] Implement offset discovery by saving the offset, setting usize::MAX,
+- [x] Implement offset discovery by saving the offset, setting usize::MAX,
   reading the clamped value, and restoring. Map content lines into temporary
   viewports using public `cell` and `row_wrapped`; cache only within the
   borrowed adapter so later reconstructions see new output. Use a private
   restoration guard where offset-changing reads could otherwise leave state.
-- [ ] Run the suite, `cargo test -p ratatui-mouse --no-default-features`, and
+- [x] Run the suite, `cargo test -p ratatui-mouse --no-default-features`, and
   `just check`; expect pass. Document the history-cap eviction limit and
   constructor borrowing. Commit as `feat(mouse): add vt100 history selection`.
 
@@ -345,11 +345,11 @@ when needed, and `docs/mouse.md`.
 `DEFAULT_HIGHLIGHT_STYLE`, and `HighlightRects::{from_range,as_slice,render}`.
 Selection mutation stays crate-private; do not expose new public constructors.
 
-- [ ] Write `highlight_clips_to_at_most_three_rectangles`: one-row selection
+- [x] Write `highlight_clips_to_at_most_three_rectangles`: one-row selection
   gives one rectangle; a multirow selection gives partial first/last plus the
   full middle; offscreen ranges give no rectangles. Check nonzero horizontal
   origins, empty areas, and clipping on all four edges.
-- [ ] Write `highlight_patches_style_without_replacing_text`: render to a
+- [x] Write `highlight_patches_style_without_replacing_text`: render to a
   real `Buffer`, assert unchanged cell symbols and unrelated style attributes,
   plus reversed-video default. Character snapping belongs before `from_range`,
   which receives no surface; verify a snapped two-cell range highlights both.
@@ -360,7 +360,7 @@ Selection mutation stays crate-private; do not expose new public constructors.
   assert_eq!(rectangles.as_slice(), &[Rect::new(11, 5, 2, 1)]);
   ```
 
-- [ ] Run `cargo test -p ratatui-mouse --test highlight` to establish red;
+- [x] Run `cargo test -p ratatui-mouse --test highlight` to establish red;
   implement inclusive-to-rectangle conversion and style patching, then rerun
   it and `just check`. Commit as `feat(mouse): add selection reports and highlight`.
 
