@@ -135,6 +135,7 @@ impl<T: Clone + PartialEq> MouseController<T> {
 
     /// Drops state for a target that has gone away, returning whether any existed.
     pub fn forget_target(&mut self, target: &T) -> bool {
+        let has_click_history = self.clicks.forget_target(target);
         let has_gesture = self.gesture_owner() == Some(target);
         let has_selection = self
             .selection
@@ -146,10 +147,7 @@ impl<T: Clone + PartialEq> MouseController<T> {
         if has_selection {
             self.clear_selection();
         }
-        if has_gesture || has_selection {
-            self.clicks.reset();
-        }
-        has_gesture || has_selection
+        has_gesture || has_selection || has_click_history
     }
 
     fn start_gesture<S: SurfaceSet<T>>(

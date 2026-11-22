@@ -66,6 +66,35 @@ fn click_keeps_original_press_and_click_runs_reset_on_drag() {
 }
 
 #[test]
+fn forgetting_completed_click_history_restarts_a_recreated_target() {
+    let mut harness = ControllerHarness::new(NoSurfaces);
+    let _ = harness.mouse(LEFT_DOWN, 12, 6, KeyModifiers::NONE);
+    let _ = harness.mouse(LEFT_UP, 12, 6, KeyModifiers::NONE);
+    assert_eq!(harness.controller.gesture_owner(), None);
+    let was_forgotten = harness.controller.forget_target(&TestTarget::Left);
+    let was_forgotten_twice = harness.controller.forget_target(&TestTarget::Left);
+    harness.now += Duration::from_millis(10);
+    let report = harness.mouse(LEFT_DOWN, 12, 6, KeyModifiers::NONE);
+    assert!(matches!(report.outcome, MouseOutcome::Pressed { press, .. } if press.clicks == 1));
+    assert!(was_forgotten);
+    assert!(!was_forgotten_twice);
+}
+
+#[test]
+fn forgetting_another_target_preserves_completed_click_history() {
+    let mut harness = ControllerHarness::new(NoSurfaces);
+    let _ = harness.mouse(LEFT_DOWN, 12, 6, KeyModifiers::NONE);
+    let _ = harness.mouse(LEFT_UP, 12, 6, KeyModifiers::NONE);
+    assert!(!harness.controller.forget_target(&TestTarget::Right));
+    let _ = harness.mouse(Down(Right), 32, 6, KeyModifiers::NONE);
+    assert!(harness.controller.forget_target(&TestTarget::Right));
+    assert_eq!(harness.controller.gesture_owner(), None);
+    harness.now += Duration::from_millis(10);
+    let report = harness.mouse(LEFT_DOWN, 12, 6, KeyModifiers::NONE);
+    assert!(matches!(report.outcome, MouseOutcome::Pressed { press, .. } if press.clicks == 2));
+}
+
+#[test]
 fn lost_release_and_missing_owner_cancel_without_copy() {
     let mut harness = ControllerHarness::new(NoSurfaces);
     let orphan = harness.mouse(LEFT_UP, 12, 6, KeyModifiers::NONE);

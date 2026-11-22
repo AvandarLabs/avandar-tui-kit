@@ -316,7 +316,9 @@ The owner area is checked on every event. Removing that area, losing focus,
 resizing, or explicitly cancelling drops the gesture without a click or copy.
 A new press replaces an active gesture; an orphan release is ignored.
 `gesture_owner`, `cancel_gesture`, and `forget_target` let apps inspect or drop
-this state. Selection storage, `selection`, `selected_text`, and
+this state. Forgetting also drops that target's completed-click history so a
+recreated target starts a fresh click run, while other targets' history stays.
+Selection storage, `selection`, `selected_text`, and
 `clear_selection` are present, but selection gestures, wheel handling, timed
 redraws, and keyboard select mode arrive in later M1 slices. Until the
 selection slice, surface presses that do not forward use the plain path.

@@ -58,6 +58,18 @@ impl<T: Clone + PartialEq> ClickCounter<T> {
     pub fn reset(&mut self) {
         self.last_press = None;
     }
+
+    /// Removes click history only when it belongs to `target`.
+    pub(crate) fn forget_target(&mut self, target: &T) -> bool {
+        let has_target = self
+            .last_press
+            .as_ref()
+            .is_some_and(|press| press.target == *target);
+        if has_target {
+            self.reset();
+        }
+        has_target
+    }
 }
 
 impl<T: Clone + PartialEq> Default for ClickCounter<T> {
