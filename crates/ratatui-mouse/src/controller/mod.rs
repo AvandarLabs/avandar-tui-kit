@@ -14,6 +14,7 @@ use crate::{
 mod forward;
 mod plain;
 mod select;
+mod timing;
 
 /// Mouse gesture and selection state advanced by events from the app's loop.
 /// Targets need only `Clone + PartialEq`; the app owns all surfaces and I/O.
@@ -22,6 +23,7 @@ pub struct MouseController<T> {
     gesture: Option<Gesture<T>>,
     selection: Option<Selection<T>>,
     clicks: ClickCounter<T>,
+    timing: timing::Timing,
 }
 
 enum Gesture<T> {
@@ -57,6 +59,7 @@ impl<T: Clone + PartialEq> MouseController<T> {
             gesture: None,
             selection: None,
             clicks: ClickCounter::new(),
+            timing: timing::Timing::new(),
         }
     }
 
@@ -84,7 +87,19 @@ impl<T: Clone + PartialEq> MouseController<T> {
         areas: &HitAreas<T>,
         surfaces: &mut S,
     ) -> MouseReport<T> {
+        let previous_selection = self.selection_visual();
         self.validate_state(areas, surfaces);
+        let report = self.dispatch_event(event, now, areas, surfaces);
+        self.complete_report(report, previous_selection != self.selection_visual(), now)
+    }
+
+    fn dispatch_event<S: SurfaceSet<T>>(
+        &mut self,
+        event: &Event,
+        now: Instant,
+        areas: &HitAreas<T>,
+        surfaces: &mut S,
+    ) -> MouseReport<T> {
         let outcome = match event {
             Event::FocusLost | Event::Resize(_, _) => {
                 self.cancel_gesture();
@@ -105,7 +120,11 @@ impl<T: Clone + PartialEq> MouseController<T> {
                 if matches!(mouse.kind, MouseEventKind::Down(_)) {
                     return self.start_gesture(*mouse, now, areas, surfaces);
                 }
-                self.continue_gesture(*mouse, areas, surfaces)
+                if let Some((rows, columns)) = self.wheel_delta(mouse.kind) {
+                    self.handle_wheel(*mouse, (rows, columns), areas, surfaces)
+                } else {
+                    self.continue_gesture(*mouse, now, areas, surfaces)
+                }
             }
             _ => MouseOutcome::Ignored,
         };
@@ -140,8 +159,11 @@ impl<T: Clone + PartialEq> MouseController<T> {
     pub fn clear_selection(&mut self) -> bool {
         if matches!(self.gesture, Some(Gesture::Select(_))) {
             self.gesture = None;
+            self.timing.edge = None;
         }
-        self.selection.take().is_some()
+        let had_selection = self.selection.take().is_some();
+        self.timing.has_pending_redraw |= had_selection;
+        had_selection
     }
 
     /// The target owning the active gesture, if any.
@@ -154,8 +176,9 @@ impl<T: Clone + PartialEq> MouseController<T> {
     /// Returns whether a gesture existed; completed selections stay intact.
     pub fn cancel_gesture(&mut self) -> bool {
         let gesture = self.gesture.take();
+        self.timing.edge = None;
         if matches!(gesture, Some(Gesture::Select(_))) {
-            self.selection = None;
+            self.timing.has_pending_redraw |= self.selection.take().is_some();
         }
         gesture.is_some()
     }
@@ -175,21 +198,6 @@ impl<T: Clone + PartialEq> MouseController<T> {
             self.clear_selection();
         }
         has_gesture || has_selection || has_click_history
-    }
-
-    fn validate_state<S: SurfaceSet<T>>(&mut self, areas: &HitAreas<T>, surfaces: &mut S) {
-        if self
-            .gesture_owner()
-            .is_some_and(|target| areas.area_of(target).is_none())
-        {
-            self.cancel_gesture();
-        }
-        if self.selection.as_ref().is_some_and(|selection| {
-            areas.area_of(selection.target()).is_none()
-                || surfaces.surface_mut(selection.target()).is_none()
-        }) {
-            self.clear_selection();
-        }
     }
 
     fn start_gesture<S: SurfaceSet<T>>(
@@ -280,6 +288,7 @@ impl<T: Clone + PartialEq> MouseController<T> {
     fn continue_gesture<S: SurfaceSet<T>>(
         &mut self,
         mouse: MouseEvent,
+        now: Instant,
         areas: &HitAreas<T>,
         surfaces: &mut S,
     ) -> MouseOutcome<T> {
@@ -299,6 +308,9 @@ impl<T: Clone + PartialEq> MouseController<T> {
         };
         if is_drag {
             self.clicks.reset();
+        }
+        if matches!(gesture, Gesture::Select(_)) {
+            self.update_edge(mouse, area, now, is_release);
         }
         let outcome = self.handle_gesture(&mut gesture, mouse, area, is_release, surfaces);
         if !is_release {

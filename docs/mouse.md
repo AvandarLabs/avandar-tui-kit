@@ -127,8 +127,9 @@ scrolling with at most ten rows per step and no edge margin, and a 16 ms
 redraw interval. Copy on release, keeping copied selections, clearing on key
 press or resize, pass-through, wheel arrows, and built-in select-mode keys
 are enabled. Pure pane routing consumes the routing settings; controller
-gestures consume selection and copy settings. Timed scrolling and redraws
-arrive in later M1 parts.
+gestures consume selection and copy settings. Wheel routing, timed edge
+scrolling, and redraws consume their corresponding settings; keyboard select
+mode arrives in a later M1 part.
 `WordCharacters` recognizes Unicode letters and digits plus configured
 punctuation, defaulting to `_-./~:@+%#?&=` so paths and URLs form words.
 
@@ -320,9 +321,8 @@ A new press replaces an active gesture; an orphan release is ignored.
 `gesture_owner`, `cancel_gesture`, and `forget_target` let apps inspect or drop
 this state. Forgetting also drops that target's completed-click history so a
 recreated target starts a fresh click run, while other targets' history stays.
-Wheel handling, timed redraws, and keyboard select mode arrive in later M1
-slices. This slice does not request redraws itself; apps handle their action
-outcomes.
+Wheel handling and timed redraws follow the ownership rules below. Keyboard
+select mode arrives in a later M1 slice.
 
 Controller tests use non-Copy targets and cover press ownership, clicks and
 click-run reset, owner relocation and disappearance, lost releases, explicit
@@ -381,3 +381,55 @@ stages, returning drags, wide endpoints and clipped highlights, word and
 wrapped-line anchors, modifier extension, copy settings, clearing, layout
 changes, and cancellation. These are pure state transitions with no terminal
 I/O, so host and Linux tests and cross-target lint apply.
+
+## Controller wheel and deadlines
+
+Wheel direction follows crossterm without inversion. With the default step,
+up and down report signed rows of -3 and +3; left and right report signed
+columns of -3 and +3. An unused wheel reports the target under the pointer,
+regardless of focus; input outside all targets is ignored. A completed
+selection stays fixed
+in content coordinates while the app handles wheel scrolling.
+
+During a selection gesture the controller scrolls the owner's surface by the
+vertical step and updates the selection endpoint under the pointer, clamped
+to the current owner area. It returns `Consumed`, including horizontal input:
+surfaces expose vertical scrolling only. During a forwarded gesture, wheel
+input uses that owner's area and press-time tracking and encoding request.
+Without either gesture, a pane follows `wheel_route`: selection modifiers or
+disabled pass-through report to the app, requested tracking forwards mouse
+bytes, and an alternate screen with tracking off can receive vertical arrow
+keys. Horizontal input remains a `Wheel` report when that route offers only
+vertical arrows.
+
+An out-of-area selection drag records a pointer and schedules an edge step
+at its supplied `now`; the drag itself never scrolls. Further drag events
+update distance without moving that deadline. `tick(now, areas, surfaces)`
+performs at most one due step, bounded by overshoot and `auto_scroll_max_rows`,
+then updates the content endpoint. Continued work is scheduled relative to
+that tick, 50 ms later by default, so a late tick does not replay missed
+steps. Edge margins use the same clamping rule as frame geometry, including
+one-row areas. Returning inside, release, cancellation, owner removal, a
+missing surface, and resize clear edge work. A zero or partial movement at a
+content boundary stops scheduling until another drag.
+
+Selection changes, including cancellation and explicit clearing, and actual
+surface movement request redraws. The first change is due immediately;
+subsequent changes inside the default 16 ms interval are remembered. A due
+event or tick delivers one redraw and clears the pending flag. Unchanged
+drags and bare motion add no redraw work. `next_deadline()` returns the
+earlier of pending redraw and edge work, letting the app bound its input
+wait. Direct clearing has no timestamp, so its redraw uses the next supplied
+event or tick and the last redraw's budget.
+
+All timing uses caller-supplied `Instant` values. The library never reads a
+clock, starts a thread, or sleeps. Zero edge maxima disable edge steps; zero
+intervals allow one step or redraw per call without loops. An interval that
+cannot be added to an `Instant` schedules no deadline, avoiding overflow or
+immediate retry loops. Apps can change settings before subsequent calls.
+
+Controller timing tests use borrowed text surfaces and exact timestamps to
+cover each wheel direction and route, owner snapshots, endpoint changes,
+redraw coalescing, nearest deadlines, cancellation, content boundaries, late
+ticks, and zero or extreme settings. These changes perform no terminal I/O;
+host and Linux pure-logic tests plus Windows/Linux cross-target lint apply.
