@@ -38,6 +38,10 @@ mod unix_tests {
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+    // Cargo releases its lock before the runner checks and spawns the example.
+    // Own that shared binary through the entire subprocess, including spawn.
+    static RUNNER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     const MOCK_ORCA_SCRIPT: &str = r#"#!/usr/bin/env bash
 set -euo pipefail
 if [ -n "${MOCK_ORCA_CALLS_FILE:-}" ]; then
@@ -165,6 +169,9 @@ esac
         working_directory: &Path,
         environment_overrides: &[(&str, &str)],
     ) -> Output {
+        let _runner_guard = RUNNER_LOCK
+            .lock()
+            .expect("runner lock must not be poisoned");
         let mut command = Command::new(runner_script_path());
         command
             .args(arguments)
