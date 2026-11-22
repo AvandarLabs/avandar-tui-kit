@@ -404,7 +404,10 @@ vertical arrows.
 
 An out-of-area selection drag records a pointer and schedules an edge step
 at its supplied `now`; the drag itself never scrolls. Further drag events
-update distance without moving that deadline. `tick(now, areas, surfaces)`
+update distance without moving that deadline. Wheel input also refreshes an
+existing edge pointer: returning inside clears the work, while remaining
+outside updates overshoot and preserves its deadline. Wheel input never starts
+a new edge timer by itself. `tick(now, areas, surfaces)`
 performs at most one due step, bounded by overshoot and `auto_scroll_max_rows`,
 then updates the content endpoint. Continued work is scheduled relative to
 that tick, 50 ms later by default, so a late tick does not replay missed

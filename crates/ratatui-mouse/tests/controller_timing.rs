@@ -473,3 +473,52 @@ fn partial_boundary_scroll_clears_future_edge_work() {
     let _ = tick(&mut harness);
     assert_eq!(harness.controller.next_deadline(), None);
 }
+
+#[test]
+fn wheel_inside_owner_clears_stale_edge_work() {
+    let rows = ["text"; 100];
+    for (kind, expected_origin) in [(ScrollDown, 3), (ScrollRight, 0)] {
+        let mut scroll = ScrollPosition::default();
+        let mut harness = ControllerHarness::new(create_pane(&rows, &mut scroll));
+        drag_outside(&mut harness);
+        assert_eq!(harness.controller.next_deadline(), Some(harness.now));
+        let report = harness.mouse(kind, 31, 6, KeyModifiers::NONE);
+        assert_eq!(report.outcome, MouseOutcome::Consumed);
+        assert_eq!(harness.surfaces.origin().line, expected_origin);
+        let _ = tick(&mut harness);
+        assert_eq!(harness.surfaces.origin().line, expected_origin);
+        harness.now += Duration::from_millis(16);
+        let _ = tick(&mut harness);
+        assert_eq!(harness.controller.next_deadline(), None);
+        harness.now += Duration::from_millis(50);
+        let _ = tick(&mut harness);
+        assert_eq!(harness.surfaces.origin().line, expected_origin);
+    }
+}
+
+#[test]
+fn wheel_outside_refreshes_overshoot_and_preserves_edge_deadline() {
+    let rows = ["text"; 100];
+    let mut scroll = ScrollPosition::default();
+    let mut harness = ControllerHarness::new(create_pane(&rows, &mut scroll));
+    drag_outside(&mut harness);
+    let _ = tick(&mut harness);
+    assert_eq!(harness.surfaces.origin().line, 10);
+    let start = harness.now;
+    harness.now += Duration::from_millis(10);
+    let report = harness.mouse(ScrollDown, 31, 9, KeyModifiers::NONE);
+    assert_eq!(report.outcome, MouseOutcome::Consumed);
+    assert_eq!(harness.surfaces.origin().line, 13);
+    let _ = tick(&mut harness);
+    assert_eq!(harness.surfaces.origin().line, 13);
+    harness.now = start + Duration::from_millis(16);
+    let _ = tick(&mut harness);
+    assert_eq!(
+        harness.controller.next_deadline(),
+        Some(start + Duration::from_millis(50))
+    );
+    harness.now = start + Duration::from_millis(50);
+    let _ = tick(&mut harness);
+    assert_eq!(harness.surfaces.origin().line, 14);
+    assert_eq!(harness.controller.selection().unwrap().range().end.line, 17);
+}

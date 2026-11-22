@@ -76,6 +76,7 @@ impl<T: Clone + PartialEq> MouseController<T> {
             if let Some(surface) = surfaces.surface_mut(gesture.target()) {
                 self.timing.has_pending_redraw |= surface.scroll_by(rows) != 0;
             }
+            self.refresh_edge_pointer(mouse, area);
             return self.update_scrolled_selection(clamped.position, area, surfaces);
         }
         self.handle_hovered_wheel(mouse, (rows, columns), areas, surfaces)

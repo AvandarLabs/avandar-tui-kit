@@ -149,6 +149,12 @@ impl<T: Clone + PartialEq> MouseController<T> {
         }
     }
 
+    pub(super) fn refresh_edge_pointer(&mut self, mouse: MouseEvent, area: Rect) {
+        if let Some(deadline) = self.timing.edge.as_ref().map(|edge| edge.deadline) {
+            self.update_edge(mouse, area, deadline, false);
+        }
+    }
+
     fn scroll_edge<S: SurfaceSet<T>>(
         &mut self,
         now: Instant,
