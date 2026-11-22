@@ -2,7 +2,7 @@
 
 #![cfg(feature = "vt100")]
 
-mod common;
+pub mod common;
 
 use common::surface_contract::{
     ROWS, VISIBLE_ROWS, WIDTH, WRAPPED_ROWS, assert_surface_contract, point,

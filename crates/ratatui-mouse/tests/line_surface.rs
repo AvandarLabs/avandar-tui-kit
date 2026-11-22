@@ -1,6 +1,6 @@
 //! Borrowed app-held row adapter regressions.
 
-mod common;
+pub mod common;
 
 use common::surface_contract::{ROWS, VISIBLE_ROWS, WRAPPED_ROWS, assert_surface_contract, point};
 use ratatui_mouse::{

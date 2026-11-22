@@ -2,15 +2,25 @@
 
 use ratatui_mouse::{ContentPoint, ContentRange, SelectableSurface, WordCharacters};
 
+/// Visual rows covering ASCII, wide characters, and a soft-wrapped line.
 pub const ROWS: [&str; 5] = ["alpha", "beta  ", "a界b", "wrappe", "d  "];
+/// Whether each fixture row joins directly to its successor.
 pub const WRAPPED_ROWS: [bool; 5] = [false, false, false, true, false];
+/// Viewport width in terminal cells.
 pub const WIDTH: u16 = 6;
+/// Viewport height in visual rows.
 pub const VISIBLE_ROWS: u16 = 2;
 
+/// Creates a stable content coordinate for contract assertions.
+#[must_use]
 pub const fn point(line: i64, column: u32) -> ContentPoint {
     ContentPoint { line, column }
 }
 
+/// Checks text, origin preservation, cell boundaries, wrapping, and scroll limits.
+///
+/// # Panics
+/// Panics when the surface violates the shared fixture contract.
 pub fn assert_surface_contract(surface: &mut dyn SelectableSurface) {
     assert_eq!(surface.line_bounds(), 0..=4);
     let origin = surface.origin();

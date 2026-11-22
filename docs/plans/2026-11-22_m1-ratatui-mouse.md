@@ -409,14 +409,14 @@ accessors, `handle_event<S: SurfaceSet<T>>(&mut self,&Event,Instant,&HitAreas<T>
 the spec's selection/text accessors as their backing state is introduced.
 Do not publish placeholder select-mode methods; Task 10 adds them.
 
-- [ ] Write `plain_gesture_keeps_press_owner`: press Left, drag over Right,
+- [x] Write `plain_gesture_keeps_press_owner`: press Left, drag over Right,
   release there; all outcomes name Left, `Dragged`/`DragEnded` carry the
   original start and clamped end. A press/release without drag emits Clicked.
-- [ ] Write `lost_release_and_missing_owner_cancel_without_copy`: second
+- [x] Write `lost_release_and_missing_owner_cancel_without_copy`: second
   press replaces the gesture, Up without Down produces no click/copy, removed
   area, FocusLost, Resize, and `forget_target` cancel with no final outcome.
   Use non-Copy enum targets to prove generic bounds stay minimal.
-- [ ] Write `forward_route_is_fixed_at_press`: later modifiers or mouse
+- [x] Write `forward_route_is_fixed_at_press`: later modifiers or mouse
   request changes do not switch the gesture to selection. All Forward bytes
   stay pane-relative and `pressed_target` accompanies the press. Bare Moved
   yields no actionable outcome or forwarded bytes, even with AnyMotion.
@@ -426,10 +426,10 @@ Do not publish placeholder select-mode methods; Task 10 adds them.
   assert!(!matches!(orphan_release.outcome, MouseOutcome::Clicked { .. } | MouseOutcome::Copy { .. }));
   ```
 
-- [ ] Run `cargo test -p ratatui-mouse --test controller_plain --test controller_forward`
+- [x] Run `cargo test -p ratatui-mouse --test controller_plain --test controller_forward`
   and prove red; implement the private gesture enum and owner lookup per
   event, keeping plain and forwarding branches in their own modules.
-- [ ] Rerun both suites and `just check`; expect pass. Commit as
+- [x] Rerun both suites and `just check`; expect pass. Commit as
   `feat(mouse): add controller gesture ownership and forwarding`.
 
 ## Task 8: Controller selection, extension, and copy

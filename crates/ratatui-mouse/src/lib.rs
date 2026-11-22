@@ -7,6 +7,7 @@
 
 pub mod clicks;
 pub mod content;
+pub mod controller;
 mod error;
 pub mod highlight;
 pub mod hit;
@@ -25,6 +26,7 @@ pub use vt100::Vt100Surface;
 
 pub use clicks::ClickCounter;
 pub use content::{ContentPoint, ContentRange};
+pub use controller::MouseController;
 pub use error::MouseError;
 pub use highlight::{DEFAULT_HIGHLIGHT_STYLE, HighlightRects};
 pub use hit::{ClampedPosition, HitAreas, clamp_position_into};

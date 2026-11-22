@@ -221,7 +221,7 @@ integration tasks.
 stage through read-only accessors. Its construction and mutation stay inside
 the crate for the controller. `SelectionUnit` distinguishes cells, words, and
 logical lines; `SelectionStage` distinguishes an initial press, an active drag,
-and a finished selection. Gesture transitions are supplied by later M1 parts.
+and a finished selection. Selection transitions are supplied by later M1 parts.
 
 `MouseReport<T>` carries a `MouseOutcome<T>`, an independently reported pressed
 target for focus handling, and a redraw flag. Outcomes describe presses,
@@ -277,7 +277,7 @@ every platform, preserving the host terminal's pointer interactions.
 `build_wheel_arrow_keys` emits one up key per negative row or one down key per
 positive row; zero rows emits nothing. Normal cursor mode uses `CSI A` and
 `CSI B`, while application cursor mode uses `SS3 A` and `SS3 B`. All these
-helpers return decisions or bytes. The app owns the gesture and writes any
+helpers return decisions or bytes. The app owns the controller and writes any
 forwarded bytes to its child program. No helper reads or writes a terminal.
 
 Pass-through tests cover both routing tables, custom selection modifiers,
@@ -286,3 +286,44 @@ button and wheel direction with all Shift/Alt/Control combinations, both
 cursor-key modes, and requests derived from a real vt100 parser. Host and
 Linux pure-logic tests and cross-target lint apply; later M1 integration
 scenarios exercise the forwarded bytes with real terminals.
+
+## Controller ownership and forwarding
+
+The app owns one `MouseController<T>`, passes it crossterm events with an
+explicit `Instant`, the most recently drawn `HitAreas`, and borrowed surfaces,
+then handles the returned `MouseReport`. Targets require only `Clone +
+PartialEq`. Settings can change between events through `settings_mut`.
+
+A button press fixes the gesture's owner and route. Plain presses return
+`Pressed`; their drags and release keep naming the press target even over
+another target. `Dragged` and `DragEnded` preserve the original press position
+and clamp the end to the owner's current area. Without a drag, release returns
+`Clicked` with the original `PointerPress`. A drag that returns to its starting
+cell still ends as a drag, and resets the multi-click run. Only the pressed
+button's drags and release advance the gesture.
+
+Forwarding snapshots the pane's complete mouse request at the press, keeping
+its tracking and encoding for the whole gesture. Later modifiers, settings,
+or pane request changes cannot turn it into selection or split its protocol.
+Current event modifiers are still encoded. Coordinates use the owner's
+current area, with out-of-area motion clamped before pane-relative encoding.
+Tracking filters can consume an event without bytes, including the release
+of a press-only gesture. Every targeted press also sets `pressed_target` so
+focus changes do not depend on its outcome. Bare `Moved` events are ignored,
+including during an active gesture with an any-motion pane request.
+
+The owner area is checked on every event. Removing that area, losing focus,
+resizing, or explicitly cancelling drops the gesture without a click or copy.
+A new press replaces an active gesture; an orphan release is ignored.
+`gesture_owner`, `cancel_gesture`, and `forget_target` let apps inspect or drop
+this state. Selection storage, `selection`, `selected_text`, and
+`clear_selection` are present, but selection gestures, wheel handling, timed
+redraws, and keyboard select mode arrive in later M1 slices. Until the
+selection slice, surface presses that do not forward use the plain path.
+This slice does not request redraws itself; apps handle their action outcomes.
+
+Controller tests use non-Copy targets and cover press ownership, clicks and
+click-run reset, owner relocation and disappearance, lost releases, explicit
+cancellation, fixed forwarding requests, pane-relative bytes, tracking
+filters, and ignored bare motion. This is pure logic with no terminal I/O:
+host and Linux tests plus cross-target lint apply.
