@@ -177,10 +177,10 @@ red/green loops. Commands below run from the toolkit root unless labelled dif.
 `MouseReporting<W: Write>::enable(W) -> Result<Self, MouseError>` and
 `disable(self) -> Result<(), MouseError>`. Use the spec's two error variants.
 
-- [ ] Write `modes_bytes_and_guard_restore_once`: on macOS/Linux a recording
+- [x] Write `modes_bytes_and_guard_restore_once`: on macOS/Linux a recording
   writer receives exactly M1 then M5 on drop; explicit disable does not append
   another M5. Check the complete byte strings, including M5's eight resets.
-- [ ] Write `write_and_flush_failures_preserve_io_source`: inject short writes,
+- [x] Write `write_and_flush_failures_preserve_io_source`: inject short writes,
   write failure, and flush failure; `write_all` completes short writes, errors
   match Enable/DisableReporting and `source()` retains the I/O error. A failed
   explicit cleanup must not prevent a best-effort drop cleanup. A partial
@@ -194,20 +194,20 @@ red/green loops. Commands below run from the toolkit root unless labelled dif.
   assert_eq!(recorded_bytes, [ENABLE_MOUSE_REPORTING, DISABLE_MOUSE_REPORTING].concat());
   ```
 
-- [ ] Run `cargo test -p ratatui-mouse --test modes`. Initially it must fail
+- [x] Run `cargo test -p ratatui-mouse --test modes`. Initially it must fail
   for the missing package/API, then for incorrect bytes or lifecycle behavior.
-- [ ] Add the manifest with inherited metadata/lints and no default feature;
+- [x] Add the manifest with inherited metadata/lints and no default feature;
   add shared unicode-segmentation 1 and vt100 0.16 versions with reasons.
   The member uses `vt100 = { workspace = true, optional = true }` and
   `vt100 = ["dep:vt100"]` in its feature table. Add no placeholder modules
   or unfinished public methods.
-- [ ] Implement Unix writes/flushes and Windows crossterm console operations
+- [x] Implement Unix writes/flushes and Windows crossterm console operations
   only in `modes/platform.rs`. Verify crossterm's restoration semantics; do not
   emulate them with raw Windows calls. Document the supplied-writer boundary.
-- [ ] Repeat the modes test, `just lint-targets`, and `just check`; expect
+- [x] Repeat the modes test, `just lint-targets`, and `just check`; expect
   pass. Windows no-byte and console-state behavior is completed on the real
   runner in Task 17, not simulated by a redirected writer on macOS.
-- [ ] Document modes, panic-hook caller responsibility, and the new crate's
+- [x] Document modes, panic-hook caller responsibility, and the new crate's
   architecture/dependency rows; commit as `feat(mouse): add reporting lifecycle`.
 
 ## Task 2: Geometry, settings, and click counting

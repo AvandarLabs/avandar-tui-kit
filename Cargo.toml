@@ -42,3 +42,6 @@ pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
 # Doc comments name types and crates in prose; backticking every one is noise.
 doc_markdown = "allow"
+
+# MouseSettings exposes independent user choices, not mutually exclusive states.
+struct_excessive_bools = "allow"

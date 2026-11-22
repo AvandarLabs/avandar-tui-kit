@@ -144,8 +144,10 @@ re-exports these public interfaces.
 `modes/platform.rs` is the only place that writes and flushes the supplied
 drawing stream on macOS and Linux or invokes crossterm's console operations
 on Windows. The guard handles cleanup and failures without platform branches;
-the app keeps ownership of its event loop and panic hook. Hit-testing,
-selection, routing, and emulator-backed surfaces remain later M1 slices.
+the app keeps ownership of its event loop and panic hook. Frame hit areas,
+content-coordinate conversion, click counting, and settings are available as
+pure interaction primitives. Selection, routing, and emulator-backed surfaces
+remain later M1 slices.
 
 | Dependency | Mouse crate use |
 | --- | --- |

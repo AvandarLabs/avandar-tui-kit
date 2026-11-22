@@ -1,10 +1,11 @@
 # Mouse reporting
 
-`ratatui-mouse` provides reporting setup and teardown for ratatui apps using
-crossterm. It is a library building block: the app owns its event loop,
-drawing stream, terminal lifecycle, and panic hook. The current crate exposes
-the reporting lifecycle; the remaining mouse interaction APIs are planned in
-the [mouse specification](specs/ratatui-mouse.md).
+`ratatui-mouse` provides reporting setup, frame hit areas, content coordinates,
+click counting, and settings for ratatui apps using crossterm. It is a library
+building block: the app owns its event loop, drawing stream, terminal lifecycle,
+and panic hook. The current crate exposes
+the reporting lifecycle and pure interaction primitives; selection and event
+routing are planned in the [mouse specification](specs/ratatui-mouse.md).
 
 ## Using reporting
 
@@ -80,3 +81,55 @@ the Windows console implementation. Live terminal behavior and Windows
 console-state restoration are verified by the M1 terminal integration tasks,
 including Task 17, rather than by treating a redirected writer on macOS as a
 Windows console.
+
+## Frame geometry and content coordinates
+
+Keep a `HitAreas<T>` in app state, clear it before drawing, then push each
+interactive content rectangle as it is drawn. Later pushes win, including
+modal overlays and backdrops. Empty rectangles are ignored. Lookup returns
+borrowed targets without requiring them to be copied or cloned; `area_of`
+requires only equality and returns the target's most recent area. Iteration
+keeps drawing order from bottom to top.
+
+`clamp_position_into` returns the nearest cell in the full area and signed
+vertical overshoot: negative above, positive below. A nonzero edge margin
+counts the outer rows as outside while keeping the returned cell inside the
+original area. Margins are capped at the visible height. When margins
+overlap, the nearer physical edge wins, with ties toward the top. Thus both
+rows of a two-row pane with margin one remain active scrolling edges. Empty
+areas, including rectangles with no representable cells at coordinate limits,
+return `None`.
+
+`ContentPoint` stores a signed content line and a cell column. Screen mapping
+adds the screen offset within the content rectangle to both axes of the
+surface's origin. Reverse mapping returns `None` outside the viewport; it
+handles extreme origins without overflowing. Forward mapping requires a
+screen cell inside the area and saturates at the content types' numeric limits
+if the translated coordinate cannot be represented. `ContentRange::new`
+orders either pair of endpoints in reading order. Containment includes both
+ends, and union takes the smallest range containing both ranges.
+
+## Click runs and settings
+
+`ClickCounter<T>` accepts a target, screen position, caller-provided `Instant`,
+and `MouseSettings` for each left press. Counts cycle through 1, 2, 3, 1.
+The next press continues only when its target matches the previous target,
+both cell distances are within the configured tolerance, and its time is no
+more than the configured interval after the previous press. The default
+boundaries of 500 ms and one cell are inclusive. `reset` starts a fresh run,
+for example after a drag. Targets need only `Clone + PartialEq`; the library
+never reads a clock.
+
+`MouseSettings::default` supplies the specification's defaults: wheel steps
+of three rows, the click limits above, Shift or Alt for selection, 50 ms edge
+scrolling with at most ten rows per step and no edge margin, and a 16 ms
+redraw interval. Copy on release, keeping copied selections, clearing on key
+press or resize, pass-through, wheel arrows, and built-in select-mode keys
+are enabled. Those selection and routing settings are consumed by later M1
+parts. `WordCharacters` recognizes Unicode letters and digits plus configured
+punctuation, defaulting to `_-./~:@+%#?&=` so paths and URLs form words.
+
+The geometry and click integration tests exercise stacking, empty and extreme
+rectangles, edge-margin overlap, both origin axes, inclusive ranges, click
+thresholds and resets, and custom word punctuation. These primitives perform
+no terminal I/O and require only the pure-logic test layers.
