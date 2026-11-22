@@ -12,7 +12,12 @@ pub mod modes;
 pub mod passthrough;
 pub mod settings;
 pub mod surface;
+#[cfg(feature = "vt100")]
+pub mod vt100;
 pub mod words;
+
+#[cfg(feature = "vt100")]
+pub use vt100::Vt100Surface;
 
 pub use clicks::ClickCounter;
 pub use content::{ContentPoint, ContentRange};

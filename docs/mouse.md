@@ -71,8 +71,8 @@ it drops local guards. A second teardown during unwinding is safe.
 There are no default features. Shared ratatui and crossterm versions keep app
 and toolkit types compatible. `unicode-segmentation` finds grapheme boundaries
 for app-held-text selection. The optional `vt100` dependency is enabled only
-by the `vt100` feature for planned emulator-backed surfaces; the current
-crate exposes the pane-request value types but no emulator adapter yet.
+by the `vt100` feature for emulator-backed surfaces. It exposes
+`Vt100Surface`; pane-request detection and routing follow in later M1 parts.
 
 The modes integration tests exercise exact bytes, short writes, write and
 flush error sources, cleanup after partial enable, and the guard's drop and
@@ -168,6 +168,30 @@ Scrolling preserves the horizontal column and returns the signed rows actually
 moved at either limit. Construction clamps a stale row offset to the last full
 viewport. A zero-height viewport uses one row for limits. Borrowing the adapter
 ends before the app accesses its scroll state again.
+
+### Emulator cells and retained history
+
+With the `vt100` feature enabled, `Vt100Surface::new(&mut screen)` borrows a
+terminal emulator screen and its retained scrollback. Line zero is the oldest
+retained history row, followed by the live screen. The origin is the first
+visible content row, and scrolling returns the signed movement actually made.
+An alternate screen has no history and cannot scroll beyond its screen rows.
+
+The adapter reads the emulator's own cells, wide-character continuation flags,
+and soft-wrap flags, preserving combining text and copying a wide character
+whole from either cell. Text lookups can span more rows than the viewport;
+temporary viewport changes, including history-size discovery, use a private
+restoration guard so lookups leave the original offset intact. Logical-line
+endpoints include the emulator's fixed-width padding, which is trimmed when
+copying a logical line.
+
+The constructor's mutable borrow lasts until the adapter is dropped. Drop the
+adapter before processing more output or resizing, then construct it again so
+its history bounds reflect the new screen. No cached history metadata survives
+the borrow. Content coordinates stay on the same text as new output arrives
+until history reaches capacity. After that, every evicted row shifts retained
+text one line toward zero, so an existing selection can point at different
+text. Clearing selections on output remains the app's policy.
 
 ### Reusing the surface contract in app tests
 
