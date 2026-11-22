@@ -28,6 +28,10 @@ ratatui = { version = "0.30", default-features = false }
 # reads crossterm's event types. Pinned to the version ratatui 0.30 builds
 # against, so a `KeyEvent` from one is a `KeyEvent` to the other.
 crossterm = "0.29"
+# Grapheme boundaries for mouse selection over app-held text; already used by ratatui.
+unicode-segmentation = "1"
+# Optional emulator-backed mouse surfaces; apps without terminal panes do not compile it.
+vt100 = "0.16"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

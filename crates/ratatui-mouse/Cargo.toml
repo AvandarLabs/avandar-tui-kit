@@ -1,0 +1,26 @@
+[package]
+name = "ratatui-mouse"
+description = "Mouse reporting and interaction building blocks for ratatui apps."
+readme = "../../README.md"
+keywords = ["ratatui", "tui", "terminal", "mouse"]
+categories = ["command-line-interface"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[features]
+default = []
+vt100 = ["dep:vt100"]
+
+[dependencies]
+ratatui.workspace = true
+crossterm.workspace = true
+unicode-segmentation.workspace = true
+vt100 = { workspace = true, optional = true }
+
+[lints]
+workspace = true

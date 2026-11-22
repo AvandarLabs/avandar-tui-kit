@@ -13,7 +13,8 @@ Cargo.toml              the workspace: members, shared package settings,
                         shared dependency versions, shared lints
 justfile                one-command entry points for every check and test layer
 crates/
-└── avandar-tui-kit/    the umbrella crate: re-exports the others behind features
+├── avandar-tui-kit/    the umbrella crate: re-exports the others behind features
+└── ratatui-mouse/      mouse reporting lifecycle; interaction APIs follow in M1
 docs/
 ├── archive/            completed specs, moved from specs/ for reference
 ├── architecture.md     this file
@@ -21,6 +22,7 @@ docs/
 ├── decisions.md        one section per decision worth remembering
 ├── inventory/          every extractable UI element in the source apps
 ├── milestones.md       the order the crates are built in, and what ends each
+├── mouse.md            reporting lifecycle, stream ownership, and platform boundary
 ├── plans/              in-progress or queued implementation plans (deleted on completion)
 ├── specs/              unimplemented designs waiting to be built
 ├── terminals.md        the first-class terminals and platforms, and what each does
@@ -125,9 +127,32 @@ what each one does and [`testing.md`](testing.md) for how it is proved.
 | --- | --- |
 | `ratatui` | The rendering library every part builds on. Declared without default features so each crate turns on only what it uses. |
 | `crossterm` | The terminal backend and input event types. Pinned to the version ratatui 0.30 builds against. |
+| `unicode-segmentation` | Grapheme boundaries for mouse selection over app-held text; shared with ratatui's dependency tree. |
+| `vt100` | Optional emulator-backed mouse surfaces, enabled only by the mouse crate's `vt100` feature. |
 
 Adding to this table means saying what the crate is for, in one line, in the
 same change. See `docs/rules/rust.md`.
+
+## ratatui-mouse
+
+The first implemented slice is the [reporting lifecycle](mouse.md). `modes`
+owns the exact setup and teardown bytes, free functions, and a writer-owning
+`MouseReporting` guard. `error` provides the non-exhaustive `MouseError` with
+operation-specific variants and the original I/O source. The crate root
+re-exports these public interfaces.
+
+`modes/platform.rs` is the only place that writes and flushes the supplied
+drawing stream on macOS and Linux or invokes crossterm's console operations
+on Windows. The guard handles cleanup and failures without platform branches;
+the app keeps ownership of its event loop and panic hook. Hit-testing,
+selection, routing, and emulator-backed surfaces remain later M1 slices.
+
+| Dependency | Mouse crate use |
+| --- | --- |
+| `ratatui` | Shared UI types for the planned interaction APIs, with default features disabled. |
+| `crossterm` | Windows mouse console setup and restoration; shared event types for later interaction APIs. |
+| `unicode-segmentation` | Grapheme boundaries for the planned app-held-text selection APIs. |
+| `vt100` | Optional dependency behind feature `vt100` for planned emulator-backed surfaces; no default feature. |
 
 ## Public READMEs and crate docs
 
