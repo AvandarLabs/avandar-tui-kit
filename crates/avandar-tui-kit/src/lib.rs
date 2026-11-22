@@ -8,3 +8,7 @@
 //!
 //! The toolkit is a set of parts an app calls, not a framework: it never owns
 //! the event loop, the state, or the terminal for longer than a call.
+
+/// Mouse reporting, selection, and pane routing.
+#[cfg(feature = "mouse")]
+pub use ratatui_mouse as mouse;

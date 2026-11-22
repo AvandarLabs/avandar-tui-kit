@@ -502,3 +502,50 @@ motion, custom mapping, cursor redraw coalescing, copy and cancellation,
 wrapped trailing blanks, wide endpoints, viewport limits, and target removal.
 This is pure event and surface logic, so host and Linux tests and cross-target
 lint apply.
+
+## Umbrella and observable laboratory
+
+The umbrella's optional `mouse` feature re-exports this crate as
+`avandar_tui_kit::mouse`. It does not enable the emulator adapter. The standalone
+`mouse_lab` example requires `vt100` and owns its own loop, clock, session guard,
+and panic hook. Run it with `cargo run -p ratatui-mouse --example mouse_lab
+--features vt100 -- --log mouse.jsonl --query-modes`. Its `--settings` JSON is an
+example-only encoding: snake_case settings, integer duration keys ending in
+`_ms`, a `word_characters` string, and a `selection_modifiers` array containing
+`shift`, `alt`, `control`, `super`, `hyper`, or `meta`. Omitted settings retain
+defaults. Unknown keys, null values, wrong types, negative unsigned values,
+and zero intervals fail with help and a recovery hint.
+
+The initial focus is `left`. Tab switches between the two panes. The first
+four left rows are `alpha`, `beta`, `gamma`, and `file.rs:12`; row four contains
+CJK; rows five through seven form `soft wrap over three rows`. Later rows
+provide offscreen history. The right parser has a fixed history script,
+wrapped text, and wide cells, initially scrolled to its oldest retained row.
+The right pane's `m` cycle is off, press/release with SGR, button motion with
+SGR, press/release with default encoding. `a` switches its alternate screen.
+Copy and Forward outcomes are logged and have no clipboard or child effects.
+
+Every JSONL record is flushed and contains a strictly increasing `sequence`
+starting at one. The interaction contract is:
+
+| `kind` | Payload |
+| --- | --- |
+| `event` | `event.kind` is `Mouse`, `Key`, or `Resize`; mouse records include `mouse_kind`, `column`, `row`, and `modifiers`; key records include `code`, `key_kind`, and `modifiers`. Event enums use their Rust debug spelling. |
+| `report` | `outcome: {kind, target, ...}`, `pressed_target`, and `is_redraw_due`. Outcome names use Rust variant spelling. Copy has original `text`; Forward has numeric `bytes`. Target is `left`, `right`, `tab`, `divider`, or null for targetless outcomes. |
+| `selection` | `selection` is null or `{target, range: {start: {line,column}, end: {line,column}}, unit, stage}`. Units and stages use Rust variant spelling. Emitted after changes. |
+| `layout` | `areas: [{target,x,y,width,height}]` in drawing order, with zero-based terminal cell coordinates. Each completed draw emits one. |
+| `deadline` | `at_ms` is a monotonic millisecond offset from loop start, or null when nothing is scheduled. Emitted when the deadline changes. |
+| `tick` | `at_ms` records a tick that produced work. Its report and selection changes follow. |
+| `sequence` | `label` and numeric `bytes` for setup, teardown, screen changes, and mode queries. Parser mode changes also set `destination: "parser"`; they are never sent to the outer terminal. |
+| `mode_reply` | `phase` (`setup` or `teardown`), `mode`, `state`, and `is_absent`. Missing replies have null state. |
+| `ready` | Initial reporting and layout are complete. The sidecar is created only after this record has been flushed. |
+
+A new run removes an old ready sidecar before setup. Unix query reads are
+nonblocking and stop after all eight replies, 250 ms, or a 16 KiB cap. No raw
+reader thread survives an absent reply to compete with crossterm input.
+Windows records expected absence while using crossterm's console mouse path.
+Queries after teardown run before raw mode is restored, so replies remain
+readable. Normal exit and the panic hook reset mouse reporting, leave the
+alternate screen, show the cursor, and restore raw mode; the panic hook runs
+cleanup before delegating to the previous hook. Cleanup continues even if an
+earlier restoration operation fails.

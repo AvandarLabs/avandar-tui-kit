@@ -1,7 +1,7 @@
 [package]
 name = "ratatui-mouse"
 description = "Mouse reporting and interaction building blocks for ratatui apps."
-readme = "../../README.md"
+readme = "README.md"
 keywords = ["ratatui", "tui", "terminal", "mouse"]
 categories = ["command-line-interface"]
 version.workspace = true
@@ -24,3 +24,15 @@ vt100 = { workspace = true, optional = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+serde.workspace = true
+serde_json.workspace = true
+ratatui = { workspace = true, features = ["crossterm"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+rustix.workspace = true
+
+[[example]]
+name = "mouse_lab"
+required-features = ["vt100"]

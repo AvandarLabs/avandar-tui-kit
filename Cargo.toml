@@ -22,6 +22,8 @@ authors = ["Avandar Labs, Inc."]
 # in with `<name>.workspace = true` and adds only the features it needs, so an
 # app never compiles two copies of ratatui because two of our crates disagreed.
 [workspace.dependencies]
+# Optional umbrella integration keeps the standalone crate independently usable.
+ratatui-mouse = { path = "crates/ratatui-mouse", version = "0.1.0" }
 # The rendering library every crate here builds on.
 ratatui = { version = "0.30", default-features = false }
 # The only terminal backend the toolkit supports for now: every source app
@@ -32,6 +34,12 @@ crossterm = "0.29"
 unicode-segmentation = "1"
 # Optional emulator-backed mouse surfaces; apps without terminal panes do not compile it.
 vt100 = "0.16"
+
+# Example-only structured logs and settings; never normal library dependencies.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Example-only nonblocking terminal reply reads without unsafe code.
+rustix = { version = "1", features = ["fs", "event"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

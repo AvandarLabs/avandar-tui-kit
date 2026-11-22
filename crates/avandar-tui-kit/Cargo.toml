@@ -18,8 +18,13 @@ authors.workspace = true
 # by default.
 [features]
 default = []
+mouse = ["dep:ratatui-mouse"]
 
 [dependencies]
+ratatui-mouse = { workspace = true, optional = true }
+
+[dev-dependencies]
+crossterm.workspace = true
 
 [lints]
 workspace = true

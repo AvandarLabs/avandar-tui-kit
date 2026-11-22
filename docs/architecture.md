@@ -184,3 +184,21 @@ reimplements them as generic parts:
 | `brain` | `jpsyx/brain` | A persistent shell: tasks, fuzzy search, file tree and logs on the left, agent sessions in tabs on the right |
 | `huckleberry-cli` | `jpsyx/huckleberry-cli` | A menu-driven shell with dashboards, forms and pickers. No embedded terminal. |
 | `quickstarter` | `AvandarLabs/quickstarter` | Its `rust-tui` template carries a command palette, shortcuts table and pure keymap |
+
+### Mouse laboratory dependencies
+
+The optional umbrella `mouse` feature re-exports `ratatui-mouse` through an
+optional path-and-version dependency. `mouse_lab` is a standalone example,
+requiring the mouse crate's `vt100` feature. Its JSON settings and flushed JSONL
+protocol use `serde` and `serde_json` as dev-dependencies, with versions declared
+once in the workspace. A dev-only ratatui dependency enables the crossterm
+backend for drawing. Normal ratatui edges still disable default features, and
+the public library types acquire no serialization derives.
+
+The example's Unix-only dev-dependency on `rustix` supplies safe nonblocking
+terminal reads and readiness polling for bounded DECRPM mode queries.
+Crossterm's public event parser does not expose these replies. A synchronous
+bounded reader finishes before crossterm consumes input and leaves no blocked
+thread behind. Windows uses the console backend and records expected reply
+absence. The [mouse documentation](mouse.md) defines the observable lab
+fixtures, event loop, logs, and readiness handshake used by the terminal rigs.
