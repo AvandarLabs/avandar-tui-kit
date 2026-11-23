@@ -70,8 +70,11 @@ across all thirteen configurations, in these versions:
   iTerm2) and **tmux 3.3a** in the Linux floor container, each with tmux's
   stock configuration (an empty file) and with a full configuration (below).
 
-Every entry below is backed by `capability_probe` and checked against
-`rig/expected/*.json`, so these tables cannot drift from the code.
+The capability measurements below are backed by `capability_probe` and checked
+against `rig/expected/*.json`. M1's separate `mouse_lab` asserts the library's
+outcomes against those facts: exact text/bytes, modifier routing, ignored hover,
+and cleanup. Its local Unix and VM matrices pass; its new Windows runtime gate
+remains pending. See [testing](testing.md) for the distinction and release gates.
 
 ### Rules that hold everywhere
 
@@ -113,7 +116,7 @@ rules, not as quirks of one terminal.
 | Wheel direction | macOS WindowServer applies `com.apple.swipescrolldirection` before iTerm2 encodes SGR `64`/`65`: with natural scrolling off, hardware wheel-up arrives as `scroll_up` and wheel-down as `scroll_down`; with macOS's default natural scrolling on, wheel-up arrives as `scroll_down` and wheel-down as `scroll_up` | DOM `deltaY > 0` arrives as `scroll_down` and `deltaY < 0` as `scroll_up`. Against Orca's own scroll setting, an agent cannot measure wheel direction because Orca's CLI cannot move a pointer; the toolkit routes `ScrollUp` and `ScrollDown` as received and exposes scroll configuration to the app | DOM `deltaY > 0` arrives as `scroll_down` and `deltaY < 0` as `scroll_up` |
 | `Shift+click`, `Option/Alt+click`, `Option/Alt+drag` | `Shift+click` reported (`shift=true`); `Option+click` and `Option+drag` intercepted by iTerm2 (0 app events); direct `Cmd+click` and `Cmd+drag` reported (`alt=true`); tmux 3.8 forwards their Alt press/release but filters drag motion | macOS: `Shift+click`, `Alt+click`, and `Alt+drag` all reported with modifiers. Linux: `Shift+click` kept by `xterm.js` for selection (0 app events); `Alt+click` and `Alt+drag` reported with `alt=true` | `Shift+click` press/release kept by `xterm.js` for selection; `Alt+click` and `Alt+drag` reported across ConPTY with `alt=true` |
 | Right click, `Ctrl+click` | Not reported with default settings (opens context menu) | Reported on macOS and Linux | Reported |
-| Hover without a button | Not reported (mode `1003` stays off) | Not reported (mode `1003` stays off) | Reported (`Moved` events arrive), because ConPTY enables outer mode `1003` (`mouseTrackingMode: "any"`). Mouse handlers ignore bare `Moved` events unless hover is requested |
+| Hover without a button | Not reported (mode `1003` stays off) | Not reported (mode `1003` stays off) | Reported (`Moved` events arrive), because ConPTY enables outer mode `1003` (`mouseTrackingMode: "any"`). The mouse controller ignores bare `Moved` events, including for pane any-motion requests |
 | Native selection while the app has the mouse | `Option+drag` (contiguous) and `Option+Cmd+drag` (rectangular) bypass mouse capture (0 app events) and copy to `NSPasteboard`; `Shift+drag` and direct `Cmd+drag` select in the app; tmux 3.8 filters Cmd/Alt drag motion, so select mode supplies the complete keyboard equivalent | macOS: none by default (`Shift+drag` selects nothing unless the embedding app enables Option selection). Linux: `Shift+drag` | `Shift+drag` in `xterm.js` |
 | Option or Alt with a letter | Default `Option Key Sends = Normal` sends the macOS layout character (`å` for `Option+a`, even with Kitty `>1u` pushed); `Esc+` sends `Esc` + letter (`alt=true`) | macOS sends nothing (`macOptionIsMeta` off by default); Linux sends `alt=true` | Sends `alt=true` |
 | `Alt+Enter`, `Shift+Enter`, `Ctrl+Enter` | Without Kitty flags and `Option = Normal`, all three arrive as plain `Enter` (`Esc+` disambiguates `Option+Enter` as `alt=true`). With Kitty `>1u` pushed, all three disambiguate (`alt=true`, `shift=true`, `ctrl=true`), even with `Option = Normal` | Without Kitty flags, `Alt+Enter` arrives as `Enter` with `alt=true`, and `Shift+Enter`/`Ctrl+Enter` arrive as plain `Enter` (Orca supports Kitty `?u`/`>1u`) | `Alt+Enter` arrives as `Enter` with `alt=true`; `Shift+Enter` and `Ctrl+Enter` arrive as plain `Enter` (with or without `--push-kitty`) |

@@ -78,6 +78,17 @@ Linux runs in `rig/linux` (`rust:1.88-bookworm` with Node 22, Playwright
 Chromium, and `tmux 3.3a`), which checks the Rust 1.88 and `tmux 3.3` floors
 locally (`just linux`) and in CI using the same image.
 
+CI retains stable and Rust 1.88 build/test checks on all three platforms.
+Feature rows cover every publishable crate: empty, each declared feature alone,
+and all features, with `--all-targets`. For the current mouse crate these are
+empty/`vt100`/all; for the umbrella they are empty/`mouse`/all. Unix uses the
+existing metadata-driven `scripts/ci/check-features.sh`; Windows derives the
+same rows from Cargo metadata in Node, called from PowerShell with explicit
+failure propagation and no Bash dependency. The lab's `required-features`
+keeps its vt100-only example out of empty-feature all-target checks. These
+checks prove compilation isolation; the feature-enabled workspace tests run
+the shared surface contract against both `LineSurface` and `Vt100Surface`.
+
 ### 2. Cross-target lint
 
 The Windows (`x86_64-pc-windows-msvc`) and Linux (`x86_64-unknown-linux-gnu`)
@@ -220,7 +231,9 @@ Proved: `capability_probe` ran in live Orca `1.4.258`, alone and inside `tmux
 feature and drives X1 and X13 through Orca's terminal API. It waits for the
 lab's ready sentinel and log record, sends only keyboard input, waits for the
 exact `Copy` of `file.rs:12`, quits, and verifies the exit status, setup and
-teardown sequences, and mode replies. Native JSONL records reach stdout.
+teardown sequences, and all eight actual mode replies in both phases. Setup
+requires 1002/1006 set; inactive modes must be reset or permanently reset
+(states 2/4), never absent or unsupported. Native JSONL records reach stdout.
 The runner closes its terminal on success and failure; failed runs preserve
 the log directory named on stderr. Node.js is required for this path.
 
@@ -239,7 +252,8 @@ cargo test -p rig-probe --test orca_runner_cli
 ```
 
 The mocked driver suite checks readiness and log conditions, keyboard-only
-Copy, exact lifecycle evidence, and terminal cleanup on send, exit, or missing-Copy failure.
+Copy, exact lifecycle evidence, rejection of missing/absent/enabled inactive
+mode replies, and terminal cleanup on send, exit, or missing-Copy failure.
 The CLI suite checks feature-aware lab builds, argument forwarding, native
 records for external control, and the unchanged probe batch default.
 
@@ -380,6 +394,20 @@ output against `rig/expected/xterm-windows.json`. Locally, Layer 2
 (`just lint-targets`) catches Windows code that no longer compiles before a
 push.
 
+The workflow runs `node rig/xterm/src/harness.mjs mouse_lab mouse` from
+PowerShell, which builds the example with `vt100` and executes all X1-X14
+through ConPTY. The same lab suite runs directly on macOS and Linux, plus
+both Unix tmux configurations. Existing capability-probe comparisons remain
+separate and unchanged. Windows artifacts upload on every outcome and retain
+native mouse events, scenario evidence, any-motion/SGR setup, ignored hover,
+and clean/panic restoration observations.
+
+**Current M1 gate (2026-11-22): pending Windows execution.** The new workflow
+has not run on a pushed branch. Before the first push, obtain explicit push
+authorization; then run `just windows --wait`, inspect all three jobs of that
+run and its downloaded Windows logs, and fix failures. Cross-target Clippy and
+M0's historical ConPTY measurements do not replace this execution.
+
 `just windows` (`./rig/windows/run.sh`) inspects the current branch's latest
 `ci.yml` run via `gh`, optionally waits for completion (`--wait`), and
 downloads the Windows job logs and `RIG_XTERM_LOG_DIR` event-log artifacts
@@ -388,6 +416,31 @@ rerunning CI.
 
 A local Windows virtual machine was considered and set aside: Windows needs a
 paid license to be used properly, and CI runners come already licensed.
+
+## Human release judgments
+
+Agents run every correctness check above. A person supplies only the following
+subjective judgments with the mouse laboratory; these are separate from the
+pending Windows runtime gate. No agent substitutes a passing assertion for
+scroll feel or visual legibility.
+
+| Judgment | Current default | Reviewer | Date | Result / adjustment |
+| --- | --- | --- | --- | --- |
+| Edge scrolling interval feels controllable | 50 ms | Pending | Pending | Pending |
+| Fastest edge scrolling remains controllable | Maximum 10 rows per tick | Pending | Pending | Pending |
+| Wheel distance feels appropriate | 3 rows per notch | Pending | Pending | Pending |
+| Selection highlight is legible on a dark background | Reversed video | Pending | Pending | Pending |
+| Selection highlight is legible on a light background | Reversed video | Pending | Pending | Pending |
+| Selection highlight is legible with `NO_COLOR` | Reversed video, no fixed colors | Pending | Pending | Pending |
+
+Use `cargo run -p ratatui-mouse --example mouse_lab --features vt100` for an
+interactive session, or set `NO_COLOR=1` for the color-disabled judgment. The
+host terminal supplies the background. Its focus, select-mode, and scrolling
+keys are documented in the [crate README](../crates/ratatui-mouse/README.md).
+Record the person's name, actual review date, accept/change decision, and any
+new default in the table when performed. Reverify each changed default's unit
+tests and affected terminal scenarios before release. Until every row is
+reviewed and required runtime layers pass, the branch is not release-ready.
 
 ## Status
 
@@ -402,3 +455,6 @@ paid license to be used properly, and CI runners come already licensed.
 | `rig/expected` (all 13 normalized capability baselines) | Built and verified in workspace tests and live CI checks |
 | Cross-target lint (`just lint-targets`) | Built and verified for `x86_64-pc-windows-msvc` and `x86_64-unknown-linux-gnu` |
 | `rig/windows` (`just windows`) and GitHub Actions CI (`.github/workflows/ci.yml`) | Built and verified across Linux, macOS, and Windows (`windows-2025`) |
+| M1 mouse library/laboratory | Local macOS/Linux, xterm.js, stock/full tmux, live Orca X1/X13, and iTerm2 VM matrices verified; new Windows lab runtime remains pending |
+| M1 CI feature and mouse matrix additions | Configured for all three platforms; remote execution pending authorization and push |
+| M1 human release judgments | Pending named reviewer/date for all six rows above |

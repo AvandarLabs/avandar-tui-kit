@@ -74,8 +74,10 @@ iTerm2 and xterm.js are first-class terminals, tmux is first-class inside
 both, and macOS, Linux and Windows are first-class platforms. Every part works
 in all of them, or degrades in a way its docs describe. A default (a key
 binding, how copying works) never depends on a capability one of them lacks:
-the kitty keyboard protocol, OSC 52 and even the mouse (which stock tmux does
-not forward) add to the defaults, they never replace them. A part that touches
+the kitty keyboard protocol, OSC 52 and the mouse add to the defaults, they
+never replace them. Stock tmux forwards app-requested pane mouse input even
+when its own `mouse` option is off, but modifier motion and rapid clicks have
+version-specific limits. A part that touches
 terminal I/O is not done until it has escape-sequence tests and has run in
 each configuration. See `docs/terminals.md` for what each one is known to do
 and how they are tested.
@@ -83,6 +85,10 @@ and how they are tested.
 ## Keyboard first, mouse as well
 
 Everything a part does with the mouse is also reachable from the keyboard.
-Mouse support adds speed, never a capability the keyboard lacks. Parts must
-not break the host terminal's own mouse features: hover reporting (mode 1003)
-stays off so the terminal's Cmd-hover and Cmd-click keep working.
+Mouse support adds speed, never a capability the keyboard lacks. On macOS and
+Linux parts leave hover reporting (mode 1003) off, preserving the host's hover
+features. Windows ConPTY enables outer any-motion itself; handlers ignore bare
+moves, and docs disclose the host-hover limit. Shift and Alt select in-app only
+where delivered. Native Shift selection in xterm.js on Linux/Windows and
+Option selection in iTerm2 belong to the host. Every app with a selectable pane
+offers keyboard select mode, including where tmux 3.8 filters Alt-drag motion.

@@ -159,7 +159,7 @@ app.
 ## Mouse pass-through follows terminal conventions
 
 **Decision.** In an embedded terminal pane, mouse events go to the program
-inside in the format it asked for. Holding Shift selects text instead of
+inside in the format it asked for. Holding Shift or Alt selects text instead of
 passing the event on. When a full-screen program did not ask for mouse input,
 the wheel sends it arrow keys.
 
@@ -173,10 +173,11 @@ tmux in iTerm2 and tmux in xterm.js are each tested. The minimum supported
 tmux is 3.3.
 
 **Why.** The toolkit's apps are often run over SSH inside tmux. tmux is a
-terminal emulator of its own between the app and the real terminal, and its
-defaults turn off most of what a mouse-driven app relies on: with the stock
-configuration the app receives no mouse events at all, and the clipboard and
-extended keys depend on options the user may not have set. An app that is
+terminal emulator of its own between the app and the real terminal. Stock
+configuration forwards pane events once the app requests mouse reporting:
+`mouse off` controls tmux's own UI, not those reports. Clipboard, focus, and
+extended keys still depend on options the user may not have set, while modifier
+motion and rapid clicks vary by version. An app that is
 only tested outside tmux breaks there in ways nobody sees until they are on a
 remote machine.
 
@@ -470,12 +471,12 @@ starts it.
 
 **Why.** Shift selects instead of passing through, but xterm.js on Linux and
 Windows keeps Shift for its own selection, so the app never sees it there.
-Stock tmux forwards no mouse events at all. Select mode is the one route to
+tmux 3.8 drops Alt-drag motion in both configurations. Select mode is the route to
 selection that works in every first-class configuration, and it is the
 keyboard equivalent the "keyboard first" rule already requires.
 
-**Revisit when.** Never for the keyboard path. A second modifier for the
-mouse is an open question in the mouse spec.
+**Revisit when.** Never for the keyboard path. Alt complements Shift under the
+measured modifier decision below, without replacing select mode.
 
 ## One version and one tag for every crate
 
@@ -500,26 +501,31 @@ would compile for a dozen lines per crate.
 
 **Revisit when.** An error enum grows past what is pleasant to write by hand.
 
-## Alt joins Shift as a selection modifier, once measured
+## Alt joins Shift as a measured selection modifier
 
 **Decision.** In a pane whose program has the mouse, Alt held at a press
-selects text, in addition to Shift, on every platform. It becomes a default
-only after the xterm.js harness shows, on Linux and Windows, that Alt with a
-click and Alt with a drag reach the app. Until then the default stays Shift
-alone. Select mode, the keyboard-reachable way to select, is required of every
-app that embeds a pane regardless.
+selects text, in addition to Shift, on every platform. M0's xterm.js measurements
+confirmed Alt clicks and drags on Linux and Windows, satisfying the condition
+for enabling both modifier bits by default. M1 keeps that default. Select
+mode remains required of every app that embeds a pane.
 
 **Why.** xterm.js on Linux and Windows reserves Shift for its own selection,
 so the app never sees Shift with a click there, while Shift is the settled
 modifier. Select mode already covers that case. Alt gives the same one-gesture
-path on every platform, and on macOS Option with a click is measured to arrive.
+path in direct xterm.js on every platform. In iTerm2, Option belongs to native
+selection; Command arrives in the app as Alt. tmux 3.8 filters Alt/Command
+motion, while tmux 3.3a forwards Alt motion. The app cannot recover a gesture
+the host intercepted, so the complete keyboard path stays necessary.
 
 **Consequences.** A pane's program never receives Alt with the mouse. The
-`selection_modifiers` default in `ratatui-mouse` changes from Shift to Shift
-and Alt when the measurement passes, which is part of milestone 0's exit
-criteria.
+`selection_modifiers` default in `ratatui-mouse` is Shift and Alt, independent
+of the app's operating system: an SSH app's host terminal can run elsewhere.
+Native selection copies screen cells through the host, while in-app selection
+returns surface text/history through `Copy`. Neither route replaces the other.
 
-**Revisit when.** The measurement shows Alt does not arrive on some platform.
+**Revisit when.** New host measurements change the documented delivery limits.
+The M1 Windows laboratory still requires its own CI execution; M0 measurements
+alone do not establish the new crate's runtime correctness.
 
 ## crates.io publishing starts in milestone 2
 

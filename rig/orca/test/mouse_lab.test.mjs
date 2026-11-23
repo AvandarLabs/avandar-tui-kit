@@ -119,3 +119,31 @@ test('driver CLI help takes precedence and missing internal arguments fail witho
   assert.equal(invalid.stdout, '');
   assert.match(invalid.stderr, /Usage:/);
 });
+
+test('X1 rejects absent, missing, or enabled replies for every queried mode', async () => {
+  const { records } = await runFixture();
+  for (const phase of ['setup', 'teardown']) {
+    for (const mode of [9, 1000, 1002, 1003, 1005, 1006, 1015, 1016]) {
+      const isReply = record => record.kind === 'mode_reply'
+        && record.phase === phase && record.mode === mode;
+      const absent = structuredClone(records);
+      Object.assign(absent.find(isReply), { is_absent: true, state: null });
+      assert.throws(() => assertLabRecords(absent, true), /reply/);
+      assert.throws(() => assertLabRecords(records.filter(record => !isReply(record)), true),
+        /queried modes/);
+      const wrongState = structuredClone(records);
+      wrongState.find(isReply).state = phase === 'setup' && [1002, 1006].includes(mode) ? 2 : 1;
+      assert.throws(() => assertLabRecords(wrongState, true), /mode/);
+    }
+  }
+});
+
+test('X1 accepts reset or permanent reset for inactive modes, never unsupported replies', async () => {
+  const { records } = await runFixture();
+  for (const record of records.filter(record => record.kind === 'mode_reply')) {
+    if (!(record.phase === 'setup' && [1002, 1006].includes(record.mode))) record.state = 4;
+  }
+  assert.doesNotThrow(() => assertLabRecords(records, true));
+  records.find(record => record.kind === 'mode_reply' && record.mode === 1005).state = 0;
+  assert.throws(() => assertLabRecords(records, true), /mode 1005/);
+});

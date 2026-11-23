@@ -162,7 +162,7 @@ CI, on every pull request and every pushed branch:
 | Format check | | Yes | |
 | Clippy, tests, docs | Yes | Yes | Yes |
 | Build and test at Rust 1.88 with every feature | Yes | Yes | Yes |
-| Feature checks, one command per row | | Yes | |
+| Feature checks, one command per row | Yes | Yes | Yes |
 | xterm.js harness | Yes | Yes | Yes |
 | xterm.js harness in stock and full tmux | Yes | Yes | |
 | Event logs uploaded | On failure | On failure | Always |
@@ -180,7 +180,7 @@ specs list, and the width samples the text width policy needs:
 | 6 | Alt+Enter, Shift+Enter, Ctrl+Enter | iTerm2 | Key events over VNC, with the kitty flags pushed and without |
 | 7 | OSC 52 | iTerm2 | The probe writes a unique string with clipboard access off (the default) and on. The guest's clipboard is read through the virtual machine's command channel. |
 | 8 | OSC 52 | xterm.js in Orca | The probe writes a unique string in a live Orca terminal, and the agent reads the clipboard of the machine that shows Orca's window. Where an agent cannot read that clipboard, the row says so. |
-| 9 | Mouse in stock tmux | tmux in xterm.js and in iTerm2 | Injected click, drag and wheel. The probe logs none of them. |
+| 9 | Mouse in stock tmux | tmux in xterm.js and in iTerm2 | Injected click, drag and wheel after the app requests reporting. Both versions forward pane events, including tmux 3.3a with its own `mouse off`; modifier and rapid-click limits are recorded separately. |
 | 10 | Mouse in full tmux | tmux in xterm.js and in iTerm2 | Injected events after the probe asks for the mouse, logged at the expected cells |
 | 11 | Background color reply in tmux inside iTerm2: late or missing (architecture question 6) | iTerm2 | The probe's two-second listen logs when the reply came, or that none did |
 | 12 | OSC 52 in stock and full tmux | tmux in both terminals | Plain and wrapped forms. tmux's buffer and the outer terminal's clipboard are read back. |
@@ -278,8 +278,13 @@ crate, and dif can adopt it with no upgrade first.
 - The umbrella's `mouse` feature.
 - The first release: `CHANGELOG.md`, and the checklist of judgments in
   `testing.md` (edge-scroll interval, its maximum, the wheel step, whether the
-  highlight reads well), which the architecture spec's release steps refer to
-  and which does not exist yet.
+  highlight reads well), which the architecture spec's release steps refer to.
+
+Implementation status: the crate, laboratory, local Unix terminal matrices,
+and three-platform CI wiring are present. The current branch still needs
+Windows runtime execution and a named person's subjective release judgments,
+then the closing code reviews and walkthrough. The in-progress plan/spec stay
+in place until those gates finish. No tag, release, or adoption is implied.
 
 Inventory elements: dif's mouse modes, pane hit-testing and pointer clamping,
 multi-click tracker, word and line finders, selection model with highlight
@@ -325,20 +330,22 @@ M0.
 - Layers 3 and 7: X1 to X14 in the harness on macOS, Linux and Windows. X3
   runs on macOS and Linux. X11 asserts the behavior M0 measured on each
   platform.
-- Layer 4: X1, X2 and X13 in stock tmux, and X1 to X14 in full tmux, on macOS
-  and Linux.
+- Layer 4: X1 to X14 in both stock and full tmux, on macOS and Linux,
+  including measured Alt-motion, rapid-click, and query degradation.
 - Layer 5: the probe's mouse section in a live Orca terminal matches
   `rig/expected`, then `mouse_lab` passes X1 with `--query-modes`, and X13.
 - Layer 6: X1 to X10 and X12 to X14 in iTerm2, alone and inside both tmux
   configurations, plus the spec's three iTerm2 checks.
-- Feature checks: no features, `vt100`, every feature.
+- Feature checks on every platform: no features, each declared feature alone,
+  and every feature, for both the mouse crate and umbrella. Required-feature
+  examples must remain excluded from empty-feature all-target checks.
 - A person has done the release checklist, and any default it moved changed
   before the tag.
 - `v0.1.0` is tagged on `main`.
 - dif depends on `ratatui-mouse` at `v0.1.0` with `vt100`, all three adoption
   steps are merged, and dif's tests pass after each.
 - Docs: the crate's docs carry the keyboard equivalents table and every
-  documented limit (stock tmux, Shift on xterm.js for Linux and Windows, any
+  documented limit (tmux Alt-motion/rapid-click/query limits, Shift on xterm.js for Linux and Windows, any
   motion served as button motion, the Windows tracking mode, iTerm2's native
   selection modifier). `architecture.md` gains the crate's row, its place in
   the layout and the `unicode-segmentation` and `vt100` rows. `terminals.md`
@@ -349,7 +356,7 @@ M0.
 
 | Item | Settled where |
 | --- | --- |
-| Mouse question 1: Alt as a second selection modifier | The maintainer's yes or no, given M0's measurement, before the tag, since it widens a settled decision. Recorded in `decisions.md`, and the `selection_modifiers` default follows it. |
+| Mouse question 1: Alt as a second selection modifier | M0's Linux/Windows delivery measurements satisfy the recorded conditional decision. M1 defaults to Shift and Alt; native selection and tmux limits remain documented in `decisions.md`. |
 | Mouse question 2: Windows tracking mode | X1 on the Windows runner asserts what M0 measured. If it is 1003, the crate's docs say so. |
 | Mouse question 3: wheel direction | The crate reports the direction the terminal sends and never flips it. Stated in the crate's docs. |
 | Mouse question 4: iTerm2's native selection modifier | M0's answer goes in the crate's docs for users |

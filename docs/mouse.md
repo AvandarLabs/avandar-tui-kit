@@ -7,6 +7,25 @@ a library building block: the app owns its event loop, drawing stream, terminal
 lifecycle, and panic hook. Gesture behavior follows the
 [mouse specification](specs/ratatui-mouse.md).
 
+## Event-loop integration
+
+Create one `MouseController<T>` and keep the last drawn `HitAreas<T>` in app
+state. Rebuild areas when drawing, in stacking order, using the rendered content
+rectangle inside each border. For every input, borrow current surfaces through
+`SurfaceSet<T>` and call `handle_event` with an explicit `Instant`. Read
+`pressed_target` independently of the outcome for focus. Dispatch `Copy` to
+the app's clipboard route, `Forward` to the pane's child, and unused `Wheel`
+to the app's scrolling policy.
+
+Bound the input wait by the smaller of the app's idle wait and the duration
+until `next_deadline()`. Call `tick` on every loop pass, even if no input
+arrives, then handle its report too. Draw when the app needs it or either
+report requests a redraw. Drop temporary surface borrows before applying other
+app changes or processing more emulator output. The library owns neither the
+loop nor its clock. The [laboratory](#umbrella-and-observable-laboratory)
+demonstrates reporting, raw/alternate-screen cleanup, a panic hook, deadlines,
+focus keys, scrolling, and a select-mode entry command together.
+
 ## Using reporting
 
 Pass the stream the app draws on to `enable_mouse_reporting` and
@@ -79,9 +98,8 @@ The modes integration tests exercise exact bytes, short writes, write and
 flush error sources, cleanup after partial enable, and the guard's drop and
 explicit-cleanup paths on stream-based platforms. Cross-target lint checks
 the Windows console implementation. Live terminal behavior and Windows
-console-state restoration are verified by the M1 terminal integration tasks,
-including Task 17, rather than by treating a redirected writer on macOS as a
-Windows console.
+console-state restoration require the M1 Windows CI execution, still pending
+on this branch. A redirected writer on macOS is not a Windows console.
 
 ## Frame geometry and content coordinates
 
@@ -214,8 +232,8 @@ padding; their selected text must agree. There is no public test-support
 feature or runtime dependency on this fixture.
 
 This slice performs no terminal I/O. Host and Linux pure-logic tests and
-cross-target lint apply; real terminal scenarios are exercised by later M1
-integration tasks.
+cross-target lint apply; real terminal scenarios exercise these surfaces through
+the laboratory in [the terminal layers](testing.md).
 
 ## Selection data, reports, and highlighting
 
@@ -287,8 +305,8 @@ Pass-through tests cover both routing tables, custom selection modifiers,
 tracking filters, protocol boundaries and empty or extreme rectangles, every
 button and wheel direction with all Shift/Alt/Control combinations, both
 cursor-key modes, and requests derived from a real vt100 parser. Host and
-Linux pure-logic tests and cross-target lint apply; later M1 integration
-scenarios exercise the forwarded bytes with real terminals.
+Linux pure-logic tests and cross-target lint apply; the laboratory integration
+scenarios exercise forwarded bytes with real terminals.
 
 ## Controller ownership and forwarding
 
@@ -321,8 +339,7 @@ A new press replaces an active gesture; an orphan release is ignored.
 `gesture_owner`, `cancel_gesture`, and `forget_target` let apps inspect or drop
 this state. Forgetting also drops that target's completed-click history so a
 recreated target starts a fresh click run, while other targets' history stays.
-Wheel handling and timed redraws follow the ownership rules below. Keyboard
-select mode arrives in a later M1 slice.
+Wheel handling, timed redraws, and keyboard select mode follow the rules below.
 
 Controller tests use non-Copy targets and cover press ownership, clicks and
 click-run reset, owner relocation and disappearance, lost releases, explicit
@@ -502,6 +519,48 @@ motion, custom mapping, cursor redraw coalescing, copy and cancellation,
 wrapped trailing blanks, wide endpoints, viewport limits, and target removal.
 This is pure event and surface logic, so host and Linux tests and cross-target
 lint apply.
+
+### Every mouse action has a keyboard path
+
+| Mouse action | Keyboard equivalent | Supplied by |
+| --- | --- | --- |
+| Focus a target | App focus keys | App |
+| Activate a button, tab, or row | Its command or palette shortcut | App |
+| Wheel over a view outside selection | App row/page/history scroll commands | App |
+| Drag or extend a selection | Select mode: v/Space, then motions | Crate |
+| Double click a word; triple click a line | Select mode: W; V | Crate |
+| Scroll while selecting by edge drag or wheel | Motions, Ctrl+U/D, PageUp/Down, g/G | Crate |
+| Release to copy; click elsewhere to clear | Select mode: y/Enter; Esc | Crate |
+| Shift/Alt selection in a pane with mouse input | App select-mode command, then selection keys | App and crate |
+| Forward mouse input into a pane | The program's own keys | Pane program |
+| Wheel as arrow keys | Arrow keys | Pane program |
+| Drag a divider | App resize commands, if it supports dividers | App |
+
+Apps bind every app-owned row, including entering select mode. Correctness
+does not depend on a host delivering a modifier gesture.
+
+## Native selection and terminal limits
+
+M0's capability probe measures host behavior. M1's laboratory checks the new
+crate against those measurements with exact outcomes, copied text, and bytes;
+old probe success alone does not verify the library.
+
+| Host | Limit and available route |
+| --- | --- |
+| xterm.js on Linux/Windows | Shift-drag stays native, so no in-app gesture arrives. Alt selects in-app. |
+| xterm.js on macOS | Shift and Alt reach the app; no native selection modifier is enabled by default. |
+| iTerm2 | Option-drag selects natively, Option+Command selects a native rectangle, Shift selects in-app, and direct Command-drag arrives as Alt and selects in-app. Default right/Control clicks open menus without app events. |
+| tmux 3.8, stock/full | Pane mouse input is forwarded, but Alt/Command drag motion is filtered. Select mode supplies the complete selection path. |
+| tmux 3.3a, stock/full | Alt motion is forwarded, but rapid right/Control presses can be absorbed while their releases arrive. Orphan releases never create a click or Copy. Mode queries are unanswered. |
+| Windows ConPTY | Console setup enables outer any-motion plus SGR and delivers bare moves, which are ignored. Queries are absent and cannot prove reset. M1 runtime verification must run on Windows CI. |
+| Any-motion pane requests | Receive button motion only on every platform. Unix never enables host hover. Windows host hover can be affected by ConPTY until cleanup. |
+| Wheel | Direction is received from the host without inversion. macOS natural scrolling changes iTerm2's reports; Orca's own setting remains unmeasured. |
+
+Native selection copies terminal screen cells, including borders and adjacent
+panes, through the host clipboard. It cannot traverse a pane's own history.
+In-app selection understands the surface's soft wraps and scrollback, and
+returns text through `Copy`; the app chooses its clipboard. Neither requires
+the other. Details and measured versions live in [terminals](terminals.md).
 
 ## Umbrella and observable laboratory
 

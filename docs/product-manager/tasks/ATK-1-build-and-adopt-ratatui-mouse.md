@@ -1,7 +1,7 @@
 ---
 id: ATK-1
 title: Build and adopt ratatui-mouse
-status: todo
+status: in-progress
 priority: high
 assignee: jpsyx
 labels: [feature, terminal, release, adoption]
@@ -13,7 +13,7 @@ parent:
 github:
 blocked_by: []
 created: 2026-11-21
-updated: 2026-11-21
+updated: 2026-11-22
 ---
 
 # ATK-1: Build and adopt ratatui-mouse
@@ -32,17 +32,24 @@ release `v0.1.0`, and complete the three-stage adoption in dif.
 
 ## Notes
 
-### Pointers (as of 2026-11-21)
+### Pointers (as of 2026-11-22)
 
 - `docs/milestones.md` - Read Milestone 1 first for scope, dependencies,
   cross-repository adoption steps, and exit criteria.
-- `docs/specs/ratatui-mouse.md` - The settled crate design and public API. Use
-  it to write the implementation plan before creating crate code.
-- `docs/testing.md` and `rig/` - Extend the M0 harness with mouse scenarios
-  X1 through X14 across every required terminal layer.
+- `docs/specs/ratatui-mouse.md` and `docs/mouse.md` - The settled design and
+  implemented integration/surface contracts. Keep the unfinished spec and plan
+  until the required verification and closing workflow finish.
+- `docs/testing.md` and `rig/` - The implemented X1-X14 harnesses and release
+  gates. Finish Windows CI runtime verification and record the named person's
+  subjective judgments, then complete closing reviews before release.
 - `docs/inventory/dif.md` - Locate the mouse, selection, and pane behaviors
   that the new crate replaces during adoption.
 
 ### Log
 
 - 2026-11-21 created from roadmap Milestone 1.
+- 2026-11-22 implementation is in progress: crate and local terminal matrices
+  are present, with Task 17 wiring CI and permanent docs. Windows runtime
+  execution and the named human release judgments remain pending, followed by
+  required closing reviews/walkthrough, release, and adoption. No acceptance
+  criterion is closed by local implementation alone.

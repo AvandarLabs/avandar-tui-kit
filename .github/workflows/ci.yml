@@ -69,6 +69,16 @@ jobs:
             cargo test --workspace --all-features
           '
 
+      - name: Build and test at Rust stable with every feature
+        run: |
+          ./rig/linux/run.sh bash -c '
+            set -euo pipefail
+            export RUSTUP_HOME=/tmp/tuikit-rustup-stable
+            rustup toolchain install stable --profile minimal --no-self-update
+            cargo +stable build --workspace --all-features
+            cargo +stable test --workspace --all-features
+          '
+
       - name: Feature checks
         run: ./rig/linux/run.sh ./scripts/ci/check-features.sh
 
@@ -83,6 +93,9 @@ jobs:
           ./rig/linux/run.sh node rig/xterm/src/expected_compare.mjs \
             target/ci-event-logs/linux/stdout-xterm.json \
             rig/expected/xterm-linux.json
+          RIG_XTERM_LOG_DIR="${GITHUB_WORKSPACE}/target/ci-event-logs/linux/mouse" \
+            ./rig/linux/run.sh node rig/xterm/src/harness.mjs mouse_lab mouse \
+            > target/ci-event-logs/linux/stdout-mouse.json
 
       - name: xterm.js harness in stock and full tmux
         run: |
@@ -98,6 +111,11 @@ jobs:
           ./rig/linux/run.sh node rig/xterm/src/expected_compare.mjs \
             target/ci-event-logs/linux/stdout-tmux-full.json \
             rig/expected/xterm-tmux-full-linux.json
+          for configuration in stock full; do
+            RIG_XTERM_LOG_DIR="${GITHUB_WORKSPACE}/target/ci-event-logs/linux/mouse-tmux-${configuration}" \
+              ./rig/linux/run.sh node rig/xterm/src/tmux_session.mjs "$configuration" mouse_lab mouse \
+              > "target/ci-event-logs/linux/stdout-mouse-tmux-${configuration}.json"
+          done
 
       - name: Upload Linux event logs on failure
         if: failure()
@@ -151,6 +169,9 @@ jobs:
           cargo +1.88.0 build --workspace --all-features
           cargo +1.88.0 test --workspace --all-features
 
+      - name: Feature checks
+        run: ./scripts/ci/check-features.sh
+
       - name: xterm.js harness
         run: |
           RIG_XTERM_LOG_DIR="${GITHUB_WORKSPACE}/target/ci-event-logs/macos/harness-tests" \
@@ -161,6 +182,9 @@ jobs:
           node rig/xterm/src/expected_compare.mjs \
             target/ci-event-logs/macos/stdout-xterm.json \
             rig/expected/xterm-macos.json
+          RIG_XTERM_LOG_DIR="${GITHUB_WORKSPACE}/target/ci-event-logs/macos/mouse" \
+            node rig/xterm/src/harness.mjs mouse_lab mouse \
+            > target/ci-event-logs/macos/stdout-mouse.json
 
       - name: xterm.js harness in stock and full tmux
         run: |
@@ -176,6 +200,11 @@ jobs:
           node rig/xterm/src/expected_compare.mjs \
             target/ci-event-logs/macos/stdout-tmux-full.json \
             rig/expected/xterm-tmux-full-macos.json
+          for configuration in stock full; do
+            RIG_XTERM_LOG_DIR="${GITHUB_WORKSPACE}/target/ci-event-logs/macos/mouse-tmux-${configuration}" \
+              node rig/xterm/src/tmux_session.mjs "$configuration" mouse_lab mouse \
+              > "target/ci-event-logs/macos/stdout-mouse-tmux-${configuration}.json"
+          done
 
       - name: Upload macOS event logs on failure
         if: failure()
@@ -246,6 +275,36 @@ jobs:
           cargo +1.88.0 test --workspace --all-features
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Feature checks without Bash
+        run: |
+          $featureScript = @'
+          import { execFileSync, spawnSync } from 'node:child_process';
+          import path from 'node:path';
+          const metadata = JSON.parse(execFileSync('cargo', ['metadata', '--no-deps', '--format-version', '1'], { encoding: 'utf8' }));
+          const cratesDirectory = path.resolve('crates') + path.sep;
+          const packages = metadata.packages.filter(item => path.resolve(item.manifest_path).startsWith(cratesDirectory)
+            && !(Array.isArray(item.publish) && item.publish.length === 0));
+          if (packages.length === 0) throw new Error('No publishable workspace crates found');
+          for (const item of packages.sort((left, right) => left.name.localeCompare(right.name))) {
+            const base = ['check', '-p', item.name, '--all-targets'];
+            const rows = [['--no-default-features']];
+            for (const feature of Object.keys(item.features).sort()) {
+              if (feature.startsWith('dep:') || (feature === 'default' && item.features.default.length === 0)) continue;
+              rows.push(['--no-default-features', '--features', feature]);
+            }
+            rows.push(['--all-features']);
+            for (const row of rows) {
+              const args = [...base, ...row];
+              process.stderr.write(`Checking: cargo ${args.join(' ')}\n`);
+              const result = spawnSync('cargo', args, { stdio: 'inherit' });
+              if (result.error) throw result.error;
+              if (result.status !== 0) process.exit(result.status ?? 1);
+            }
+          }
+          '@
+          $featureScript | node --input-type=module
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: xterm.js harness
         run: |
           $env:RIG_XTERM_LOG_DIR = "${env:GITHUB_WORKSPACE}/target/ci-event-logs/windows/harness-tests"
@@ -259,6 +318,10 @@ jobs:
           [System.IO.File]::WriteAllText("$PWD/target/ci-event-logs/windows/stdout-xterm.json", ($stdoutJson -join "`n") + "`n", $utf8NoBom)
           node rig/xterm/src/expected_compare.mjs target/ci-event-logs/windows/stdout-xterm.json rig/expected/xterm-windows.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:RIG_XTERM_LOG_DIR = "${env:GITHUB_WORKSPACE}/target/ci-event-logs/windows/mouse"
+          $mouseJson = node rig/xterm/src/harness.mjs mouse_lab mouse
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          [System.IO.File]::WriteAllText("$PWD/target/ci-event-logs/windows/stdout-mouse.json", ($mouseJson -join "`n") + "`n", $utf8NoBom)
 
       - name: Upload Windows event logs
         if: always()

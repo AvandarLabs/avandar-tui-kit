@@ -87,11 +87,11 @@ function assertModeReplies(records) {
     const replies = records.filter(record => record.kind === 'mode_reply' && record.phase === phase);
     assert.deepEqual(replies.map(record => record.mode).sort((left, right) => left - right),
       [9, 1000, 1002, 1003, 1005, 1006, 1015, 1016], `X1 ${phase} queried modes`);
-    for (const mode of [1000, 1002, 1003, 1006]) {
-      const reply = replies.find(record => record.mode === mode);
+    for (const reply of replies) {
+      const { mode } = reply;
       assert.equal(reply?.is_absent, false, `X1 ${phase} mode ${mode} reply`);
-      assert.equal(reply?.state, phase === 'setup' && [1002, 1006].includes(mode) ? 1 : 2,
-        `X1 ${phase} mode ${mode}`);
+      const allowedStates = phase === 'setup' && [1002, 1006].includes(mode) ? [1] : [2, 4];
+      assert.ok(allowedStates.includes(reply.state), `X1 ${phase} mode ${mode} state ${reply.state}`);
     }
   }
 }

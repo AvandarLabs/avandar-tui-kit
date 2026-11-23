@@ -32,25 +32,27 @@ impl HighlightRects {
         let range = ContentRange::new(range.start, range.end);
         let first_line = i128::from(range.start.line);
         let last_line = i128::from(range.end.line);
+        let after_last_line = last_line + 1;
         let first_column = i128::from(range.start.column);
         let end_column = i128::from(range.end.column) + 1;
         if first_line == last_line {
             highlight.push_clipped(
-                first_line..last_line + 1,
+                first_line..after_last_line,
                 first_column..end_column,
                 origin,
                 area,
             );
         } else {
+            let second_line = first_line + 1;
             let column_limit = i128::from(u32::MAX) + 1;
             highlight.push_clipped(
-                first_line..first_line + 1,
+                first_line..second_line,
                 first_column..column_limit,
                 origin,
                 area,
             );
-            highlight.push_clipped(first_line + 1..last_line, 0..column_limit, origin, area);
-            highlight.push_clipped(last_line..last_line + 1, 0..end_column, origin, area);
+            highlight.push_clipped(second_line..last_line, 0..column_limit, origin, area);
+            highlight.push_clipped(last_line..after_last_line, 0..end_column, origin, area);
         }
         highlight
     }

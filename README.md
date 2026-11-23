@@ -8,8 +8,10 @@ panes), command palettes, hotkey tables, menus, fuzzy search, and frontends
 for coding agents. It wraps ratatui. It is not a new TUI framework: every part
 is something your app calls, and your app keeps its own event loop and state.
 
-> **Status: early.** The workspace is being set up and nothing is published
-> yet. The plan lives in [`docs/`](docs/).
+> **Status: early, unreleased.** Mouse interaction and its laboratory are
+> implemented. Windows runtime verification and human release judgments remain
+> open, followed by branch review, release, and adoption. See
+> [`docs/testing.md`](docs/testing.md) for the gates.
 
 ## How it is organized
 
@@ -18,6 +20,15 @@ under `crates/`, and the `avandar-tui-kit` umbrella crate re-exports them
 behind cargo features. An app turns on only what it uses, so a menu-driven app
 never compiles the terminal-emulation or agent crates. See
 [`docs/architecture.md`](docs/architecture.md).
+
+The implemented [`ratatui-mouse`](crates/ratatui-mouse/README.md) crate supplies
+hit areas, text selection over app-held rows and optional vt100 history, timed
+edge scrolling, keyboard select mode, and pane input routing. Enable the
+umbrella's `mouse` feature for `avandar_tui_kit::mouse`; no feature is on by
+default, and the optional `vt100` adapter is enabled separately on
+`ratatui-mouse`. The app owns its loop, focus, clipboard, children, and cleanup.
+The crate README covers integration, surface rules, keyboard equivalents, and
+terminal limits, including native versus in-app selection and tmux modifiers.
 
 ## Requirements
 
@@ -52,6 +63,10 @@ just xterm-tmux full capability_probe                                 # Layer 4:
 just orca capability_probe                                            # Layer 5: unfocused live Orca terminal
 just iterm2 capability_probe                                          # Layer 6: iTerm2 in the Tart + VNC macOS VM
 just windows                                                          # Layer 7: inspect and download Windows CI logs
+just xterm mouse_lab mouse                                            # X1-X14: mouse outcomes in xterm.js
+just xterm-tmux stock mouse_lab mouse                                 # Same suite through stock tmux
+just orca mouse_lab -- --query-modes                                  # Live keyboard Copy and lifecycle
+just iterm2 mouse_lab mouse -- --query-modes                           # iTerm2 mouse matrix in the VM
 ```
 
 See [`docs/testing.md`](docs/testing.md) for what each test layer proves and
