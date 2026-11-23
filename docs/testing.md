@@ -100,17 +100,42 @@ normalizes and verifies probe output against
 `rig/expected/xterm-{macos,linux,windows}.json`.
 
 `just xterm mouse_lab` builds only `ratatui-mouse`'s example with `vt100`
-and runs the implemented laboratory scenarios. Individual names `x1` through
-`x14` and the aggregate `mouse` are reserved for `mouse_lab`; currently X1
-(clean exit and mode queries), X2 (panic cleanup), and X3 (ignored hover) are
-implemented. X1 checks drag tracking plus SGR on Unix, any-motion plus SGR on
-Windows, and restored tracking after exit. Windows query silence is recorded
-as absence, never interpreted as reset. X3 checks hover both before and after
-the right pane requests pass-through, with a FIFO F2 event/report fence closing
-each observation window. The native lab records remain in the JSON report and
-in `RIG_XTERM_LOG_DIR` archives without probe-schema normalization. The browser
-helper reads encoding from the pinned xterm.js mouse service because its public
-mode state exposes tracking but not SGR encoding.
+and runs X1 through X14, or one scenario by its `x1` through `x14` name.
+The default aggregate `mouse` runs fifteen fresh managed sessions: X11 uses
+independent Shift and Alt sessions. X1 checks drag tracking plus SGR on Unix,
+any-motion plus SGR on Windows, and restored tracking after exit. Windows
+query silence is recorded as absence, never interpreted as reset. X3 checks
+hover before and after pane pass-through with a FIFO F2 event/report fence.
+The remaining scenarios assert target ownership, exact copied characters and
+soft-wrap joining, timed history selection, signed wheel steps, wheel during
+a drag, exact pane-relative mouse bytes and arrow keys, modifier routing,
+keyboard-only selection, and button/modifier preservation.
+
+Gesture coordinates come from the lab's logged layout. Press/release and
+wheel actions wait for their corresponding logged event and report; repeated
+clicks wait for each previous press to be processed. X7 holds until the logged
+selection reaches history row 030, beyond the initial viewport, before
+release. Its copy is checked against every original history row through the
+final endpoint. X11 checks exact native Shift selection on Linux and Windows
+before the keyboard fence, because xterm clears native selection on user input;
+that fence then proves no app selection or forwarding occurred. macOS Shift
+and all platforms' Alt gestures must copy exact app text without forwarding.
+X13 injects only keys and requires `file.rs:12` with no logged mouse input.
+
+Run the direct suite on both available platforms:
+
+```sh
+just xterm mouse_lab mouse
+just linux ./rig/xterm/run.sh mouse_lab mouse
+npm --prefix rig/xterm test
+```
+
+The native lab records remain in the JSON report and in `RIG_XTERM_LOG_DIR`
+archives without probe-schema normalization, including when an assertion
+fails. Each session reports its scenario ID, assertion result, platform,
+readiness and exit terminal states, and gesture evidence. The browser helper
+reads encoding from the pinned xterm.js mouse service because its public mode
+state exposes tracking but not SGR encoding.
 
 It uses the browser build of xterm.js, not the headless one: the code that
 turns a click or a key press into bytes exists only in the browser build, and

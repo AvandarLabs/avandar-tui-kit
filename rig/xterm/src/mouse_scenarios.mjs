@@ -1,38 +1,16 @@
 /** Mouse laboratory scenarios using the shared managed terminal session. */
 import assert from 'node:assert/strict';
 import { movePointerAcrossCells } from './cell_coords.mjs';
-import { assertMouseHover, assertMouseModeReplies, assertMouseSetup } from './mouse_assertions.mjs';
-import { readCompleteJsonLines, readJsonLines, waitForLogRecords, waitForProbeReady } from './ready_waiter.mjs';
+import { assertMouseGesture, assertMouseHover, assertMouseModeReplies, assertMouseSetup } from './mouse_assertions.mjs';
+import { readCompleteJsonLines, readJsonLines, waitForProbeReady } from './ready_waiter.mjs';
+import { runMouseFencedStep, runMouseGesture } from './mouse_fixtures.mjs';
 import { withManagedSession } from './scenarios.mjs';
 
-const IMPLEMENTED_SCENARIOS = ['x1', 'x2', 'x3'];
+export { runMouseFencedStep } from './mouse_fixtures.mjs';
+
+const IMPLEMENTED_SCENARIOS = Array.from({ length: 14 }, (_, index) => `x${index + 1}`);
 const SETUP_SEQUENCE = '\x1b[?1000h\x1b[?1002h\x1b[?1006h';
 const TEARDOWN_SEQUENCE = '\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1016l';
-
-function waitForLabRecords(context, selector, description) {
-  return waitForLogRecords(context.logPath, selector, {
-    timeoutMs: context.timeoutMs,
-    processExitPromise: context.session.exitPromise,
-    description,
-  });
-}
-
-/** Runs an action then waits for the lab to process a FIFO F2 input/log fence. */
-export async function runMouseFencedStep(context, performAction) {
-  const startCount = readCompleteJsonLines(context.logPath).length;
-  await performAction();
-  await context.bridge.page.keyboard.press('F2');
-  return waitForLabRecords(context, (records) => {
-    const trailing = records.slice(startCount);
-    const fenceOffset = trailing.findIndex((record) => record.kind === 'event'
-      && record.event?.kind === 'Key' && record.event.code === 'F(2)'
-      && record.event.key_kind !== 'Release');
-    if (fenceOffset < 0 || !trailing.slice(fenceOffset + 1).some((record) => record.kind === 'report')) {
-      return null;
-    }
-    return trailing.slice(0, fenceOffset);
-  }, 'mouse_lab F2 fence and report');
-}
 
 async function waitForMouseReady(context) {
   await waitForProbeReady(context.logPath, context.timeoutMs, context.session.exitPromise);
@@ -76,11 +54,16 @@ function assertLifecycleSequences(records) {
   }
 }
 
-async function executeMouseScenario(runtime, scenario) {
+async function executeMouseScenario(runtime, scenario, modifier = null) {
   const managedArgs = scenario === 'x1' && !runtime.extraArgs.includes('--query-modes') ? ['--query-modes'] : [];
   return withManagedSession(runtime, managedArgs, async (context) => {
     const terminalStateAtReady = await waitForMouseReady(context);
-    const pointerSteps = scenario === 'x3' ? await runHoverSteps(context, terminalStateAtReady) : null;
+    let pointerSteps = null;
+    if (scenario === 'x3') pointerSteps = await runHoverSteps(context, terminalStateAtReady);
+    else if (Number(scenario.slice(1)) >= 4) {
+      pointerSteps = await runMouseGesture(context, terminalStateAtReady, scenario, modifier);
+      assertMouseGesture(scenario, pointerSteps);
+    }
     await context.bridge.page.keyboard.press(scenario === 'x2' ? '!' : 'q');
     const exitOutcome = await context.session.waitForExit(context.timeoutMs);
     if (scenario === 'x2') {
@@ -95,19 +78,30 @@ async function executeMouseScenario(runtime, scenario) {
     if (scenario === 'x1') {
       assertMouseModeReplies(records);
     }
-    return { scenario, ...exitOutcome, terminalStateAtReady, terminalStateAfterExit, pointerSteps, records };
-  }, scenario);
+    return { scenario, ...exitOutcome, terminalStateAtReady, terminalStateAfterExit, pointerSteps, records,
+      assertion: { id: scenario.toUpperCase(), passed: true, platform: process.platform, modifier } };
+  }, modifier ? `${scenario}-${modifier.toLowerCase()}` : scenario);
 }
 
 /** Executes one lab scenario, or all currently implemented scenarios in order. */
 export async function runMouseScenario(runtime, scenario) {
   if (scenario !== 'mouse') {
     assert.ok(IMPLEMENTED_SCENARIOS.includes(scenario), `mouse scenario '${scenario}' is not implemented yet`);
-    return executeMouseScenario(runtime, scenario);
+    return runSingleMouseScenario(runtime, scenario);
   }
   const scenarios = {};
   for (const scenarioName of IMPLEMENTED_SCENARIOS) {
-    scenarios[scenarioName] = await executeMouseScenario(runtime, scenarioName);
+    scenarios[scenarioName] = await runSingleMouseScenario(runtime, scenarioName);
   }
   return { scenario: 'mouse', scenarios };
+}
+
+async function runSingleMouseScenario(runtime, scenario) {
+  if (scenario !== 'x11') return executeMouseScenario(runtime, scenario);
+  const sessions = {};
+  for (const modifier of ['Shift', 'Alt']) {
+    sessions[modifier.toLowerCase()] = await executeMouseScenario(runtime, scenario, modifier);
+  }
+  return { scenario, sessions, platformCondition: process.platform === 'darwin'
+    ? 'Shift and Alt select in the app' : 'Shift selects natively; Alt selects in the app' };
 }

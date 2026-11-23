@@ -364,5 +364,5 @@ if (isDirectCliExecution(MODULE_FILE_PATH)) {
     requireTmuxConfig: true,
     createSession: createTmuxSession,
   });
-  process.exit(exitStatus);
+  process.exitCode = exitStatus;
 }

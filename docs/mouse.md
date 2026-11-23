@@ -521,8 +521,14 @@ or `just xterm mouse_lab x1 -- --query-modes` for one scenario. The runner
 selects the example's required `vt100` feature automatically. X1 verifies
 setup and clean restoration, X2 verifies panic restoration, and X3 checks
 bare motion with and without pane pass-through using an input/log fence.
-Individual names X4 through X14 are reserved for the remaining laboratory
-scenarios. Reports keep the laboratory schema and optional session-log archives.
+X4 through X14 cover target clicks, exact row/word/wrapped-line copying,
+selection through offscreen history, wheel routing, pane-relative forwarding,
+modifier selection, arrow-key forwarding, keys-only copying, and button/modifier
+preservation. X11 runs Shift and Alt in separate fresh sessions: macOS Shift
+and all platforms' Alt select in the app, while Linux and Windows Shift select
+natively without an app gesture. Reports keep the laboratory schema, per-scenario
+assertion evidence, and optional session-log archives. See
+[testing](testing.md) for the direct host and Linux commands.
 
 The initial focus is `left`. A pointer press that changes pane focus requests
 an app redraw, including when the controller forwards the press. Tab switches

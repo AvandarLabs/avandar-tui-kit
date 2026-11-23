@@ -133,6 +133,7 @@
           };
         };
         window.__terminalState = window.__getTerminalState;
+        window.__getNativeSelection = () => terminal.getSelection();
         window.__getActiveBufferLine = (rowIndex) =>
           terminal.buffer.active.getLine(rowIndex)?.translateToString(true) ?? '';
         window.__clearOsc52Payloads = () => {

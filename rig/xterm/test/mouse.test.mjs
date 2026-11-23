@@ -132,16 +132,16 @@ test('terminal state observes actual outer SGR encoding independently of mode re
 });
 
 
-test('live mouse lab lifecycle restores clean and panic sessions and fences both hover paths', () => {
+test('live mouse lab covers X1 through X14 with independent modifier sessions and keys-only copy', () => {
   const outcome = spawnSync(process.execPath, [harnessPath, 'mouse_lab'], {
-    encoding: 'utf8', timeout: 90000, env: { ...process.env, NO_COLOR: '1' },
+    encoding: 'utf8', timeout: 180000, env: { ...process.env, NO_COLOR: '1' },
   });
   assert.equal(outcome.status, 0, outcome.stderr);
   const report = JSON.parse(outcome.stdout);
   assert.equal(report.program, 'mouse_lab');
   assert.equal(report.scenario, 'mouse');
-  assert.deepEqual(Object.keys(report.scenarios), ['x1', 'x2', 'x3']);
-  for (const scenario of Object.values(report.scenarios)) {
+  assert.deepEqual(Object.keys(report.scenarios), Array.from({ length: 14 }, (_, index) => `x${index + 1}`));
+  for (const scenario of Object.values(report.scenarios).flatMap((scenario) => scenario.sessions ? Object.values(scenario.sessions) : [scenario])) {
     assert.equal(scenario.terminalStateAtReady.mouseEncoding, 'SGR');
     assert.equal(scenario.terminalStateAfterExit.mouseTrackingMode, 'none');
     assert.ok(scenario.records.some((record) => record.kind === 'ready'));
@@ -156,5 +156,71 @@ test('live mouse lab lifecycle restores clean and panic sessions and fences both
   if (process.platform !== 'win32') {
     assert.deepEqual(report.scenarios.x3.pointerSteps.hoverPassThrough, []);
   }
+  assert.equal(report.scenarios.x11.sessions.shift.assertion.modifier, 'Shift');
+  assert.equal(report.scenarios.x11.sessions.alt.assertion.modifier, 'Alt');
+  assert.equal(report.scenarios.x13.records.filter((record) => record.kind === 'event'
+    && record.event.kind === 'Mouse').length, 0);
   assert.doesNotMatch(outcome.stderr, /\x1b\[/);
+});
+
+const outcomeRecord = (outcome) => ({ kind: 'report', outcome });
+const copyRecords = (target, text) => [outcomeRecord({ kind: 'Copy', target, text })];
+const pressRecords = (target, button = 'Left', modifiers = 'KeyModifiers(0x0)') =>
+  ['Pressed', 'Clicked'].map((kind) => outcomeRecord({ kind, target, press: { button, modifiers } }));
+const forwardRecords = (...sequences) => sequences.map((bytes) => outcomeRecord({
+  kind: 'Forward', target: 'right', bytes: [...Buffer.from(bytes)],
+}));
+const historyText = Array.from({ length: 31 }, (_, index) => `right history ${String(index).padStart(3, '0')} 界`).join('\n');
+const gestureCases = [
+  ['x4', Object.fromEntries(['left', 'right', 'tab', 'divider'].map((target) => [target, pressRecords(target)])),
+    (steps) => { steps.right[1].outcome.target = 'left'; }],
+  ['x5', { drag: copyRecords('left', 'alpha\nbeta\ngamma') },
+    (steps) => { steps.drag[0].outcome.text = 'alpha\nbeta\ngamm'; }],
+  ['x6', { word: copyRecords('left', 'file.rs:12'), line: copyRecords('left', 'soft wrap over three rows') },
+    (steps) => { steps.line[0].outcome.text = 'soft wrap\nover three\nrows'; }],
+  ['x7', { history: [{ kind: 'tick' }, { kind: 'selection', selection: { target: 'right', range: { start: { line: 0 }, end: { line: 30 } } } }, ...copyRecords('right', historyText)] },
+    (steps) => { steps.history.at(-1).outcome.text = 'right history 030 界'; }],
+  ['x8', { left: [outcomeRecord({ kind: 'Wheel', target: 'left', rows: 3, columns: 0 })], right: [outcomeRecord({ kind: 'Wheel', target: 'right', rows: -3, columns: 0 })] },
+    (steps) => { steps.right[0].outcome.rows = 3; }],
+  ['x9', { wheel: [{ kind: 'selection', selection: { target: 'left', range: { start: { line: 0, column: 0 }, end: { line: 5, column: 4 } } } }, outcomeRecord({ kind: 'Consumed' })], beforeEnd: { line: 2, column: 4 } },
+    (steps) => { steps.wheel.push(outcomeRecord({ kind: 'Wheel', target: 'left', rows: 3 })); }],
+  ['x10', { click: forwardRecords('\x1b[<0;3;3M', '\x1b[<0;3;3m'), drag: forwardRecords('\x1b[<0;3;3M', '\x1b[<32;7;5M', '\x1b[<0;7;5m'), wheel: forwardRecords('\x1b[<65;3;3M') },
+    (steps) => { steps.click[0].outcome.bytes = [...Buffer.from('\x1b[<0;54;5M')]; }],
+  ['x11', { modifier: 'Alt', drag: copyRecords('right', 'right') },
+    (steps) => { steps.drag.push(...forwardRecords('\x1b[<0;1;1M')); }],
+  ['x12', { wheel: forwardRecords('\x1b[B\x1b[B\x1b[B') },
+    (steps) => { steps.wheel[0].outcome.bytes = [...Buffer.from('\x1bOB\x1bOB\x1bOB')]; }],
+  ['x13', { keyboard: copyRecords('left', 'file.rs:12') },
+    (steps) => { steps.keyboard = []; }],
+  ['x14', { right: pressRecords('left', 'Right'), control: pressRecords('right', 'Left', 'KeyModifiers(CONTROL)') },
+    (steps) => { steps.control[1].outcome.press.modifiers = 'KeyModifiers(0x0)'; }],
+];
+
+for (const [scenario, validSteps, corrupt] of gestureCases) {
+  test(`${scenario} rejects deliberately wrong semantic gesture reports with its scenario ID`, () => {
+    mouseAssertions.assertMouseGesture(scenario, validSteps, 'darwin');
+    const wrongSteps = structuredClone(validSteps);
+    corrupt(wrongSteps);
+    assert.throws(() => mouseAssertions.assertMouseGesture(scenario, wrongSteps, 'darwin'),
+      (error) => error instanceof assert.AssertionError && error.message.includes(scenario.toUpperCase()));
+  });
+}
+
+test('X11 reserves Shift for native selection on Linux and Windows and rejects app selection', () => {
+  for (const platform of ['linux', 'win32']) {
+    mouseAssertions.assertMouseGesture('x11', { modifier: 'Shift', nativeSelection: 'right', drag: [] }, platform);
+    assert.throws(() => mouseAssertions.assertMouseGesture('x11', {
+      modifier: 'Shift', nativeSelection: 'right', drag: [{ kind: 'selection', selection: { target: 'right' } }],
+    }, platform), /X11/);
+  }
+});
+
+
+test('X11 requires native Shift selection and X14 preserves each button', () => {
+  assert.throws(() => mouseAssertions.assertMouseGesture('x11', {
+    modifier: 'Shift', nativeSelection: '', drag: [],
+  }, 'linux'), /X11/);
+  const wrongButton = structuredClone(gestureCases.find(([scenario]) => scenario === 'x14')[1]);
+  wrongButton.right[1].outcome.press.button = 'Left';
+  assert.throws(() => mouseAssertions.assertMouseGesture('x14', wrongButton), /X14/);
 });

@@ -338,5 +338,5 @@ export function isDirectCliExecution(moduleFilePath, entryPath = process.argv[1]
 
 if (isDirectCliExecution(MODULE_FILE_PATH)) {
   const exitStatus = await runHarnessCliMain();
-  process.exit(exitStatus);
+  process.exitCode = exitStatus;
 }
