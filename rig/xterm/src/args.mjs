@@ -10,10 +10,15 @@
 export const VALID_TMUX_CONFIGS = Object.freeze(['stock', 'full']);
 
 /**
- * Allowed scenario names accepted by the xterm.js and tmux harness CLIs to
- * select which capability checks execute and appear in the JSON stdout report.
+ * Mouse-lab scenario names accepted only for the mouse_lab example.
  */
+export const MOUSE_SCENARIOS = Object.freeze([
+  'mouse', ...Array.from({ length: 14 }, (_, index) => `x${index + 1}`),
+]);
+
+/** Scenario names accepted by the harness parser, including probe and lab checks. */
 export const VALID_SCENARIOS = Object.freeze([
+  ...MOUSE_SCENARIOS,
   'all',
   'batch',
   'osc52',
@@ -146,6 +151,12 @@ function validatePositionals(positionalArgs, shouldRequireTmuxConfig) {
       `Expected one of: ${VALID_SCENARIOS.join(', ')}.`,
     );
   }
+  if (MOUSE_SCENARIOS.includes(explicitScenario) && program !== 'mouse_lab') {
+    throw new CliUsageError(
+      `Scenario '${explicitScenario}' requires mouse_lab.`,
+      `Run: just xterm mouse_lab ${explicitScenario}`,
+    );
+  }
   const trailingIndex = explicitScenario === null ? nextIndex + 1 : nextIndex + 2;
   if (trailingIndex < positionalArgs.length) {
     throw new CliUsageError(
@@ -154,7 +165,8 @@ function validatePositionals(positionalArgs, shouldRequireTmuxConfig) {
     );
   }
 
-  const scenario = explicitScenario ?? (program === 'capability_probe' ? 'all' : 'passthrough');
+  const defaultScenario = program === 'mouse_lab' ? 'mouse' : program === 'capability_probe' ? 'all' : 'passthrough';
+  const scenario = explicitScenario ?? defaultScenario;
   return { tmuxConfig, program, scenario };
 }
 

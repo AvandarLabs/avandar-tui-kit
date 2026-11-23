@@ -59,7 +59,7 @@ function createModeHelpMetadata(theme, isTmux) {
       argumentLines: [
         `  ${theme.accent}<stock|full>${theme.reset}           Private tmux config profile (rig/tmux/stock.conf or rig/tmux/full.conf)`,
         `  ${theme.accent}<program>${theme.reset}              Cargo example binary name (for example: capability_probe)`,
-        `  ${theme.accent}[scenario]${theme.reset}             Scenario name (default: 'all' for capability_probe, 'passthrough' otherwise)`,
+        `  ${theme.accent}[scenario]${theme.reset}             Scenario name (default: 'mouse' for mouse_lab, 'all' for capability_probe, 'passthrough' otherwise)`,
       ],
       exampleLines: [
         '  just xterm-tmux full capability_probe',
@@ -77,9 +77,10 @@ function createModeHelpMetadata(theme, isTmux) {
       '  Build a workspace example binary and run it inside headless Playwright Chromium xterm.js 6.0.0 (Layer 3).',
     argumentLines: [
       `  ${theme.accent}<program>${theme.reset}              Cargo example binary name (for example: capability_probe)`,
-      `  ${theme.accent}[scenario]${theme.reset}             Scenario name (default: 'all' for capability_probe, 'passthrough' otherwise)`,
+      `  ${theme.accent}[scenario]${theme.reset}             Scenario name (default: 'mouse' for mouse_lab, 'all' for capability_probe, 'passthrough' otherwise)`,
     ],
     exampleLines: [
+      '  just xterm mouse_lab x1 -- --query-modes',
       '  just xterm capability_probe',
       '  just xterm capability_probe interactive',
       '  just xterm capability_probe panic --timeout-ms 15000',
@@ -105,6 +106,12 @@ export function buildHarnessHelpText(theme, { isTmux = false } = {}) {
     ...modeHelp.argumentLines,
     '',
     `${theme.heading}Scenarios:${theme.reset}`,
+    `  ${theme.accent}mouse${theme.reset}                  Run all implemented mouse_lab scenarios (mouse_lab only)`,
+    `  ${theme.accent}x1 through x14${theme.reset}          Individual mouse_lab scenarios (mouse_lab only):`,
+    '    x1 clean exit and mode queries; x2 panic cleanup; x3 ignored hover',
+    '    x4 targets; x5 selection drag; x6 multi-click; x7 edge scroll; x8 wheel',
+    '    x9 wheel during drag; x10 forwarding; x11 modifiers; x12 wheel arrows',
+    '    x13 keyboard selection; x14 buttons and Control (x4-x14 pending)',
     `  ${theme.accent}all${theme.reset}                    Run batch, osc52, interactive, and panic sequentially`,
     `  ${theme.accent}batch${theme.reset}                  Run non-interactive capability_probe sections and verify modes`,
     `  ${theme.accent}osc52${theme.reset}                  Verify OSC 52 clipboard payload delivery`,
@@ -158,12 +165,19 @@ function validateProgramAndExtraArgs(parsedArgs) {
   }
 }
 
+/** Returns the minimal feature-aware Cargo command for a workspace example. */
+export function buildCargoExampleArgs(programName, manifestPath) {
+  const selection = programName === 'mouse_lab' ? ['-p', 'ratatui-mouse'] : ['--workspace'];
+  const features = programName === 'mouse_lab' ? ['--features', 'vt100'] : [];
+  return ['build', '--manifest-path', manifestPath, ...selection, '--example', programName, ...features];
+}
+
 function invokeCargoExampleBuild(programName, stderrTheme) {
   const manifestPath = path.join(REPOSITORY_ROOT, 'Cargo.toml');
   logProgress(stderrTheme, `Building workspace example '${programName}'...`);
   const buildOutcome = spawnSync(
     'cargo',
-    ['build', '--manifest-path', manifestPath, '--workspace', '--example', programName],
+    buildCargoExampleArgs(programName, manifestPath),
     { stdio: ['ignore', 'ignore', 'inherit'] },
   );
   if (buildOutcome.error) {

@@ -99,6 +99,19 @@ focus events to xterm.js, xterm.js encodes them as it would for a person, and
 normalizes and verifies probe output against
 `rig/expected/xterm-{macos,linux,windows}.json`.
 
+`just xterm mouse_lab` builds only `ratatui-mouse`'s example with `vt100`
+and runs the implemented laboratory scenarios. Individual names `x1` through
+`x14` and the aggregate `mouse` are reserved for `mouse_lab`; currently X1
+(clean exit and mode queries), X2 (panic cleanup), and X3 (ignored hover) are
+implemented. X1 checks drag tracking plus SGR on Unix, any-motion plus SGR on
+Windows, and restored tracking after exit. Windows query silence is recorded
+as absence, never interpreted as reset. X3 checks hover both before and after
+the right pane requests pass-through, with a FIFO F2 event/report fence closing
+each observation window. The native lab records remain in the JSON report and
+in `RIG_XTERM_LOG_DIR` archives without probe-schema normalization. The browser
+helper reads encoding from the pinned xterm.js mouse service because its public
+mode state exposes tracking but not SGR encoding.
+
 It uses the browser build of xterm.js, not the headless one: the code that
 turns a click or a key press into bytes exists only in the browser build, and
 that code is what has to be tested. On Windows the pseudo-terminal is ConPTY,

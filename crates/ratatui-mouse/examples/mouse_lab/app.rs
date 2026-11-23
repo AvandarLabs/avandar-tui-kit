@@ -133,6 +133,7 @@ impl App {
             controller.handle_event(event, now, areas, surfaces)
         });
         if let Some(target @ (Target::Left | Target::Right)) = report.pressed_target {
+            report.is_redraw_due |= self.focused != target;
             self.focused = target;
         }
         if let MouseOutcome::Wheel { target, rows, .. } = &report.outcome {

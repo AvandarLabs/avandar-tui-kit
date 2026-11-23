@@ -8,6 +8,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { MOUSE_SCENARIOS } from './args.mjs';
+import { runMouseScenario } from './mouse_scenarios.mjs';
 import { startBrowserBridge } from './bridge_server.mjs';
 import {
   executeInteractiveScenario,
@@ -154,7 +156,8 @@ async function finalizeManagedSession(
   }
 }
 
-async function withManagedSession(runtime, managedArgs, runWithContext, sessionLabel = null) {
+/** Runs one example using the shared bridge, readiness log, archive, and cleanup lifecycle. */
+export async function withManagedSession(runtime, managedArgs, runWithContext, sessionLabel = null) {
   const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tuikit-xterm-'));
   const logPath = path.join(scratchDir, 'probe.jsonl');
   const label = buildSessionArchiveLabel(runtime, managedArgs, sessionLabel);
@@ -349,6 +352,9 @@ async function executePassthroughScenario(runtime) {
 }
 
 async function dispatchScenarioByName(scenarioName, runtime) {
+  if (MOUSE_SCENARIOS.includes(scenarioName)) {
+    return runMouseScenario(runtime, scenarioName);
+  }
   if (scenarioName === 'batch') {
     return executeBatchScenario(runtime);
   }

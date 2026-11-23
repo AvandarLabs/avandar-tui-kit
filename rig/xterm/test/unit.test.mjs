@@ -79,7 +79,7 @@ test('parseHarnessArgs selects all scenario for capability_probe and passthrough
     timeoutMs: 20000,
     extraArgs: [],
   });
-  assert.equal(parseHarnessArgs(['mouse_lab']).scenario, 'passthrough');
+  assert.equal(parseHarnessArgs(['custom_example']).scenario, 'passthrough');
 });
 
 test('parseHarnessArgs accepts explicit scenario, timeout-ms, and double-dash program flags', () => {

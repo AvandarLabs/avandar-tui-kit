@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/unit.test.mjs test/scenarios.test.mjs test/tmux.test.mjs test/log_archive.test.mjs test/expected.test.mjs"
+    "test": "node --test --test-concurrency=1 test/unit.test.mjs test/scenarios.test.mjs test/tmux.test.mjs test/log_archive.test.mjs test/expected.test.mjs test/mouse.test.mjs"
   },
   "dependencies": {
     "@xterm/addon-unicode11": "0.9.0",

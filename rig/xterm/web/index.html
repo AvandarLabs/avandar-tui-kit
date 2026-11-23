@@ -122,6 +122,8 @@
             screenLeftPx: layoutMetrics.screenLeftPx,
             screenTopPx: layoutMetrics.screenTopPx,
             mouseTrackingMode: terminal.modes.mouseTrackingMode,
+            // Pinned xterm.js 6.0.0 exposes encoding only through its test-rig internals.
+            mouseEncoding: terminal._core.coreMouseService.activeEncoding,
             bracketedPasteMode: terminal.modes.bracketedPasteMode,
             sendFocusMode: terminal.modes.sendFocusMode,
             synchronizedOutputMode: terminal.modes.synchronizedOutputMode,

@@ -516,8 +516,17 @@ example-only encoding: snake_case settings, integer duration keys ending in
 defaults. Unknown keys, null values, wrong types, negative unsigned values,
 and zero intervals fail with help and a recovery hint.
 
-The initial focus is `left`. Tab switches between the two panes. The first
-four left rows are `alpha`, `beta`, `gamma`, and `file.rs:12`; row four contains
+The headless laboratory runner is `just xterm mouse_lab` (default `mouse`),
+or `just xterm mouse_lab x1 -- --query-modes` for one scenario. The runner
+selects the example's required `vt100` feature automatically. X1 verifies
+setup and clean restoration, X2 verifies panic restoration, and X3 checks
+bare motion with and without pane pass-through using an input/log fence.
+Individual names X4 through X14 are reserved for the remaining laboratory
+scenarios. Reports keep the laboratory schema and optional session-log archives.
+
+The initial focus is `left`. A pointer press that changes pane focus requests
+an app redraw, including when the controller forwards the press. Tab switches
+between the two panes. The first four left rows are `alpha`, `beta`, `gamma`, and `file.rs:12`; row four contains
 CJK; rows five through seven form `soft wrap over three rows`. Later rows
 provide offscreen history. The right parser has a fixed history script,
 wrapped text, and wide cells, initially scrolled to its oldest retained row.

@@ -330,3 +330,25 @@ impl std::io::Write for FlushFailure {
         Err(std::io::Error::other("log flush failed"))
     }
 }
+
+#[test]
+fn pointer_focus_change_requests_redraw_even_when_forwarded() {
+    let mut app = app::App::new(MouseSettings::default());
+    app.set_layout(Rect::new(0, 0, 80, 24));
+    let now = std::time::Instant::now();
+    let _ = app.handle_event(
+        &Event::Key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE)),
+        now,
+    );
+    let area = app.areas.area_of(&app::Target::Right).unwrap();
+    let event = Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: area.x,
+        row: area.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    let report = app.handle_event(&event, now);
+    assert_eq!(app.focused, app::Target::Right);
+    assert!(matches!(report.outcome, MouseOutcome::Forward { .. }));
+    assert!(report.is_redraw_due);
+}
