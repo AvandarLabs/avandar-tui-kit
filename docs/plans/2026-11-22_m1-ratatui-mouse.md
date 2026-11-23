@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > `superpowers:subagent-driven-development` (recommended) or
 > `superpowers:executing-plans` to implement this plan task-by-task. Steps use
-> checkbox (`- [ ]`) syntax for tracking. Load `super-wrapper` before execution
+> checkbox (`- [x]`) syntax for tracking. Load `super-wrapper` before execution
 > and apply the current frontend's routing and review rules.
 
 **Goal:** Build and verify `ratatui-mouse`, release the workspace's `v0.1.0`
@@ -24,8 +24,9 @@ Public API and Test plan sections. Read it with
 [terminal measurements](../terminals.md), [testing](../testing.md),
 [Rust rules](../rules/rust.md), and [TUI rules](../rules/tui.md).
 
-**State:** Queued for review. Writing this plan does not authorize execution,
-pushes, merges, PRs, tags, or publication. No implementation has started.
+**State:** Implementation approved and in progress. Tasks 1 to 14 are
+implemented and reviewed. Pushes, merges, PRs, tags, and publication remain
+separate authorization boundaries.
 
 ## Global Constraints
 
@@ -441,18 +442,18 @@ modify controller state, `src/selection.rs`, and `docs/mouse.md`.
 `selected_text<S: SurfaceSet<T>>(&self,&mut S) -> Option<String>` and selection
 paths of `handle_event`. Consume surface expansion methods from Task 3.
 
-- [ ] Write `selection_stages_distinguish_click_from_returning_drag`: a
+- [x] Write `selection_stages_distinguish_click_from_returning_drag`: a
   single press has Pressed state and no selected text; release emits Clicked;
   a drag away then back stays Dragging and release copies one whole character.
-- [ ] Write `multi_click_drag_preserves_anchor_unit`: double-click a path,
+- [x] Write `multi_click_drag_preserves_anchor_unit`: double-click a path,
   drag in either direction to extend by words; triple-click wrapped text,
   extend by logical lines; original unit remains included. A drag resets the
   click run; a one-cell click drift still continues it.
-- [ ] Write `modifier_extension_and_copy_settings`: Shift and Alt each
+- [x] Write `modifier_extension_and_copy_settings`: Shift and Alt each
   extend a Done selection on its own target, blank-only selection drops,
   copy-off emits no Copy, keep-off clears after copy, and key/resize clearing
   obey their flags. Bare modifier keys and key releases do not clear.
-- [ ] Write `selection_cancellation_never_copies`: disappearance, changed
+- [x] Write `selection_cancellation_never_copies`: disappearance, changed
   areas, focus loss, replacement press, and cancelled gesture produce no
   phantom copy or highlight outside the owner. Snap wide-character endpoints
   before storing ranges and before highlight projection.
@@ -461,7 +462,7 @@ paths of `handle_event`. Consume surface expansion methods from Task 3.
   assert!(matches!(release_report.outcome, MouseOutcome::Copy { ref text, .. } if text == "界"));
   ```
 
-- [ ] Run `cargo test -p ratatui-mouse --test controller_selection` red;
+- [x] Run `cargo test -p ratatui-mouse --test controller_selection` red;
   implement the spec's stage/unit transitions and finish/drop rules. Rerun
   it and `just check`; commit as `feat(mouse): add selection gesture controller`.
 
@@ -474,15 +475,15 @@ modify controller event dispatch and `docs/mouse.md`.
 and `next_deadline() -> Option<Instant>`. Complete wheel dispatch, including
 `Wheel { rows, columns, modifiers, target }` for horizontal and vertical input.
 
-- [ ] Write `edge_ticks_scroll_without_new_events`: dragging below the area
+- [x] Write `edge_ticks_scroll_without_new_events`: dragging below the area
   schedules now and never scrolls itself; tick scrolls overshoot rows capped
   at 10, then schedules +50 ms. Repeated drag events alone never accelerate it.
   At a boundary, release, owner removal, resize or cancellation clears work.
-- [ ] Write `wheel_during_selection_updates_content_end`: normal wheel
+- [x] Write `wheel_during_selection_updates_content_end`: normal wheel
   returns signed 3-row Wheel for the hovered target regardless of focus;
   active selection scrolls its owner, updates the endpoint, and emits no Wheel.
   Exercise pane request routing and horizontal columns without flipping direction.
-- [ ] Write `redraw_budget_delivers_pending_change_at_deadline`: changes
+- [x] Write `redraw_budget_delivers_pending_change_at_deadline`: changes
   within 16 ms suppress extra redraws, tick at the deadline marks redraw due,
   and next_deadline is the minimum of redraw and edge work. A late tick does
   not replay a burst of missed scrolling intervals. Zero intervals/maxima and
@@ -494,7 +495,7 @@ and `next_deadline() -> Option<Instant>`. Complete wheel dispatch, including
   // Inspect minimum with a pending redraw too; edge-only next tick is +50 ms.
   ```
 
-- [ ] Run `cargo test -p ratatui-mouse --test controller_timing` red;
+- [x] Run `cargo test -p ratatui-mouse --test controller_timing` red;
   implement timing from injected Instant values, one due scroll step per tick,
   and bounded arithmetic. Rerun and `just check`; commit as
   `feat(mouse): add timed edge scrolling wheel routing and redraw budget`.
@@ -509,14 +510,14 @@ and `next_deadline() -> Option<Instant>`. Complete wheel dispatch, including
 `MouseController::{enter_select_mode,exit_select_mode,select_mode_target,select_mode_cursor,apply_command}`
 with the exact signatures in the controller API block.
 
-- [ ] Write `keymap_covers_the_spec_and_ignores_releases`: table-test h/j/k/l,
+- [x] Write `keymap_covers_the_spec_and_ignores_releases`: table-test h/j/k/l,
   arrows, w/b, 0/Home, $/End, Ctrl+U/D, PageUp/Down, g/G, v/Space, V, W,
   y/Enter, Esc/q. Releases and unbound keys map to None.
-- [ ] Write `keyboard_only_selection_scrolls_and_copies`: enter on the last
+- [x] Write `keyboard_only_selection_scrolls_and_copies`: enter on the last
   visible row, v then motions selects cells, V selects lines, W selects a
   word, y/Enter copies and leaves, Cancel clears then leaves on the second
   press. Traverse wrapped/wide text and both viewport limits.
-- [ ] Write `select_mode_intercepts_before_pane_forwarding`: unbound key
+- [x] Write `select_mode_intercepts_before_pane_forwarding`: unbound key
   presses are consumed, target's mouse always selects, another-target press
   exits, missing target/area refuses entry, and disabling built-in key mapping
   still permits `apply_command` while preventing key leakage to the program.
@@ -526,7 +527,7 @@ with the exact signatures in the controller API block.
   assert!(controller.select_mode_target().is_none()); // after Copy or second Cancel
   ```
 
-- [ ] Run `cargo test -p ratatui-mouse --test select_mode` red; implement
+- [x] Run `cargo test -p ratatui-mouse --test select_mode` red; implement
   pure motion/command decisions and controller integration. Rerun and
   `just check`; commit as `feat(mouse): add keyboard select mode`.
 
@@ -540,10 +541,10 @@ mouse `examples/mouse_lab.rs`, `examples/mouse_lab/{args,app,draw,log,session}.r
 `mouse_lab` requires feature `vt100`; flags are exactly `--log <path>`,
 `--query-modes`, and `--settings <json>` plus standard help. No child is spawned.
 
-- [ ] Write `umbrella_mouse_reexport_is_usable`: import
+- [x] Write `umbrella_mouse_reexport_is_usable`: import
   `avandar_tui_kit::mouse::{HitAreas,MouseController,MouseSettings}` with feature
   mouse, create a controller and hit list, and call a no-surface event path.
-- [ ] Write `lab_fixture_and_log_records_are_deterministic`: left text includes
+- [x] Write `lab_fixture_and_log_records_are_deterministic`: left text includes
   `file.rs:12`, CJK, a three-row soft wrap, and offscreen history; right parser
   has fixed history and wide cells. Log lines distinguish event, report,
   selection, deadline, tick, sequence, layout, and readiness records. Tests
@@ -568,24 +569,27 @@ mouse `examples/mouse_lab.rs`, `examples/mouse_lab/{args,app,draw,log,session}.r
   assert!(controller.gesture_owner().is_none());
   ```
 
-- [ ] Run `cargo test -p avandar-tui-kit --features mouse --test mouse` and
+- [x] Run `cargo test -p avandar-tui-kit --features mouse --test mouse` and
   `cargo test -p ratatui-mouse --features vt100 --test mouse_lab` red. Implement
   the umbrella feature with optional path-and-version dependency and docs.
-- [ ] Implement the lab's own app loop: Tab focuses; s starts select mode;
+- [x] Implement the lab's own app loop: Tab focuses; s starts select mode;
   m cycles requests; a toggles alternate screen; PageUp/Down scroll; q quits;
   ! panics outside select mode. Inside select mode its keys win. Draw records
   areas and layout; copy and Forward are logged, never sent to clipboard/child.
-- [ ] Use a flushed JSONL `kind: ready` record plus `<log>.ready` only after
+- [x] Use a flushed JSONL `kind: ready` record plus `<log>.ready` only after
   mouse modes and initial layout are ready. Log mode-query replies or bounded
   absence; missing replies never gate input forever. A panic hook restores
   modes before panic output, raw mode and alternate screen are also restored.
-- [ ] Add serde 1 with derive and serde_json 1 for lab JSON settings/logs as
+- [x] Add serde 1 with derive and serde_json 1 for lab JSON settings/logs as
   dev-dependencies, declared once in workspace dependencies and kept off
   normal dependency edges. No
   library serde derives or parser dependency is permitted. Add a dev-only
   ratatui dependency with its `crossterm` feature for the example backend;
-  normal library dependency edges keep ratatui defaults off.
-- [ ] Run both suites, `cargo build -p ratatui-mouse --example mouse_lab --features vt100`,
+  normal library dependency edges keep ratatui defaults off. A target-specific
+  dev-only rustix dependency may provide safe nonblocking Unix mode-query I/O,
+  because crossterm drops DECRPM replies; no blocked reader may survive a
+  bounded absence and compete for later event input.
+- [x] Run both suites, `cargo build -p ratatui-mouse --example mouse_lab --features vt100`,
   `./scripts/ci/check-features.sh`, and `just check`; expect pass. Commit as
   `feat(mouse): expose umbrella feature and add mouse lab`.
 
@@ -601,7 +605,7 @@ is `mouse`; existing probe/default passthrough behavior stays compatible.
 `runMouseScenario(runtime, scenario) -> Promise<object>` returns per-scenario
 results and uses existing session lifecycle, bridge, readiness, and log archive.
 
-- [ ] Write Node tests that parser/build dispatch selects
+- [x] Write Node tests that parser/build dispatch selects
   `cargo build -p ratatui-mouse --example mouse_lab --features vt100`, preserves
   extra arguments, rejects lab scenarios for other programs, and keeps probe
   builds unchanged. Include new test files in the explicit npm test script.
@@ -611,35 +615,38 @@ results and uses existing session lifecycle, bridge, readiness, and log archive.
   assert.throws(() => parseHarnessArgs(['capability_probe', 'x1']), CliUsageError);
   ```
 
-- [ ] Run `node --test rig/xterm/test/mouse.test.mjs` red, then implement
+- [x] Run `node --test rig/xterm/test/mouse.test.mjs` red, then implement
   dispatch and feature-aware builds. Do not turn on every workspace feature
   for every existing example or normalize mouse reports through the probe schema.
   Update help for all new scenarios; help must exit 0 without terminal/build
   side effects. Invalid invocations print usage and recovery guidance to
   stderr, leave machine stdout empty, and fail nonzero. Preserve NO_COLOR
   and redirected-output behavior of the changed entrypoints.
-- [ ] Add X1, X2, X3: clean exit/panic restores direct outer tracking; Unix
+- [x] Add X1, X2, X3: clean exit/panic restores direct outer tracking; Unix
   setup is drag+SGR; Windows setup is any+SGR with missing DECRQM replies.
   Bare motion produces no actionable controller result on Windows, no raw
   motion on Unix. Include hover while pane pass-through is enabled.
-- [ ] Run `just xterm mouse_lab x1 -- --query-modes` before/after lifecycle
+- [x] Run `just xterm mouse_lab x1 -- --query-modes` before/after lifecycle
   implementation, expecting semantic assertion failure then pass; run X2/X3
   with their individual names. Synchronize pointer-negative checks with an
   input/log fence, not an absence check after a fixed delay.
-- [ ] Run `npm --prefix rig/xterm test` and `just check`; preserve probe
+- [x] Run `npm --prefix rig/xterm test` and `just check`; preserve probe
   baselines. Commit as `test(mouse): drive mouse lab lifecycle in xterm`.
 
 ## Task 13: xterm gesture and keyboard scenarios X4 to X14
 
 **Files:** Extend `src/mouse_scenarios.mjs`, `src/mouse_assertions.mjs`,
 `test/mouse.test.mjs`; split gesture fixtures to `src/mouse_fixtures.mjs` if
-needed; modify `docs/testing.md`.
+needed; modify `docs/testing.md` and add a narrow native-selection getter
+to `rig/xterm/web/index.html` for the X11 host-selection proof. Fix CLI
+entrypoint stdout draining with `process.exitCode` if aggregate JSON exposes
+forced-exit truncation; preserve exit statuses.
 
 **Interfaces:** Scenarios consume logged lab layout to convert cells to DOM
 coordinates. The report includes scenario IDs, success/assertion details, and
 platform conditions; failures retain raw JSONL through RIG_XTERM_LOG_DIR.
 
-- [ ] Write assertion tests against deliberately wrong reports: X4 wrong
+- [x] Write assertion tests against deliberately wrong reports: X4 wrong
   pane/target, X5 wrong copied characters, X6 split wrapped line, X7 copy
   missing history, X8 wrong signed step, X9 leaked Wheel, X10 wrong pane bytes,
   X11 modifier leak, X12 wrong arrow encoding, X13 missing keyboard Copy,
@@ -651,15 +658,15 @@ platform conditions; failures retain raw JSONL through RIG_XTERM_LOG_DIR.
   assert.equal(keyboardCopy.outcome.text, 'file.rs:12'); // X13 selects path with W
   ```
 
-- [ ] Run Node tests red, then implement each browser interaction and its
+- [x] Run Node tests red, then implement each browser interaction and its
   exact spec assertion. X7 waits for selection reaching a known history row
   before release. Double/triple clicks wait on previous press processing;
   timing intervals only express the gesture, never readiness sleeps.
-- [ ] X11 runs independent fresh sessions for Shift and Alt. On Linux and
+- [x] X11 runs independent fresh sessions for Shift and Alt. On Linux and
   Windows Shift causes native selection and no app selection/Forward, while
   raw Windows Moved may occur. Alt selects/copies on all direct platforms.
   X13 injects only keyboard events and checks Copy without any mouse input.
-- [ ] Run `just xterm mouse_lab mouse`, then
+- [x] Run `just xterm mouse_lab mouse`, then
   `just linux ./rig/xterm/run.sh mouse_lab mouse`; all X1..X14 must pass.
   Run Node tests and `just check`; document commands and commit as
   `test(mouse): cover mouse gestures selection and pass-through in xterm`.
@@ -674,7 +681,7 @@ plus `docs/testing.md` and `docs/mouse.md`.
 dispatches the same suite through a private server, with version/config
 expectations rather than a single `mouse on` boolean assumption.
 
-- [ ] Write `tmux_mouse_expectations_follow_measured_version` asserting
+- [x] Write `tmux_mouse_expectations_follow_measured_version` asserting
   stock and full both forward pane events, 3.8 omits Alt-drag motion, 3.3a
   rapid right/Control clicks may arrive Up-only, and missing queries are not
   reported as reset states. Incorrect no-stock-mouse expectations must fail.
@@ -686,15 +693,15 @@ expectations rather than a single `mouse on` boolean assumption.
   assert.equal(tmux33RapidRightClick.hasUp, true);
   ```
 
-- [ ] Run Node tests red; implement version-aware assertions. For X1/X2
+- [x] Run Node tests red; implement version-aware assertions. For X1/X2
   distinguish app-requested modes from tmux's own outer tracking after app
   exit. Keep keyboard Copy mandatory, not an excuse to skip positive events.
-- [ ] Run `just xterm-tmux stock mouse_lab mouse` and
+- [x] Run `just xterm-tmux stock mouse_lab mouse` and
   `just xterm-tmux full mouse_lab mouse` on macOS; run both through
   `just linux ./rig/xterm/run-tmux.sh <config> mouse_lab mouse` for 3.3a.
   All fourteen scenarios execute in each configuration with the documented
   X11/X14 degradation assertions, not silent skips.
-- [ ] Rerun Node tests and `just check`; commit as
+- [x] Rerun Node tests and `just check`; commit as
   `test(mouse): assert stock and full tmux behavior`.
 
 ## Task 15: Live Orca keyboard verification
