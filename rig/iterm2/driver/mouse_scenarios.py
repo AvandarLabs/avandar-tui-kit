@@ -56,22 +56,29 @@ try:
                     client.mouseMove(int(tokens[index]),int(tokens[index+1])); index+=2
                 elif command in ('mousedown','mouseup','click'):
                     button=int(tokens[index]); index+=1
-                    if command!='mouseup': client.mouseDown(button); held_buttons.add(button)
+                    if command!='mouseup': held_buttons.add(button); client.mouseDown(button)
                     if command!='mousedown': client.mouseUp(button); held_buttons.discard(button)
                 elif command in ('key','keydown','keyup'):
                     key=tokens[index]; index+=1
                     if command=='key': client.keyPress(key)
-                    elif command=='keydown': client.keyDown(key); held_keys.add(key)
+                    elif command=='keydown': held_keys.add(key); client.keyDown(key)
                     else: client.keyUp(key); held_keys.discard(key)
                 else: raise ValueError('Unsupported VNC command '+command)
             print(json.dumps({'ok':True}),flush=True)
         except Exception as error:
             print(json.dumps({'error':str(error)}),flush=True)
 finally:
-    for key in held_keys: client.keyUp(key)
-    for button in held_buttons: client.mouseUp(button)
-    client.disconnect()
-    api.shutdown()
+    cleanup_errors=[]
+    def attempt_cleanup(action, *arguments):
+        try: action(*arguments)
+        except Exception as error: cleanup_errors.append(str(error))
+    for key in held_keys: attempt_cleanup(client.keyUp,key)
+    for button in held_buttons: attempt_cleanup(client.mouseUp,button)
+    attempt_cleanup(client.disconnect)
+    attempt_cleanup(api.shutdown)
+    if cleanup_errors:
+        print('Persistent VNC cleanup failed: '+'; '.join(cleanup_errors),file=sys.stderr,flush=True)
+        sys.exit(1)
 '''
 
 
@@ -93,7 +100,7 @@ class PersistentLabVnc:
             self._response(15)
             return self
         except BaseException:
-            self.__exit__()
+            self.__exit__(*sys.exc_info())
             raise
 
     def _response(self, timeout):
@@ -124,15 +131,35 @@ class PersistentLabVnc:
         """Uses the existing CoreGraphics calibration and its cached mapping."""
         return self.original.calibrate_modifiers(vm)
 
-    def __exit__(self, *_error):
-        self.process.stdin.close()
+    def __exit__(self, _error_type=None, original_error=None, _traceback=None):
+        cleanup_errors = []
+        self._attempt_cleanup(cleanup_errors, 'stdin close', self.process.stdin.close)
+        self._reap_process(cleanup_errors)
+        self._attempt_cleanup(cleanup_errors, 'stdout close', self.process.stdout.close)
+        if self.process.returncode not in (None, 0):
+            cleanup_errors.append(f'child exit status {self.process.returncode}')
+        if cleanup_errors:
+            description = 'Persistent VNC cleanup failed: ' + '; '.join(cleanup_errors) + '.'
+            if original_error is not None:
+                description += f' Original failure: {original_error}.'
+            raise DriverRuntimeError(description, 'Inspect the VNC child diagnostics and guest held-input state.') from original_error
+
+    def _reap_process(self, cleanup_errors):
         try:
             self.process.wait(timeout=15)
         except subprocess.TimeoutExpired:
-            self.process.kill()
-            self.process.wait(timeout=5)
-        finally:
-            self.process.stdout.close()
+            cleanup_errors.append('child shutdown timed out')
+            self._attempt_cleanup(cleanup_errors, 'child kill', self.process.kill)
+            self._attempt_cleanup(cleanup_errors, 'child reap', lambda: self.process.wait(timeout=5))
+        except Exception as error:
+            cleanup_errors.append(f'child wait: {error}')
+
+    @staticmethod
+    def _attempt_cleanup(cleanup_errors, label, action):
+        try:
+            action()
+        except Exception as error:
+            cleanup_errors.append(f'{label}: {error}')
 
 
 def require(condition, description):

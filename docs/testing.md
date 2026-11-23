@@ -294,8 +294,15 @@ report the held keys, and native selection keeps those keys held until the
 clipboard confirms its update. Gesture positions combine the logged content
 rectangles with CoreGraphics window bounds and the guest terminal grid. A
 single acknowledged VNC connection retains pointer position, held buttons, and
-modifiers across log waits, releases input on exit, and is closed and reaped
-by its owner. The lab's physical Shift+1 (`!`) panic and `q` exit are
+modifiers across log waits. It owns input before issuing down calls, so a
+failure after delivery still triggers release. Every held key/button release,
+disconnect, and API shutdown is attempted independently. Its owner closes and
+reaps the child even if closing stdin fails, escalating a shutdown timeout to
+a bounded kill/reap. Cleanup failures and nonzero child exits fail the driver,
+retaining any original scenario or startup error as the cause. Real subprocess
+and pipe regressions cover delivered-down errors, each cleanup failure, and
+broken stdin during ordinary and startup cleanup. The lab's physical Shift+1
+(`!`) panic and `q` exit are
 independent of the probe's F12 binding.
 
 ```sh
