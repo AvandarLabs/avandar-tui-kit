@@ -265,11 +265,7 @@ def _assert_modifier_gesture(steps, tmux_version):
         require(not outcomes(steps[label], 'Forward'), f'{label} forwarded to pane.')
         if has_tmux38_motion_filter:
             require(not outcomes(steps[label], 'Copy'), 'tmux 3.8 Command gesture must not invent a copied drag.')
-            for record in steps[label]:
-                selection = record.get('selection')
-                if selection:
-                    require(selection['stage'] == 'Pressed' and selection['range']['start'] == selection['range']['end'],
-                            'Filtered Command motion must leave only a zero-length press selection.')
+            _assert_filtered_command_selection(steps[label])
         else:
             check_copy(steps[label], 'right', 'right')
     for label, text in [('option', 'alpha'), ('option_command', 'alp\nbet\ngam')]:
@@ -279,6 +275,17 @@ def _assert_modifier_gesture(steps, tmux_version):
                 and not outcomes(native['records'], 'Forward')
                 and not any(record.get('kind') == 'selection' and record.get('selection') for record in native['records']),
                 f'Native {label} reached app.')
+
+
+def _assert_filtered_command_selection(records):
+    selections = [record['selection'] for record in records
+                  if record.get('kind') == 'selection' and record.get('selection') is not None]
+    require(bool(selections), 'Filtered Command gesture must observe a right-target Pressed selection.')
+    for selection in selections:
+        content_range = selection.get('range', {})
+        require(selection.get('target') == 'right' and selection.get('stage') == 'Pressed'
+                and content_range.get('start') is not None and content_range.get('start') == content_range.get('end'),
+                'Filtered Command motion must leave only a right-target zero-length Pressed selection.')
 
 
 def lab_step(context, session, action, dismiss_menu=False):

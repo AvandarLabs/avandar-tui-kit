@@ -321,9 +321,11 @@ the terminal intentionally suppresses.
 X11 runs Shift, Command, Option, and Option+Command in separate sessions.
 Shift and Command routing is checked in the app's decoded events (Command is
 represented by Alt). Direct Command drag copies exact app text; tmux 3.8
-requires Alt Down/Up, no Drag or Copy, and only a zero-length Pressed
-selection. X13 still supplies the complete keyboard equivalent in both tmux
-configurations. Present mode-reply state `0` for unsupported legacy formats is
+requires Alt Down/Up, no Drag or Copy, and at least one right-target
+zero-length Pressed selection. Every non-null selection must satisfy that
+condition; missing or exclusively null observations fail. X13 still supplies
+the complete keyboard equivalent in both tmux configurations. Present
+mode-reply state `0` for unsupported legacy formats is
 retained as unsupported, never treated as absence or reset. Native Option
 contiguous selection and Option+Command rectangular selection are checked
 against exact guest clipboard text and must produce no app selection or
@@ -334,7 +336,10 @@ Reports retain the preference phase and raw VNC buttons so this reversal is
 explicit. Clipboard text, scrolling preferences, the test-only copy-selection
 setting, and iTerm2 defaults are restored on success and failure. The saved
 iTerm2 domain is imported through the preferences API so cached test values
-cannot overwrite the restored settings. Signal handling unwinds guest
+cannot overwrite the restored settings. A failed import retains the guest
+backup, attempts the independent global-setting cleanup, and reports failure.
+A later run refuses to overwrite that recovery backup and prints the guest
+import command needed to recover it. Signal handling unwinds guest
 restoration before stopping the VM. A test-only `NoSyncTipsDisabled`
 preference prevents the timed Tips opt-in dialog from blocking launch and is
 restored with the complete iTerm2 preferences backup.
@@ -346,7 +351,9 @@ forced-failure audits for Option and Option+Command clipboard timeouts,
 Control-barrier failure, and incorrect copied text all restore the complete
 canonical preferences, global settings, clipboard text, and actual guest
 modifier flags to their saved state. No preference keys are excluded from the
-comparison.
+comparison. An injected preferences-import failure also preserves the saved
+backup through a refused subsequent backup attempt, restores independent
+globals, and recovers the complete saved state when the import succeeds.
 
 Set `RIG_ITERM2_LOG_DIR` to retain every native session JSONL, the aggregate
 JSON report, and a failure screenshot. Screenshots diagnose launch or menu

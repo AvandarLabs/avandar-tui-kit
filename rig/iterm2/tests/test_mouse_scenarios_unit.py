@@ -238,8 +238,20 @@ class PersistentCleanupTests(unittest.TestCase):
             launcher=root/'vncdo'; launcher.write_text('#!'+sys.executable+'\n')
             original=mock.Mock(vncdo_bin=str(launcher),endpoint=VncEndpoint('localhost',5900,'test'),env={'PYTHONPATH':str(root)})
             vnc=PersistentLabVnc(original)
-            with self.assertRaises(DriverRuntimeError):
-                with vnc: pass
+            import subprocess
+            original_popen=subprocess.Popen
+            with tempfile.TemporaryFile(mode='w+t') as diagnostics:
+                def start_with_captured_diagnostic(*args,**kwargs):
+                    kwargs['stderr']=diagnostics
+                    return original_popen(*args,**kwargs)
+                with mock.patch('driver.mouse_scenarios.subprocess.Popen',side_effect=start_with_captured_diagnostic):
+                    with self.assertRaises(DriverRuntimeError):
+                        with vnc: pass
+                diagnostics.seek(0)
+                diagnostic=diagnostics.read()
+                self.assertTrue(diagnostic.startswith('Traceback (most recent call last):'))
+                self.assertTrue(diagnostic.endswith('RuntimeError: bootstrap failed\n'))
+                self.assertEqual(diagnostic.count('Traceback'),1)
             self.assertIsNotNone(vnc.process.poll())
             self.assertTrue(vnc.process.stdin.closed)
             self.assertTrue(vnc.process.stdout.closed)
@@ -458,7 +470,7 @@ class TmuxCommandMotionTests(unittest.TestCase):
         for name,modifier,kinds in [('shift','KeyModifiers(SHIFT)',['Down(Left)','Drag(Left)','Up(Left)']), ('command','KeyModifiers(ALT)',['Down(Left)','Up(Left)'])]:
             steps[name]=[{'kind':'event','event':{'kind':'Mouse','mouse_kind':kind,'modifiers':modifier}} for kind in kinds]
         steps['shift'].append({'kind':'report','outcome':{'kind':'Copy','target':'right','text':'right'}})
-        steps['command'].append({'kind':'selection','selection':{'stage':'Pressed','range':{'start':{'line':0,'column':0},'end':{'line':0,'column':0}}}})
+        steps['command'].append({'kind':'selection','selection':{'target':'right','stage':'Pressed','range':{'start':{'line':0,'column':0},'end':{'line':0,'column':0}}}})
         steps['option']={'clipboard':'alpha','records':[]}
         steps['option_command']={'clipboard':'alp\nbet\ngam','records':[]}
         assert_gesture('x11',steps,tmux_version='tmux 3.8')
@@ -585,6 +597,89 @@ class IncompleteFenceTests(unittest.TestCase):
             event={'kind':'event','event':{'kind':'Key','code':'F(2)','key_kind':'Press'}}
             context.vnc.send_fence_key.side_effect=lambda:path.write_text(json.dumps(event)+'\n')
             with self.assertRaises(DriverRuntimeError): lab_step(context,session,lambda:None)
+
+
+class TmuxPositiveSelectionTests(unittest.TestCase):
+    def test_filtered_command_requires_right_pressed_zero_range_evidence(self):
+        from driver.mouse_scenarios import assert_gesture
+        steps={}
+        for name,modifier,kinds in [('shift','KeyModifiers(SHIFT)',['Down(Left)','Drag(Left)','Up(Left)']), ('command','KeyModifiers(ALT)',['Down(Left)','Up(Left)'])]:
+            steps[name]=[{'kind':'event','event':{'kind':'Mouse','mouse_kind':kind,'modifiers':modifier}} for kind in kinds]
+        steps['shift'].append({'kind':'report','outcome':{'kind':'Copy','target':'right','text':'right'}})
+        steps['option']={'clipboard':'alpha','records':[]}
+        steps['option_command']={'clipboard':'alp\nbet\ngam','records':[]}
+        selection={'target':'right','stage':'Pressed','range':{'start':{'line':0,'column':0},'end':{'line':0,'column':0}}}
+        valid={'kind':'selection','selection':selection}
+        events=copy.deepcopy(steps['command'])
+        steps['command']=events+[valid]
+        assert_gesture('x11',steps,tmux_version='tmux 3.8')
+        wrong_target={'kind':'selection','selection':{**selection,'target':'left'}}
+        bad_windows=[[],[{'kind':'selection','selection':None}],
+                     [{'kind':'selection','selection':None}]*2,
+                     [{'kind':'selection','selection':{}}],[wrong_target],
+                     [valid,wrong_target],
+                     [{'kind':'selection','selection':{**selection,'stage':'Dragging'}}],
+                     [{'kind':'selection','selection':{**selection,'range':{'start':{'line':0,'column':0},'end':{'line':1,'column':0}}}}]]
+        for window in bad_windows:
+            with self.subTest(window=window):
+                steps['command']=events+window
+                with self.assertRaises(DriverRuntimeError): assert_gesture('x11',steps,tmux_version='tmux 3.8')
+
+class FailedPreferenceImportTests(unittest.TestCase):
+    def test_failed_import_keeps_backup_attempts_globals_and_propagates_failure(self):
+        import os
+        import shlex
+        import subprocess
+        from driver.iterm_window import GuestDefaultsBackup, restore_guest_defaults
+        from driver.guest_scripts import ACTIVATE_SETTINGS_BINARY
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); backup=root/'original backup.plist';events=root/'cleanup.log'
+            backup.write_bytes(b'original preferences')
+            defaults=root/'defaults'
+            defaults.write_text('#!/bin/sh\nif [ "$1" = import ]; then exit 73; fi\nprintf "%s\\n" "$*" >> "$ITERM_TEST_EVENTS"\n')
+            killall=root/'killall';killall.write_text('#!/bin/sh\nprintf "killall %s\\n" "$*" >> "$ITERM_TEST_EVENTS"\n')
+            activate=root/'activate';activate.write_text('#!/bin/sh\nprintf "activate\\n" >> "$ITERM_TEST_EVENTS"\n')
+            for executable in [defaults,killall,activate]: executable.chmod(0o755)
+            def execute_guest(command,**kwargs):
+                translated=command.replace('killall ',shlex.quote(str(killall))+' ').replace('defaults ',shlex.quote(str(defaults))+' ')
+                translated=translated.replace(ACTIVATE_SETTINGS_BINARY,shlex.quote(str(activate)))
+                self.assertNotIn('~/Library/',translated)
+                result=subprocess.run(['/bin/bash','-c',translated],env={**os.environ,'ITERM_TEST_EVENTS':str(events)},capture_output=True,text=True,check=False)
+                if result.returncode and kwargs.get('should_check',True):
+                    raise DriverRuntimeError(f'Guest restoration failed with code {result.returncode}.','test')
+                return result
+            vm=mock.Mock();vm.exec_guest.side_effect=execute_guest
+            with self.assertRaises(DriverRuntimeError) as error:
+                restore_guest_defaults(vm,GuestDefaultsBackup(str(backup),True,True,True,False))
+            self.assertIn('73',str(error.exception))
+            self.assertEqual(backup.read_bytes(),b'original preferences')
+            cleanup=events.read_text()
+            self.assertIn('write -g com.apple.swipescrolldirection -bool true',cleanup)
+            self.assertIn('write com.apple.WindowManager EnableStandardClickToShowDesktop -bool false',cleanup)
+            self.assertIn('killall cfprefsd',cleanup)
+            self.assertIn('activate',cleanup)
+
+
+class RetainedBackupNonClobberTests(unittest.TestCase):
+    def test_new_run_refuses_to_overwrite_retained_recovery_backup(self):
+        import shlex
+        import subprocess
+        from driver.iterm_window import backup_guest_defaults
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);backup=root/'retained.plist';current=root/'current.plist'
+            backup.write_bytes(b'original recovery settings');current.write_bytes(b'modified test settings')
+            def execute_guest(command,**kwargs):
+                if 'cp ' not in command: raise DriverRuntimeError('Backup setup unexpectedly continued.','test')
+                translated=command.replace('~/Library/Preferences/com.googlecode.iterm2.plist',shlex.quote(str(current)))
+                translated=translated.replace('/tmp/tuikit_iterm2_plist_backup.plist',shlex.quote(str(backup)))
+                result=subprocess.run(['/bin/bash','-c',translated],capture_output=True,text=True,check=False)
+                if result.returncode and kwargs.get('should_check',True): raise DriverRuntimeError('Guest command failed.','test')
+                return result
+            vm=mock.Mock();vm.exec_guest.side_effect=execute_guest
+            with self.assertRaises(DriverRuntimeError) as error: backup_guest_defaults(vm)
+            self.assertEqual(backup.read_bytes(),b'original recovery settings')
+            self.assertIn('/tmp/tuikit_iterm2_plist_backup.plist',error.exception.message)
+            self.assertIn('defaults import com.googlecode.iterm2',error.exception.recovery_hint)
 
 
 if __name__ == '__main__':

@@ -71,10 +71,29 @@ def ensure_guest_helper_scripts(vm: TartVmSession) -> None:
         runner_path.write_text(PTY_RUNNER_SCRIPT, encoding="utf-8")
 
 
+def _copy_guest_preference_backup(vm: TartVmSession) -> str:
+    """Copies original preferences without clobbering a retained recovery file."""
+    path = "/tmp/tuikit_iterm2_plist_backup.plist"
+    quoted_path = shlex.quote(path)
+    result = vm.exec_guest(
+        f"if test -e {quoted_path} || test -L {quoted_path}; then exit 73; fi\n"
+        f"cp ~/Library/Preferences/com.googlecode.iterm2.plist {quoted_path}",
+        should_check=False,
+    )
+    if result.returncode == 73:
+        raise DriverRuntimeError(
+            f"Retained guest iTerm2 preferences backup found at '{path}'.",
+            f"Inside the guest, recover with: defaults import com.googlecode.iterm2 {quoted_path}. "
+            "Remove the saved backup only after successful recovery, then retry.",
+        )
+    if result.returncode != 0:
+        raise DriverRuntimeError("Could not save original guest iTerm2 preferences.", result.stderr.strip())
+    return path
+
+
 def backup_guest_defaults(vm: TartVmSession) -> GuestDefaultsBackup:
     """Snapshots iTerm2 plist, scroll direction, and Sequoia wallpaper-click setting."""
-    backup_path = "/tmp/tuikit_iterm2_plist_backup.plist"
-    vm.exec_guest(f"cp ~/Library/Preferences/com.googlecode.iterm2.plist {backup_path}")
+    backup_path = _copy_guest_preference_backup(vm)
     swipe_process = vm.exec_guest("defaults read -g com.apple.swipescrolldirection", should_check=False)
     had_swipe_direction = swipe_process.returncode == 0
     is_natural_swipe_direction = (
@@ -104,8 +123,8 @@ def backup_guest_defaults(vm: TartVmSession) -> GuestDefaultsBackup:
     )
 
 
-def restore_guest_defaults(vm: TartVmSession, backup: GuestDefaultsBackup) -> None:
-    """Restores guest iTerm2 preferences, scroll setting, and WindowManager state, then deletes backup."""
+def _build_global_restore_script(backup: GuestDefaultsBackup) -> str:
+    """Builds independent global cleanup attempts while retaining any failure."""
     swipe_flag = "true" if backup.is_natural_swipe_direction else "false"
     swipe_restore = (
         f"defaults write -g com.apple.swipescrolldirection -bool {swipe_flag}"
@@ -118,22 +137,36 @@ def restore_guest_defaults(vm: TartVmSession, backup: GuestDefaultsBackup) -> No
         if backup.had_click_show_desktop
         else "defaults delete com.apple.WindowManager EnableStandardClickToShowDesktop 2>/dev/null || true"
     )
+    return "\n".join([
+        "global_restore_status=0",
+        f"{swipe_restore} || global_restore_status=$?",
+        f"{desktop_restore} || global_restore_status=$?",
+        "killall cfprefsd 2>/dev/null || true",
+        f"{ACTIVATE_SETTINGS_BINARY} -u 2>/dev/null || global_restore_status=$?",
+    ])
+
+
+def restore_guest_defaults(vm: TartVmSession, backup: GuestDefaultsBackup) -> None:
+    """Restores defaults, retaining the plist backup and reporting failed imports.
+
+    Global cleanup is attempted independently even when the iTerm2 import fails.
+    """
     quoted_backup = shlex.quote(backup.plist_backup_guest_path)
-    restore_command = "\n".join(
-        [
-            "killall -9 iTerm2 2>/dev/null || true",
-            "killall -9 iTermServer 2>/dev/null || true",
-            # Import through CFPreferences so a later daemon flush cannot restore
-            # the cached test values over the on-disk backup.
-            f"test -f {quoted_backup} && defaults import com.googlecode.iterm2 {quoted_backup} || true",
-            f"rm -f {quoted_backup}",
-            swipe_restore,
-            desktop_restore,
-            "killall cfprefsd 2>/dev/null || true",
-            f"{ACTIVATE_SETTINGS_BINARY} -u 2>/dev/null || true",
-        ]
-    )
-    vm.exec_guest(restore_command, should_check=False)
+    restore_command = "\n".join([
+        "killall -9 iTerm2 2>/dev/null || true",
+        "killall -9 iTermServer 2>/dev/null || true",
+        "preference_restore_status=0",
+        # A coherent import updates the daemon cache as well as the file.
+        f"if test -f {quoted_backup} && defaults import com.googlecode.iterm2 {quoted_backup}; then",
+        f"  rm -f {quoted_backup} || preference_restore_status=$?",
+        "else",
+        "  preference_restore_status=$?",
+        "fi",
+        _build_global_restore_script(backup),
+        'if [ "$preference_restore_status" -ne 0 ]; then exit "$preference_restore_status"; fi',
+        'exit "$global_restore_status"',
+    ])
+    vm.exec_guest(restore_command, should_check=True)
 
 
 def set_guest_natural_scrolling(vm: TartVmSession, is_enabled: bool) -> None:
