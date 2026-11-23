@@ -238,7 +238,10 @@ use session::query;
 fn mode_reply_parser_handles_partial_noise_and_absence() {
     let replies = query::parse_mode_replies(b"noise\x1b[?1002;1$y\x1b[?1006;2$y\x1b[?1003;");
     assert_eq!(replies, vec![(1002, 1), (1006, 2)]);
-    assert!(query::parse_mode_replies(b"no replies").is_empty());
+    assert_eq!(
+        query::parse_mode_replies(b"no replies"),
+        Vec::<(u16, u8)>::new()
+    );
 }
 
 #[cfg(unix)]
@@ -248,10 +251,9 @@ fn absent_mode_replies_leave_no_reader_stealing_later_input() {
     use std::os::unix::net::UnixStream;
     let (mut reader, mut writer) = UnixStream::pair().unwrap();
     reader.set_nonblocking(true).unwrap();
-    assert!(
-        query::collect_reply(&mut reader, Duration::from_millis(1))
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        query::collect_reply(&mut reader, Duration::from_millis(1)).unwrap(),
+        Vec::<u8>::new()
     );
     writer.write_all(b"q").unwrap();
     let mut byte = [0];

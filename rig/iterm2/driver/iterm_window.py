@@ -123,7 +123,9 @@ def restore_guest_defaults(vm: TartVmSession, backup: GuestDefaultsBackup) -> No
         [
             "killall -9 iTerm2 2>/dev/null || true",
             "killall -9 iTermServer 2>/dev/null || true",
-            f"test -f {quoted_backup} && cp {quoted_backup} ~/Library/Preferences/com.googlecode.iterm2.plist || true",
+            # Import through CFPreferences so a later daemon flush cannot restore
+            # the cached test values over the on-disk backup.
+            f"test -f {quoted_backup} && defaults import com.googlecode.iterm2 {quoted_backup} || true",
             f"rm -f {quoted_backup}",
             swipe_restore,
             desktop_restore,

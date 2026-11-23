@@ -18,6 +18,8 @@ VALID_SCENARIOS: tuple[str, ...] = (
     "panic",
     "matrix",
     "passthrough",
+    "mouse",
+    *(f"x{index}" for index in range(1, 15)),
 )
 
 # Default bounded per-phase condition timeout in milliseconds.
@@ -104,6 +106,7 @@ def _help_scenarios_and_options(theme: Mapping[str, str]) -> list[str]:
         f"  {accent}interactive{reset}            Drive VNC pointer, keyboard, paste, focus, and Kitty Enter checks",
         f"  {accent}panic{reset}                  Trigger F12 panic and verify terminal mode teardown",
         f"  {accent}matrix{reset}                 Sweep M0 rows 1, 4, 5, 6, 7, 9, 10, 11, 12, 13 and restore guest defaults",
+        f"  {accent}mouse, x1..x14{reset}        Run mouse_lab VM scenarios (default for mouse_lab)",
         f"  {accent}passthrough{reset}            Run a custom <program> with --log managed by the driver",
         "",
         f"{heading}Options:{reset}",
@@ -133,7 +136,7 @@ def build_help_text(theme: Mapping[str, str]) -> str:
             "",
             f"{heading}Arguments:{reset}",
             f"  {accent}<program>{reset}              Cargo example binary name (for example: capability_probe)",
-            f"  {accent}[scenario]{reset}             Scenario name (default: 'all' for capability_probe, 'passthrough' otherwise)",
+            f"  {accent}[scenario]{reset}             Scenario name (default: 'all' for capability_probe, 'mouse' for mouse_lab, 'passthrough' otherwise)",
             "",
             *_help_scenarios_and_options(theme),
             "",
@@ -144,6 +147,7 @@ def build_help_text(theme: Mapping[str, str]) -> str:
             f"{heading}Examples:{reset}",
             "  just iterm2 capability_probe",
             "  just iterm2 capability_probe matrix",
+            "  just iterm2 mouse_lab mouse -- --query-modes",
             "  just iterm2 --tmux full capability_probe all",
             "  ./rig/iterm2/run.sh capability_probe all --tmux cc-full",
         ]
@@ -256,7 +260,13 @@ def _validate_positionals_and_modes(
             f"Unexpected positional argument '{positionals[2]}'.",
             "Use '--' before forwarding extra positional arguments to <program>.",
         )
-    scenario = explicit_scenario or ("all" if program == "capability_probe" else "passthrough")
+    scenario = explicit_scenario or ({"capability_probe": "all", "mouse_lab": "mouse"}.get(program, "passthrough"))
+    if (scenario == "mouse" or scenario.startswith("x")) and program != "mouse_lab":
+        raise CliUsageError("Mouse scenarios require mouse_lab.", "Run just iterm2 mouse_lab mouse.")
+    if program == "mouse_lab" and scenario not in ("mouse", "passthrough") and not scenario.startswith("x"):
+        raise CliUsageError("mouse_lab requires mouse, x1..x14 or passthrough.", "Run just iterm2 mouse_lab mouse.")
+    if program == "mouse_lab" and tmux_mode and tmux_mode.startswith("cc-"):
+        raise CliUsageError("Mouse scenarios support direct, stock and full sessions.", "Use --tmux stock or --tmux full.")
     if scenario == "matrix" and tmux_mode is not None:
         raise CliUsageError(
             "Cannot combine '--tmux' with the 'matrix' scenario.",

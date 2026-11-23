@@ -284,6 +284,75 @@ Proved: **10 consecutive cold-start runs** from a stopped `tuikit-macos` VM
 iTerm2 alone, `stock` and `full` `tmux`, and `tmux -CC` against those four
 `rig/expected/iterm2*.json` baselines.
 
+The mouse laboratory uses the same VM lifecycle, independently of the existing
+probe and M0 matrix. Its default `mouse` scenario executes X1 through X14 in
+fresh iTerm2 sessions; individual `x1` through `x14` names select one
+scenario. The build selects `ratatui-mouse` and its `vt100` feature. All
+assertions read the laboratory's native JSONL, using a logged F2 key followed
+by its report as a FIFO fence. Modifier gestures wait for CoreGraphics to
+report the held keys, and native selection keeps those keys held until the
+clipboard confirms its update. Gesture positions combine the logged content
+rectangles with CoreGraphics window bounds and the guest terminal grid. A
+single acknowledged VNC connection retains pointer position, held buttons, and
+modifiers across log waits, releases input on exit, and is closed and reaped
+by its owner. The lab's physical Shift+1 (`!`) panic and `q` exit are
+independent of the probe's F12 binding.
+
+```sh
+just iterm2 mouse_lab mouse -- --query-modes
+just iterm2 mouse_lab mouse --tmux stock -- --query-modes
+just iterm2 mouse_lab mouse --tmux full -- --query-modes
+python3 -m unittest discover -s rig/iterm2/tests -p 'test_*.py'
+```
+
+X1 requires the exact setup and teardown sequences and actual mode replies. X2
+verifies a nonzero panic exit, logged cleanup bytes, and an independent
+post-exit mode snapshot: the panic hook does not issue lab teardown queries.
+Inside tmux, that snapshot describes the wrapper's pane PTY, rather than the
+outer iTerm2 state after detachment. X3 fences hover before and after pane
+pass-through. X4 through X10 check ownership, exact character/word/soft-wrap
+copying, history row 030 beyond the viewport, signed wheel steps, wheel during
+drag, and exact pane-relative bytes. X12 checks alternate-screen arrow
+forwarding; X13 is keyboard-only and must copy `file.rs:12`. X14 checks
+iTerm2's default right-click and Control-click context menus with no app mouse
+events, dismissing each menu before its fence rather than waiting for an event
+the terminal intentionally suppresses.
+
+X11 runs Shift, Command, Option, and Option+Command in separate sessions.
+Shift and Command routing is checked in the app's decoded events (Command is
+represented by Alt). Direct Command drag copies exact app text; tmux 3.8
+requires Alt Down/Up, no Drag or Copy, and only a zero-length Pressed
+selection. X13 still supplies the complete keyboard equivalent in both tmux
+configurations. Present mode-reply state `0` for unsupported legacy formats is
+retained as unsupported, never treated as absence or reset. Native Option
+contiguous selection and Option+Command rectangular selection are checked
+against exact guest clipboard text and must produce no app selection or
+forwarding. The aggregate repeats identical raw wheel-button pulses with
+natural scrolling on, after the ordinary off run: left/right steps change from
+`+3/-3` to `-3/+3`, matching the received ScrollDown/ScrollUp inversion.
+Reports retain the preference phase and raw VNC buttons so this reversal is
+explicit. Clipboard text, scrolling preferences, the test-only copy-selection
+setting, and iTerm2 defaults are restored on success and failure. The saved
+iTerm2 domain is imported through the preferences API so cached test values
+cannot overwrite the restored settings. Signal handling unwinds guest
+restoration before stopping the VM. A test-only `NoSyncTipsDisabled`
+preference prevents the timed Tips opt-in dialog from blocking launch and is
+restored with the complete iTerm2 preferences backup.
+
+Verified on iTerm2 3.7.7 in the macOS 15 guest with tmux 3.8: all fourteen
+scenario IDs pass directly and in both tmux configurations, with eighteen
+fresh app sessions per configuration (54 total). Independent success and
+forced-failure audits for Option and Option+Command clipboard timeouts,
+Control-barrier failure, and incorrect copied text all restore the complete
+canonical preferences, global settings, clipboard text, and actual guest
+modifier flags to their saved state. No preference keys are excluded from the
+comparison.
+
+Set `RIG_ITERM2_LOG_DIR` to retain every native session JSONL, the aggregate
+JSON report, and a failure screenshot. Screenshots diagnose launch or menu
+problems; no assertion compares pixels. Lab scenarios support direct iTerm2,
+stock tmux, and full tmux; the existing probe retains its `tmux -CC` paths.
+
 It uses [Tart](https://github.com/cirruslabs/tart) to run the virtual machine.
 Tart is source-available under the Functional Source License, not open
 source. It is a development tool only: no crate depends on it.

@@ -33,7 +33,7 @@ print_usage_block() {
     "" \
     "${COLOR_HEADING}Arguments:${COLOR_RESET}" \
     "  ${COLOR_ACCENT}<program>${COLOR_RESET}              Cargo example binary name (for example: capability_probe)" \
-    "  ${COLOR_ACCENT}[scenario]${COLOR_RESET}             Scenario name (default: 'all' for capability_probe, 'passthrough' otherwise)" \
+    "  ${COLOR_ACCENT}[scenario]${COLOR_RESET}             Scenario name (default: 'all' for capability_probe, 'mouse' for mouse_lab, 'passthrough' otherwise)" \
     "" \
     "${COLOR_HEADING}Scenarios:${COLOR_RESET}" \
     "  ${COLOR_ACCENT}all${COLOR_RESET}                    Run batch, osc52, interactive, and panic in one cold-booted VM" \
@@ -42,6 +42,7 @@ print_usage_block() {
     "  ${COLOR_ACCENT}interactive${COLOR_RESET}            Drive VNC pointer, keyboard, paste, focus, and Kitty Enter checks" \
     "  ${COLOR_ACCENT}panic${COLOR_RESET}                  Trigger F12 panic and verify terminal mode teardown" \
     "  ${COLOR_ACCENT}matrix${COLOR_RESET}                 Sweep M0 rows 1, 4, 5, 6, 7, 9, 10, 11, 12, 13 and restore guest defaults" \
+    "  ${COLOR_ACCENT}mouse, x1..x14${COLOR_RESET}        Run mouse_lab VM scenarios (default for mouse_lab)" \
     "  ${COLOR_ACCENT}passthrough${COLOR_RESET}            Run a custom <program> with --log managed by the driver" \
     "" \
     "${COLOR_HEADING}Options:${COLOR_RESET}" \
@@ -58,6 +59,7 @@ print_usage_block() {
     "${COLOR_HEADING}Examples:${COLOR_RESET}" \
     "  just iterm2 capability_probe" \
     "  just iterm2 capability_probe matrix" \
+    "  just iterm2 mouse_lab mouse -- --query-modes" \
     "  just iterm2 --tmux full capability_probe all" \
     "  ./rig/iterm2/run.sh capability_probe all --tmux cc-full"
 }

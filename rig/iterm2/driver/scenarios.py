@@ -46,6 +46,7 @@ class ScenarioRuntimeContext:
     extra_args: list[str] = field(default_factory=list)
     artifact_dir: Path | None = None
     is_initial_natural_scrolling: bool = True
+    is_natural_scrolling: bool = False
     _session_counter: int = 0
 
     @property
@@ -370,6 +371,9 @@ def run_named_scenario(
     scenario_overrides: Mapping[str, Callable[[ScenarioRuntimeContext], dict[str, object]]] | None = None,
 ) -> dict[str, object]:
     """Dispatches `scenario_name` and automatically captures `failure-screenshot.png` on failure."""
+    if scenario_name == "mouse" or scenario_name.startswith("x"):
+        from driver.mouse_scenarios import run_mouse_scenario
+        return run_with_failure_screenshot(context, lambda: run_mouse_scenario(context, scenario_name))
     table = dict(DEFAULT_SCENARIO_TABLE)
     if scenario_overrides:
         table.update(scenario_overrides)

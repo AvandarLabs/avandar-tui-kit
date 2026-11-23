@@ -523,7 +523,7 @@ crossterm modifier bits; a physical key's meaning depends on the host.
 | Route | Where it works |
 | --- | --- |
 | Shift held at the press | iTerm2 and xterm.js on macOS. xterm.js on Linux and Windows reserves Shift for native selection, so the app receives no selection gesture. |
-| Alt held at the press | xterm.js on macOS, Linux and Windows. tmux 3.8 in xterm.js drops Alt-drag motion; tmux 3.3a forwards it. In iTerm2, Cmd-click and Cmd-drag arrive with `alt=true`; Option-click and Option-drag are intercepted by iTerm2. |
+| Alt held at the press | xterm.js on macOS, Linux and Windows. tmux 3.8 in xterm.js and iTerm2 drops Alt-drag motion; tmux 3.3a in xterm.js forwards it. Direct iTerm2 reports Cmd-click and Cmd-drag with `alt=true`; inside tmux 3.8, Cmd sends Alt presses and releases without drag motion. Option-click and Option-drag are intercepted by iTerm2. |
 | The host terminal's own selection | Shift-drag in xterm.js on Linux and Windows; Option-drag in iTerm2 (Option+Cmd-drag is rectangular). This selects screen cells across the app, borders included, cannot scroll a pane, and copies through the terminal. xterm.js on macOS offers no native selection modifier by default. |
 | **Select mode** | Everywhere, with or without a mouse. See below. |
 
@@ -1551,8 +1551,11 @@ rules above. These additional checks belong to iTerm2:
 
 - With `--query-modes`, 1002 and 1006 are set and 1003 is reset after setup.
 - Moving the pointer with no button logs nothing.
-- X11 with Shift gives a selection. Cmd-drag also gives a selection because
-  crossterm reports Cmd as Alt in iTerm2.
+- X11 with Shift gives an app selection. Direct iTerm2 Cmd-drag also gives
+  an app selection because crossterm reports Cmd as Alt. Inside tmux 3.8
+  (`stock` and `full`), Cmd reaches the app as Alt Down/Up without Drag;
+  assert no Copy or Forward and only a zero-length Pressed selection. X13
+  must still copy `file.rs:12` through the universal keyboard path.
 - Option-drag and Option+Cmd-drag stay native (contiguous and rectangular
   selection respectively): the app receives no gesture, and the VM clipboard
   contains the expected screen text.
@@ -1642,7 +1645,7 @@ with the completed M0 findings on 2026-11-21.
    and Alt-drag in xterm.js on Linux and Windows. The recorded decision's
    condition is met: `selection_modifiers` defaults to Shift and Alt on every
    platform. iTerm2 intercepts Option and reports Cmd as Alt; tmux 3.8 drops
-   Alt-drag motion in xterm.js. Select mode remains the required universal
+   Alt-drag motion in xterm.js and iTerm2. Select mode remains the required universal
    route. See [Selecting in a pane whose program has the mouse](#selecting-in-a-pane-whose-program-has-the-mouse).
 2. **Windows tracking mode.** ConPTY enables outer 1003 and 1006, producing
    bare `Moved` events. The controller ignores them, including for
@@ -1654,7 +1657,9 @@ with the completed M0 findings on 2026-11-21.
    its CLI cannot move a pointer; it does not change the routing rule.
 4. **iTerm2 native selection.** Option-drag selects contiguously and
    Option+Cmd-drag selects a rectangle, without delivering app mouse events.
-   Shift-drag and Cmd-drag reach the app. These limits belong in crate docs.
+   Shift-drag reaches the app. Direct Cmd-drag also selects in the app;
+   tmux 3.8 forwards its Alt press/release but filters its motion. Select mode
+   supplies the complete keyboard equivalent. These limits belong in crate docs.
 5. **Depending on `ratatui-core` instead of `ratatui`.** Deferred to M2,
    before crates.io publication. M1 keeps the workspace's ratatui dependency.
 6. **Clearing a pane's selection when it prints.** Deferred to M7: leave

@@ -64,10 +64,9 @@ fn highlight_clips_to_at_most_three_rectangles() {
         assert_eq!(rectangles.as_slice(), expected, "{selection:?}");
     }
     for empty_area in [Rect::new(10, 5, 0, 5), Rect::new(10, 5, 8, 0)] {
-        assert!(
-            HighlightRects::from_range(range((20, 4), (24, 11)), origin, empty_area)
-                .as_slice()
-                .is_empty()
+        assert_eq!(
+            HighlightRects::from_range(range((20, 4), (24, 11)), origin, empty_area).as_slice(),
+            []
         );
     }
 }
@@ -99,14 +98,14 @@ fn highlight_handles_extreme_content_and_screen_bounds() {
     );
     assert_eq!(lowest.as_slice(), &[Rect::new(3, 4, 1, 1)]);
     for area in [Rect::new(u16::MAX, 1, 2, 2), Rect::new(1, u16::MAX, 2, 2)] {
-        assert!(
+        assert_eq!(
             HighlightRects::from_range(
                 range((0, 0), (2, 2)),
                 ContentPoint { line: 0, column: 0 },
                 area
             )
-            .as_slice()
-            .is_empty()
+            .as_slice(),
+            []
         );
     }
 }

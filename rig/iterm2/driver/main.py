@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import signal
 import subprocess
 import sys
 
@@ -63,9 +64,10 @@ def _build_workspace_example(
             "Run this script from an intact avandar-tui-kit checkout.",
         )
     log_progress(theme, f"Building workspace example '{program_name}'...")
+    cargo_scope = ["-p", "ratatui-mouse", "--features", "vt100"] if program_name == "mouse_lab" else ["--workspace"]
     try:
         completed = subprocess.run(
-            [cargo_binary, "build", "--manifest-path", str(manifest_path), "--workspace", "--example", program_name],
+            [cargo_binary, "build", "--manifest-path", str(manifest_path), *cargo_scope, "--example", program_name],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             env=dict(environment),
@@ -131,6 +133,19 @@ def _stage_guest_binaries_and_configs(
     }
 
 
+def _install_lab_signal_handlers(program):
+    """Ensures lab interrupts unwind guest defaults before Tart stops the VM."""
+    previous = {}
+    if program != "mouse_lab":
+        return previous
+    def interrupt_lab(number, _frame):
+        raise SystemExit(128 + number)
+    for number in (signal.SIGINT, signal.SIGTERM):
+        previous[number] = signal.getsignal(number)
+        signal.signal(number, interrupt_lab)
+    return previous
+
+
 def _run_booted_vm_payload(
     vm: TartVmSession,
     vnc: VncController,
@@ -156,7 +171,7 @@ def _run_booted_vm_payload(
         is_initial_natural_scrolling=backup.is_natural_swipe_direction,
     )
     is_defaults_restored = False
-
+    previous_handlers = _install_lab_signal_handlers(parsed.program)
     def _restore_defaults_once() -> None:
         nonlocal is_defaults_restored
         if not is_defaults_restored:
@@ -171,7 +186,11 @@ def _run_booted_vm_payload(
             return run_iterm2_matrix(context, restore_callback=_restore_defaults_once)
         return run_named_scenario(parsed.scenario, context)
     finally:
-        _restore_defaults_once()
+        try:
+            _restore_defaults_once()
+        finally:
+            for number, previous in previous_handlers.items():
+                signal.signal(number, previous)
 
 
 def _execute_with_vm(
