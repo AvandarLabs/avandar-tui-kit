@@ -62,7 +62,7 @@ async function executeMouseScenario(runtime, scenario, modifier = null) {
     if (scenario === 'x3') pointerSteps = await runHoverSteps(context, terminalStateAtReady);
     else if (Number(scenario.slice(1)) >= 4) {
       pointerSteps = await runMouseGesture(context, terminalStateAtReady, scenario, modifier);
-      assertMouseGesture(scenario, pointerSteps);
+      assertMouseGesture(scenario, pointerSteps, process.platform, context.session.tmuxServerInfo);
     }
     await context.bridge.page.keyboard.press(scenario === 'x2' ? '!' : 'q');
     const exitOutcome = await context.session.waitForExit(context.timeoutMs);
@@ -76,9 +76,9 @@ async function executeMouseScenario(runtime, scenario, modifier = null) {
     const records = readJsonLines(context.logPath);
     assertLifecycleSequences(records);
     if (scenario === 'x1') {
-      assertMouseModeReplies(records);
+      assertMouseModeReplies(records, process.platform, context.session.tmuxServerInfo);
     }
-    return { scenario, ...exitOutcome, terminalStateAtReady, terminalStateAfterExit, pointerSteps, records,
+    return { scenario, ...exitOutcome, tmuxServerInfo: context.session.tmuxServerInfo ?? null, terminalStateAtReady, terminalStateAfterExit, pointerSteps, records,
       assertion: { id: scenario.toUpperCase(), passed: true, platform: process.platform, modifier } };
   }, modifier ? `${scenario}-${modifier.toLowerCase()}` : scenario);
 }

@@ -192,7 +192,7 @@ const gestureCases = [
     (steps) => { steps.wheel[0].outcome.bytes = [...Buffer.from('\x1bOB\x1bOB\x1bOB')]; }],
   ['x13', { keyboard: copyRecords('left', 'file.rs:12') },
     (steps) => { steps.keyboard = []; }],
-  ['x14', { right: pressRecords('left', 'Right'), control: pressRecords('right', 'Left', 'KeyModifiers(CONTROL)') },
+  ['x14', { prime: pressRecords('left'), controlPrime: pressRecords('left'), right: pressRecords('left', 'Right'), control: pressRecords('right', 'Left', 'KeyModifiers(CONTROL)') },
     (steps) => { steps.control[1].outcome.press.modifiers = 'KeyModifiers(0x0)'; }],
 ];
 
@@ -224,3 +224,90 @@ test('X11 requires native Shift selection and X14 preserves each button', () => 
   wrongButton.right[1].outcome.press.button = 'Left';
   assert.throws(() => mouseAssertions.assertMouseGesture('x14', wrongButton), /X14/);
 });
+
+
+const mouseEvents = (kinds, modifiers = 'KeyModifiers(ALT)') => kinds.map((mouse_kind) => ({
+  kind: 'event', event: { kind: 'Mouse', mouse_kind, modifiers },
+}));
+
+function assertTmuxAltMotion(tmux38, tmux33) {
+  const altWithoutMotion = { modifier: 'Alt', drag: [
+    ...mouseEvents(['Down(Left)', 'Up(Left)']), ...pressRecords('right', 'Left', 'KeyModifiers(ALT)'),
+    { kind: 'selection', selection: { target: 'right', stage: 'Pressed',
+      range: { start: { line: 0, column: 0 }, end: { line: 0, column: 0 } } } },
+  ] };
+  mouseAssertions.assertMouseGesture('x11', altWithoutMotion, 'darwin', tmux38);
+  assert.throws(() => mouseAssertions.assertMouseGesture('x11', altWithoutMotion, 'linux', tmux33), /X11/);
+  const altWithMotion = { modifier: 'Alt', drag: [
+    ...mouseEvents(['Down(Left)', 'Drag(Left)', 'Up(Left)']), ...copyRecords('right', 'right'),
+  ] };
+  mouseAssertions.assertMouseGesture('x11', altWithMotion, 'linux', tmux33);
+  assert.throws(() => mouseAssertions.assertMouseGesture('x11', altWithMotion, 'darwin', tmux38), /X11/);
+  const missingAltMotion = { ...altWithMotion, drag: altWithMotion.drag.filter((record) => record.event?.mouse_kind !== 'Drag(Left)') };
+  assert.throws(() => mouseAssertions.assertMouseGesture('x11', missingAltMotion, 'linux', tmux33), /X11/);
+}
+
+function assertTmuxQueryAbsence(tmux38, tmux33) {
+  const absent = ['setup', 'teardown'].flatMap((phase) =>
+    [9, 1000, 1002, 1003, 1005, 1006, 1015, 1016].map((mode) => ({
+      kind: 'mode_reply', phase, mode, state: null, is_absent: true,
+    })));
+  mouseAssertions.assertMouseModeReplies(absent, 'linux', tmux33);
+  assert.throws(() => mouseAssertions.assertMouseModeReplies(absent, 'darwin', tmux38), assert.AssertionError);
+  const falseReset = absent.map((record) => ({ ...record, state: 2 }));
+  assert.throws(() => mouseAssertions.assertMouseModeReplies(falseReset, 'linux', tmux33), assert.AssertionError);
+}
+
+test('tmux_mouse_expectations_follow_measured_version', () => {
+  for (const config of ['stock', 'full']) {
+    const tmux38 = { version: 'tmux 3.8', isMouseEnabled: true, config };
+    const tmux33 = { version: 'tmux 3.3a', isMouseEnabled: config === 'full', config };
+    // Both configurations must retain positive, exact pane forwarding assertions.
+    const paneSteps = gestureCases.find(([scenario]) => scenario === 'x10')[1];
+    mouseAssertions.assertMouseGesture('x10', paneSteps, 'linux', tmux33);
+    assert.throws(() => mouseAssertions.assertMouseGesture('x10', {
+      ...paneSteps, click: [],
+    }, 'linux', tmux33), /X10/);
+    assertTmuxAltMotion(tmux38, tmux33);
+    const upOnly = {
+      prime: pressRecords('left'), controlPrime: pressRecords('left'),
+      right: [...mouseEvents(['Up(Right)'], 'KeyModifiers(0x0)'), outcomeRecord({ kind: 'Ignored', target: null })],
+      control: [...mouseEvents(['Up(Left)'], 'KeyModifiers(CONTROL)'), outcomeRecord({ kind: 'Ignored', target: null })],
+    };
+    mouseAssertions.assertMouseGesture('x14', upOnly, 'linux', tmux33);
+    assert.throws(() => mouseAssertions.assertMouseGesture('x14', upOnly, 'darwin', tmux38), /X14/);
+    assert.throws(() => mouseAssertions.assertMouseGesture('x14', { ...upOnly, prime: [] }, 'linux', tmux33), /X14/);
+    const phantomClick = structuredClone(upOnly);
+    phantomClick.right.push(...pressRecords('left', 'Right'));
+    assert.throws(() => mouseAssertions.assertMouseGesture('x14', phantomClick, 'linux', tmux33), /X14/);
+    assert.throws(() => mouseAssertions.assertMouseGesture('x14', {
+      ...upOnly, right: [],
+    }, 'linux', tmux33), /X14/);
+    assertTmuxQueryAbsence(tmux38, tmux33);
+    assert.throws(() => mouseAssertions.assertMouseGesture('x13', { keyboard: [] }, 'linux', tmux33), /X13/);
+  }
+});
+
+
+for (const config of ['stock', 'full']) {
+  test(`live ${config} tmux mouse matrix executes all X1-X14 including degradation and keyboard Copy`,
+    { skip: process.platform === 'win32' }, () => {
+      const tmuxHarnessPath = fileURLToPath(new URL('../src/tmux_session.mjs', import.meta.url));
+      const outcome = spawnSync(process.execPath, [tmuxHarnessPath, config, 'mouse_lab', 'mouse'], {
+        encoding: 'utf8', timeout: 180000, env: { ...process.env, NO_COLOR: '1' },
+      });
+      assert.equal(outcome.status, 0, outcome.stderr);
+      const report = JSON.parse(outcome.stdout);
+      assert.equal(report.layer, 4);
+      assert.equal(report.tmuxConfig, config);
+      assert.deepEqual(Object.keys(report.scenarios), Array.from({ length: 14 }, (_, index) => `x${index + 1}`));
+      for (const scenario of Object.values(report.scenarios).flatMap((scenario) =>
+        scenario.sessions ? Object.values(scenario.sessions) : [scenario])) {
+        assert.equal(scenario.assertion.passed, true);
+        assert.match(scenario.tmuxServerInfo.version, /^tmux /);
+        assert.equal(scenario.terminalStateAfterExit.mouseTrackingMode, 'none');
+      }
+      assert.deepEqual(report.scenarios.x13.pointerSteps.keyboard.filter((record) =>
+        record.kind === 'report' && record.outcome.kind === 'Copy').map((record) => record.outcome.text), ['file.rs:12']);
+    });
+}

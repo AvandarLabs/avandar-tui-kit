@@ -528,7 +528,7 @@ preservation. X11 runs Shift and Alt in separate fresh sessions: macOS Shift
 and all platforms' Alt select in the app, while Linux and Windows Shift select
 natively without an app gesture. Reports keep the laboratory schema, per-scenario
 assertion evidence, and optional session-log archives. See
-[testing](testing.md) for the direct host and Linux commands.
+[testing](testing.md) for the direct and stock/full tmux matrix commands.
 
 The initial focus is `left`. A pointer press that changes pane focus requests
 an app redraw, including when the controller forwards the press. Tab switches
@@ -564,3 +564,24 @@ readable. Normal exit and the panic hook reset mouse reporting, leave the
 alternate screen, show the cursor, and restore raw mode; the panic hook runs
 cleanup before delegating to the previous hook. Cleanup continues even if an
 earlier restoration operation fails.
+
+
+## Mouse laboratory through tmux
+
+The same X1 through X14 suite runs through stock and full private tmux servers.
+Both configurations forward the app-requested pane events, including when
+stock tmux 3.3a has its own `mouse` option off. Exact pane forwarding and
+keyboard-only copying remain mandatory in both versions.
+
+In tmux 3.8, X11 observes Alt press and release without motion: the app may
+briefly record a zero-length `Pressed` selection, but no drag selection or
+Copy. In tmux 3.3a, Alt must retain its motion and exact Copy. X14 sends
+initial left clicks followed immediately by rapid right and Control clicks;
+3.3a absorbs the rapid presses, so the app must ignore their releases without
+creating clicks or copies. The initial clicks and 3.8 button/modifier reports
+remain positive assertions.
+
+App setup/teardown bytes and pane mode replies are distinct from tmux's outer
+tracking. Query absence in 3.3a has null state and never means reset. The
+reported outer exit state is observed after the attached tmux client exits;
+tmux may manage outer tracking for its own UI before that detachment.

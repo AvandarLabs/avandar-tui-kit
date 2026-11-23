@@ -162,6 +162,46 @@ identical runs** in `full` both natively on macOS (`tmux 3.8`) and inside the
 `rig/linux` container (`tmux 3.3a`) - `90/90` consecutive runs combined with
 Layer 3 on each platform.
 
+The mouse laboratory runs **X1 through X14 in both configurations**, with
+independent Shift and Alt sessions for X11. Session reports retain the actual
+`tmuxServerInfo` version and `mouse` option. Stock pane forwarding is required
+even when tmux's own `mouse` option is off. X10 keeps exact pane-relative bytes
+and X13 requires keyboard-only `Copy` of `file.rs:12` in every configuration.
+
+X1 checks the app's exact setup and teardown sequences independently of outer
+tracking. In tmux 3.8, pane query replies prove the app's modes were reset;
+in 3.3a, all missing replies must be explicitly absent with null state.
+`terminalStateAfterExit` is sampled after the attached tmux client exits,
+when outer tracking is reset. It does not describe tmux's own UI tracking
+between app teardown and client detachment. X2 verifies the same cleanup
+sequence and outer state after a nonzero panic exit.
+
+X11 requires Alt Down/Drag/Up and exact copied text in 3.3a. In 3.8 it
+requires Alt Down/Up, no Drag or Copy, and only a zero-length `Pressed`
+selection before release. X14 sends two initial-left/rapid-target click
+pairs in one ordered Chromium CDP input batch, then closes one F2 log fence.
+All eight press/release commands are queued before awaiting acknowledgments;
+this keeps browser or app report round trips out of tmux's click timer.
+The four releases divide the log into independently checked gestures:
+both initial left-pane clicks must produce Pressed/Clicked, while rapid right
+and Control clicks are Up-only in 3.3a and normal Pressed/Clicked in 3.8.
+Up-only gestures must produce no click, selection, copy, or forwarding.
+The initial clicks use distinct cells outside the multi-click distance, so they
+do not accidentally start word selection. The harness assumes Chromium processes input commands in CDP session order;
+release order and per-gesture outcomes verify that order in the app log.
+
+```sh
+just xterm-tmux stock mouse_lab mouse
+just xterm-tmux full mouse_lab mouse
+just linux ./rig/xterm/run-tmux.sh stock mouse_lab mouse
+just linux ./rig/xterm/run-tmux.sh full mouse_lab mouse
+npm --prefix rig/xterm test
+```
+
+These four mouse matrices are verified on macOS with tmux 3.8 and the Linux
+floor container with tmux 3.3a. Every matrix executes all fourteen scenario
+IDs (fifteen fresh sessions), including the measured degradation assertions.
+
 ### 5. Orca
 
 `just orca` (`./rig/orca/run.sh`) creates an unfocused live Orca terminal

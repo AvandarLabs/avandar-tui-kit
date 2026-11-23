@@ -186,6 +186,40 @@ async function keyboardSelection(context) {
   return { keyboard, keys };
 }
 
+async function rapidButtonClicks(context, state) {
+  const gestures = [
+    ['prime', 'left', {}], ['right', 'left', { button: 'right' }],
+    ['controlPrime', 'left', { column: 3 }], ['control', 'right', { modifiers: ['Control'] }],
+  ];
+  const clickRecords = await runMouseFencedStep(context, async () => {
+    const inputSession = await context.bridge.page.context().newCDPSession(context.bridge.page);
+    try {
+      // One ordered CDP transport batch: no click acknowledgment or app wait between events.
+      const pendingInputs = gestures.flatMap(([, target, options]) => {
+        const cell = point(context, target, options.column ?? 0);
+        const position = cellCenterToViewportPx(state, cell.column, cell.row);
+        return ['mousePressed', 'mouseReleased'].map((type) => inputSession.send('Input.dispatchMouseEvent', {
+          type, ...position, button: options.button ?? 'left', clickCount: 1,
+          modifiers: options.modifiers?.includes('Control') ? 2 : 0,
+        }));
+      });
+      await Promise.all(pendingInputs);
+    } finally {
+      await inputSession.detach();
+    }
+  });
+  const releases = clickRecords.flatMap((record, index) => record.kind === 'event'
+    && record.event.kind === 'Mouse' && record.event.mouse_kind.startsWith('Up(') ? [index] : []);
+  assert.equal(releases.length, 4, 'X14 must observe all four click releases');
+  return Object.fromEntries(gestures.map(([name], index) => {
+    const start = index === 0 ? 0 : clickRecords.findIndex((record, offset) => offset > releases[index - 1]
+      && record.kind === 'event' && record.event.kind === 'Mouse');
+    const end = index === 3 ? clickRecords.length : clickRecords.findIndex((record, offset) =>
+      offset > releases[index] && record.kind === 'event' && record.event.kind === 'Mouse');
+    return [name, clickRecords.slice(start, end)];
+  }));
+}
+
 /** Executes X4 through X14; modifier variants receive independent managed sessions. */
 export async function runMouseGesture(context, state, scenario, modifier = null) {
   switch (scenario) {
@@ -212,10 +246,7 @@ export async function runMouseGesture(context, state, scenario, modifier = null)
       await runMouseFencedStep(context, () => context.bridge.page.keyboard.press('a'));
       return { wheel: await runMouseFencedStep(context, () => wheel(context, state, 'right', 1)) };
     case 'x13': return keyboardSelection(context);
-    case 'x14': return {
-      right: await click(context, state, 'left', 0, 0, { button: 'right' }),
-      control: await click(context, state, 'right', 0, 0, { modifiers: ['Control'] }),
-    };
+    case 'x14': return rapidButtonClicks(context, state);
     default: throw new Error(`Unsupported gesture scenario ${scenario}`);
   }
 }

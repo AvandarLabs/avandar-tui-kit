@@ -1,5 +1,6 @@
 /** Platform-aware assertions over the laboratory's native log schema. */
 import assert from 'node:assert/strict';
+import { isTmux33Version } from './interactive_scenario.mjs';
 
 const QUERY_MODES = [9, 1000, 1002, 1003, 1005, 1006, 1015, 1016];
 
@@ -25,16 +26,16 @@ export function assertMouseHover(records, platform = process.platform) {
   assert.equal(records.filter((record) => record.kind === 'selection').length, 0, 'hover must not change selection');
 }
 
-/** Checks requested setup/teardown replies, treating Windows silence as absence. */
-export function assertMouseModeReplies(records, platform = process.platform) {
+/** Checks pane mode replies, preserving ConPTY and tmux 3.3 query absence. */
+export function assertMouseModeReplies(records, platform = process.platform, tmuxServerInfo = null) {
   for (const phase of ['setup', 'teardown']) {
     const replies = records.filter((record) => record.kind === 'mode_reply' && record.phase === phase);
     assert.equal(replies.length, QUERY_MODES.length, `missing ${phase} mode observations`);
     for (const mode of QUERY_MODES) {
       const reply = replies.find((record) => record.mode === mode);
       assert.ok(reply, `missing ${phase} mode ${mode}`);
-      if (platform === 'win32') {
-        assert.equal(reply.is_absent, true, 'ConPTY must record unanswered DECRQM queries');
+      if (platform === 'win32' || isTmux33Version(tmuxServerInfo?.version ?? '')) {
+        assert.equal(reply.is_absent, true, 'ConPTY and tmux 3.3 must record unanswered DECRQM queries');
         assert.equal(reply.state, null);
       } else if ([1000, 1002, 1003, 1006].includes(mode)) {
         assert.equal(reply.is_absent, false, `direct xterm must answer mode ${mode}`);
@@ -46,10 +47,10 @@ export function assertMouseModeReplies(records, platform = process.platform) {
 }
 
 /** Checks a fenced gesture's exact semantic evidence. */
-export function assertMouseGesture(scenario, steps, platform = process.platform) {
+export function assertMouseGesture(scenario, steps, platform = process.platform, tmuxServerInfo = null) {
   try {
     if (Number(scenario.slice(1)) < 10) assertSelectionGesture(scenario, steps);
-    else assertPaneGesture(scenario, steps, platform);
+    else assertPaneGesture(scenario, steps, platform, tmuxServerInfo);
   } catch (error) {
     if (error instanceof assert.AssertionError) {
       error.message = `${scenario.toUpperCase()}: ${error.message}`;
@@ -94,9 +95,17 @@ function assertHistory(records) {
   assertCopy(records, 'right', text);
 }
 
-function assertModifierSelection(steps, platform) {
+function assertModifierSelection(steps, platform, tmuxServerInfo) {
   assert.equal(outcomes(steps.drag, 'Forward').length, 0, 'modifier gesture must never forward');
-  if (steps.modifier === 'Shift' && platform !== 'darwin') {
+  if (steps.modifier === 'Alt' && /^tmux 3\.8(?:$|[^0-9])/.test(tmuxServerInfo?.version ?? '')) {
+    assertMouseKinds(steps.drag, ['Down(Left)', 'Up(Left)'], 'KeyModifiers(ALT)');
+    assertPress(steps.drag, 'right', 'Left', 'KeyModifiers(ALT)');
+    for (const { selection } of steps.drag.filter((record) => record.kind === 'selection' && record.selection)) {
+      assert.equal(selection.stage, 'Pressed', 'missing Alt motion must not create a drag selection');
+      assert.deepEqual(selection.range.start, selection.range.end);
+    }
+    assert.equal(outcomes(steps.drag, 'Copy').length, 0);
+  } else if (steps.modifier === 'Shift' && platform !== 'darwin') {
     assert.equal(steps.nativeSelection, 'right', 'Shift must select exact native text');
     assert.equal(steps.drag.filter((record) => record.kind === 'selection' && record.selection).length, 0);
     assert.equal(outcomes(steps.drag, 'Copy').length, 0);
@@ -106,6 +115,9 @@ function assertModifierSelection(steps, platform) {
       assert.equal(record.outcome.kind, 'Ignored');
     }
   } else {
+    if (steps.modifier === 'Alt' && isTmux33Version(tmuxServerInfo?.version ?? '')) {
+      assertMouseKinds(steps.drag, ['Down(Left)', 'Drag(Left)', 'Up(Left)'], 'KeyModifiers(ALT)');
+    }
     assertCopy(steps.drag, 'right', 'right');
   }
 }
@@ -145,7 +157,7 @@ function assertSelectionGesture(scenario, steps) {
   }
 }
 
-function assertPaneGesture(scenario, steps, platform) {
+function assertPaneGesture(scenario, steps, platform, tmuxServerInfo) {
   switch (scenario) {
     case 'x10':
       assertForward(steps.click, ['\x1b[<0;3;3M', '\x1b[<0;3;3m']);
@@ -153,7 +165,7 @@ function assertPaneGesture(scenario, steps, platform) {
       assertForward(steps.wheel, ['\x1b[<65;3;3M']);
       break;
     case 'x11':
-      assertModifierSelection(steps, platform);
+      assertModifierSelection(steps, platform, tmuxServerInfo);
       break;
     case 'x12':
       assertForward(steps.wheel, ['\x1b[B\x1b[B\x1b[B']);
@@ -163,10 +175,36 @@ function assertPaneGesture(scenario, steps, platform) {
       assert.equal(steps.keyboard.filter((record) => record.kind === 'event' && record.event.kind === 'Mouse').length, 0);
       break;
     case 'x14':
+      assertPress(steps.prime, 'left');
+      assertPress(steps.controlPrime, 'left');
+      if (isTmux33Version(tmuxServerInfo?.version ?? '')) {
+        assertAbsorbedClick(steps.right, 'Right', 'KeyModifiers(0x0)');
+        assertAbsorbedClick(steps.control, 'Left', 'KeyModifiers(CONTROL)');
+        break;
+      }
       assertPress(steps.right, 'left', 'Right');
       assertPress(steps.control, 'right', 'Left', 'KeyModifiers(CONTROL)');
       break;
     default:
       assert.fail(`unknown gesture scenario ${scenario}`);
   }
+}
+
+function assertMouseKinds(records, kinds, modifiers) {
+  const events = records.filter((record) => record.kind === 'event' && record.event.kind === 'Mouse');
+  assert.deepEqual(events.map((record) => record.event.mouse_kind), kinds);
+  assert.ok(events.every((record) => record.event.modifiers === modifiers), 'mouse modifiers must survive tmux');
+}
+
+function assertNoSelectionOrCopy(records) {
+  assert.equal(records.filter((record) => record.kind === 'selection' && record.selection).length, 0);
+  assert.equal(outcomes(records, 'Copy').length, 0);
+  assert.equal(outcomes(records, 'Forward').length, 0);
+}
+
+function assertAbsorbedClick(records, button, modifiers) {
+  assertMouseKinds(records, [`Up(${button})`], modifiers);
+  assertNoSelectionOrCopy(records);
+  assert.equal(outcomes(records, 'Pressed').length, 0);
+  assert.equal(outcomes(records, 'Clicked').length, 0);
 }
