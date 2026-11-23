@@ -216,6 +216,33 @@ focus), runs the example program alone or inside a private `tmux` server
 Proved: `capability_probe` ran in live Orca `1.4.258`, alone and inside `tmux
 3.8`, reported `xterm.js(6.0.0)`, and matched both baselines.
 
+`just orca mouse_lab -- --query-modes` builds the laboratory with its `vt100`
+feature and drives X1 and X13 through Orca's terminal API. It waits for the
+lab's ready sentinel and log record, sends only keyboard input, waits for the
+exact `Copy` of `file.rs:12`, quits, and verifies the exit status, setup and
+teardown sequences, and mode replies. Native JSONL records reach stdout.
+The runner closes its terminal on success and failure; failed runs preserve
+the log directory named on stderr. Node.js is required for this path.
+
+`--interactive` leaves keyboard input to an external controller and still
+returns the native lab log after exit. Automated lab checks use a direct Orca
+terminal; private tmux sessions remain available with `--interactive`.
+The capability probe remains batch by default. No Orca desktop pointer,
+focus control, pointer scenarios, or scroll-preference measurement is used or
+claimed by this layer.
+
+```sh
+just orca mouse_lab -- --query-modes
+just orca mouse_lab --interactive -- --query-modes
+node --test rig/orca/test/mouse_lab.test.mjs
+cargo test -p rig-probe --test orca_runner_cli
+```
+
+The mocked driver suite checks readiness and log conditions, keyboard-only
+Copy, exact lifecycle evidence, and terminal cleanup on send, exit, or missing-Copy failure.
+The CLI suite checks feature-aware lab builds, argument forwarding, native
+records for external control, and the unchanged probe batch default.
+
 ### 6. iTerm2 in a virtual machine
 
 iTerm2 is a desktop app. Driving it on the development machine itself does

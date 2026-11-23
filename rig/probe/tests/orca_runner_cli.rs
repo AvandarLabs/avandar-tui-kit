@@ -263,6 +263,8 @@ esac
                 "--batch",
                 "--interactive",
                 "capability_probe",
+                "mouse_lab",
+                "--query-modes",
             ] {
                 assert!(stdout_text.contains(token), "missing {token}");
             }
@@ -281,6 +283,8 @@ esac
             &["capability_probe", "--log", "/tmp/manual.jsonl"],
             &["capability_probe", "--timeout-ms", "not-a-number"],
             &["capability_probe", "--batch", "--interactive"],
+            &["mouse_lab", "--batch"],
+            &["--tmux", "full", "mouse_lab"],
         ];
         for case_arguments in invalid_cases {
             let output = run_orca_script(
@@ -386,6 +390,43 @@ esac
         let create_line = calls_text.lines().next().unwrap_or_default();
         assert!(!create_line.contains("--batch") && create_line.contains("--push-kitty"));
         assert!(!create_line.contains("'rel-target/"));
+    }
+
+    #[test]
+    fn mouse_lab_builds_with_feature_and_delegates_keyboard_driver() {
+        let fixture = MockOrcaFixture::create("mouse-lab");
+        let node_path = fixture.temp_dir.path.join("bin/node");
+        fs::write(
+            &node_path,
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+{ printf 'NODE'; for item in "$@"; do printf '\t%s' "$item"; done; printf '\n'; } >> "$MOCK_ORCA_CALLS_FILE"
+printf '{"kind":"report","outcome":{"kind":"Copy","text":"file.rs:12"}}\n'
+"#,
+        )
+        .expect("node stub writable");
+        let mut permissions = fs::metadata(&node_path).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&node_path, permissions).expect("node executable");
+        let output = fixture.run(&["mouse_lab", "--", "--query-modes"], &[]);
+        assert_run_succeeded(&output);
+        let calls = fixture.read_calls();
+        assert!(calls.contains("mouse_lab.mjs"), "{calls}");
+        assert!(calls.contains("--query-modes") && !calls.contains("--batch"));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("file.rs:12"));
+    }
+
+    #[test]
+    fn mouse_lab_interactive_preserves_native_records_without_batch() {
+        let fixture = MockOrcaFixture::create("mouse-interactive");
+        let output = fixture.run(
+            &["mouse_lab", "--interactive", "--", "--query-modes"],
+            &[("MOCK_ORCA_STUB_INTERACTIVE", "1")],
+        );
+        assert_run_succeeded(&output);
+        assert!(!fixture.read_calls().contains("--batch"));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("\"kind\":\"ready\""));
+        assert_eq!(fixture.scratch_entry_count(), 0);
     }
 
     #[test]

@@ -38,10 +38,14 @@ print_usage_block() {
     "${COLOR_HEADING}Options:${COLOR_RESET}" \
     "  ${COLOR_ACCENT}-h, --help${COLOR_RESET}             Show this help text on stdout and exit 0" \
     "  ${COLOR_ACCENT}--tmux <stock|full>${COLOR_RESET}    Run <program> inside a private tmux server using rig/tmux/<mode>.conf" \
-    "  ${COLOR_ACCENT}--batch${COLOR_RESET}                Pass --batch to <program> so it exits after automated sections (default)" \
-    "  ${COLOR_ACCENT}--interactive${COLOR_RESET}          Run <program> without auto-appending --batch" \
+    "  ${COLOR_ACCENT}--batch${COLOR_RESET}                Pass --batch to the capability probe (its default; unsupported by mouse_lab)" \
+    "  ${COLOR_ACCENT}--interactive${COLOR_RESET}          Leave input to an external controller (mouse_lab default: drive X1/X13)" \
     "  ${COLOR_ACCENT}--timeout-ms <ms>${COLOR_RESET}      Maximum wait time in milliseconds for terminal exit (default: 20000)" \
     "  ${COLOR_ACCENT}--${COLOR_RESET}                     Forward all remaining arguments verbatim to <program>" \
+    "" \
+    "${COLOR_HEADING}Forwarded mouse_lab options:${COLOR_RESET}" \
+    "  ${COLOR_ACCENT}--query-modes${COLOR_RESET}          Query modes for X1 setup/teardown assertions" \
+    "  ${COLOR_ACCENT}--settings <json>${COLOR_RESET}      Override mouse lab settings (default: {})" \
     "" \
     "${COLOR_HEADING}Forwarded capability_probe options:${COLOR_RESET}" \
     "  ${COLOR_ACCENT}--osc52 <token>${COLOR_RESET}        Emit OSC 52 clipboard sequence(s) for <token>" \
@@ -50,11 +54,12 @@ print_usage_block() {
     "  ${COLOR_MUTED}(Note: --log <path> is managed automatically by run.sh and must not be passed manually.)${COLOR_RESET}" \
     "" \
     "${COLOR_HEADING}Streams:${COLOR_RESET}" \
-    "  stdout                 JSONL \"section\" and \"summary\" records captured from <program>" \
+    "  stdout                 JSONL probe section/summary records, or native mouse_lab records" \
     "  stderr                 Build/launch progress, warnings, errors, and final status summary" \
     "" \
     "${COLOR_HEADING}Examples:${COLOR_RESET}" \
     "  just orca capability_probe" \
+    "  just orca mouse_lab -- --query-modes" \
     "  just orca --tmux full capability_probe" \
     "  just orca capability_probe --batch --osc52 \"tuikit-orca-osc52-probe\"" \
     "  ./rig/orca/run.sh capability_probe --timeout-ms 30000"
@@ -161,7 +166,16 @@ if [ "$is_interactive" -eq 1 ] && [ "$has_batch_flag" -eq 1 ]; then
   fail_usage "Cannot combine '--batch' and '--interactive'." \
     "Pass either '--batch' (default) or '--interactive', not both."
 fi
-[ "$is_interactive" -eq 1 ] || [ "$has_batch_flag" -eq 1 ] || forwarded_arguments+=("--batch")
+if [ "$program_name" = "mouse_lab" ]; then
+  [ "$has_batch_flag" -eq 0 ] || fail_usage "mouse_lab does not accept '--batch'." \
+    "Run 'just orca mouse_lab -- --query-modes' for keyboard checks, or use '--interactive'."
+  if [ -n "$tmux_mode" ] && [ "$is_interactive" -eq 0 ]; then
+    fail_usage "Automated mouse_lab checks require a direct Orca terminal." \
+      "Omit '--tmux' or use '--interactive' for an externally controlled tmux session."
+  fi
+else
+  [ "$is_interactive" -eq 1 ] || [ "$has_batch_flag" -eq 1 ] || forwarded_arguments+=("--batch")
+fi
 
 resolve_orca_binary() {
   if [ -n "${ORCA_CLI_COMMAND:-}" ]; then command -v "$ORCA_CLI_COMMAND" 2>/dev/null; return $?; fi
@@ -222,7 +236,11 @@ if [ -n "$tmux_mode" ]; then
 fi
 
 log_info "Building workspace example '$program_name'..."
-cargo build --manifest-path "$repository_root/Cargo.toml" --workspace --example "$program_name" >&2 \
+build_arguments=(--manifest-path "$repository_root/Cargo.toml" --workspace --example "$program_name")
+if [ "$program_name" = "mouse_lab" ]; then
+  build_arguments+=(--features ratatui-mouse/vt100)
+fi
+cargo build "${build_arguments[@]}" >&2 \
   || fail_error "Failed to build example '$program_name'." \
     "Check available example names under rig/probe/examples/ and fix any compile errors above."
 
@@ -235,6 +253,13 @@ binary_path="$target_directory/debug/examples/$program_name"
 [ -x "$binary_path" ] || fail_error \
   "Compiled example binary was not found at '$binary_path'." \
   "Verify that '$program_name' is declared as an example in the Cargo workspace."
+
+if [ "$program_name" = "mouse_lab" ] && [ "$is_interactive" -eq 0 ]; then
+  command -v node >/dev/null 2>&1 || fail_error "Could not find 'node' in PATH." \
+    "Install Node.js and retry 'just orca mouse_lab -- --query-modes'."
+  exec node "$script_directory/mouse_lab.mjs" "$orca_binary" "$repository_root" \
+    "$binary_path" "$timeout_milliseconds" ${forwarded_arguments[@]+"${forwarded_arguments[@]}"}
+fi
 
 build_shell_quoted_string() {
   local remaining_text="$1" quoted_output="'"
@@ -363,7 +388,11 @@ grep -q '"kind":"ready"' "$log_file" || fail_error \
   "Probe log '$log_file' is missing the '\"kind\":\"ready\"' record." \
   "Inspect preserved probe log at '$log_file'."
 
-grep -E '^\{"kind":"(section|summary)"' "$log_file" || true
+if [ "$program_name" = "mouse_lab" ]; then
+  cat "$log_file"
+else
+  grep -E '^\{"kind":"(section|summary)"' "$log_file" || true
+fi
 
 has_succeeded=1
 log_success "Completed '$program_name' in unfocused Orca terminal."
