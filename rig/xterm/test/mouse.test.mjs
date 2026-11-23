@@ -4,11 +4,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { CliUsageError, parseHarnessArgs } from '../src/args.mjs';
 import * as harness from '../src/harness.mjs';
 
-const harnessPath = new URL('../src/harness.mjs', import.meta.url);
+const harnessPath = fileURLToPath(new URL('../src/harness.mjs', import.meta.url));
 
 test('mouse lab defaults and explicit scenario names preserve forwarded arguments', () => {
   assert.equal(parseHarnessArgs(['mouse_lab']).scenario, 'mouse');
@@ -41,7 +42,7 @@ test('mouse example build enables only its required feature and keeps probe buil
 test('mouse help precedes invalid arguments and build checks outside a repository', () => {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'mouse-help-'));
   try {
-    const outcome = spawnSync(process.execPath, [harnessPath.pathname, 'invalid', 'x99', '--help'], {
+    const outcome = spawnSync(process.execPath, [harnessPath, 'invalid', 'x99', '--help'], {
       cwd: scratch, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', RIG_XTERM_PROGRAM_BIN: '/missing' },
     });
     assert.equal(outcome.status, 0);
@@ -57,7 +58,7 @@ test('mouse help precedes invalid arguments and build checks outside a repositor
 });
 
 test('invalid lab scenario use prints usage and recovery only to stderr', () => {
-  const outcome = spawnSync(process.execPath, [harnessPath.pathname, 'capability_probe', 'x1'], {
+  const outcome = spawnSync(process.execPath, [harnessPath, 'capability_probe', 'x1'], {
     encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' },
   });
   assert.equal(outcome.status, 2);
@@ -132,7 +133,7 @@ test('terminal state observes actual outer SGR encoding independently of mode re
 
 
 test('live mouse lab lifecycle restores clean and panic sessions and fences both hover paths', () => {
-  const outcome = spawnSync(process.execPath, [harnessPath.pathname, 'mouse_lab'], {
+  const outcome = spawnSync(process.execPath, [harnessPath, 'mouse_lab'], {
     encoding: 'utf8', timeout: 90000, env: { ...process.env, NO_COLOR: '1' },
   });
   assert.equal(outcome.status, 0, outcome.stderr);
