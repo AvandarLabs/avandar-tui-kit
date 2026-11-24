@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { once } from 'node:events';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+
+import { reclaimPtyChild, runOwnedCleanupCase, waitForCleanupPhase } from './fixtures/windows_pty_cleanup.mjs';
 
 import { CliUsageError, parseHarnessArgs } from '../src/args.mjs';
 import { createBridgeServer, startBrowserBridge } from '../src/bridge_server.mjs';
@@ -402,6 +404,67 @@ for (const isRunning of [false, true]) {
     assert.equal(inputListeners.size, 0);
   });
 }
+
+for (const failedPhase of ['readiness', 'exit', 'worker-exit', 'input-close']) {
+  test(`Windows cleanup fixture retains ownership when ${failedPhase} rejects`, async () => {
+    const initiatingError = new Error(`${failedPhase} failed`);
+    const events = [];
+    let hasDisposed = false;
+    const session = {
+      async waitForExit() { if (failedPhase === 'exit') throw initiatingError; },
+      dispose() {
+        if (hasDisposed) return;
+        hasDisposed = true;
+        events.push('session-dispose');
+        if (['readiness', 'exit'].includes(failedPhase)) throw new Error('dispose also failed');
+      },
+    };
+    const state = {
+      workerExit: failedPhase === 'worker-exit' ? Promise.reject(initiatingError) : Promise.resolve(),
+      inputClose: failedPhase === 'input-close' ? Promise.reject(initiatingError) : Promise.resolve(),
+      ptyProcess: { _agent: {
+        _conoutSocketWorker: {
+          dispose() { events.push('worker-dispose'); throw new Error('worker dispose failed'); },
+          _worker: { async terminate() { events.push('worker-terminate'); } },
+        },
+        _inSocket: { destroy() { events.push('input-destroy'); } },
+      } },
+    };
+    void state.workerExit.catch(() => {});
+    void state.inputClose.catch(() => {});
+    await assert.rejects(runOwnedCleanupCase({
+      ready: failedPhase === 'readiness' ? Promise.reject(initiatingError) : Promise.resolve(),
+      session, state, isNaturalExit: true,
+      sendExit() { events.push('send-exit'); },
+      validateClosed() { events.push('success'); },
+      async reclaimChild() { events.push('child-reclaim'); },
+    }), (error) => error === initiatingError);
+    assert.deepEqual(events, [
+      ...(failedPhase !== 'readiness' ? ['send-exit'] : []),
+      'session-dispose', 'worker-dispose', 'input-destroy', 'worker-terminate', 'child-reclaim',
+    ]);
+  });
+}
+
+test('Windows cleanup fixture labels a blocked phase and clears its timer', async () => {
+  const baselineTimerCount = countActiveTimers();
+  await assert.rejects(
+    waitForCleanupPhase('worker-exit', () => new Promise(() => {}), 0),
+    /Windows PTY cleanup worker-exit timed out/,
+  );
+  assert.equal(countActiveTimers(), baselineTimerCount);
+});
+
+test('Windows cleanup fixture emergency reclaim terminates its captured child without PTY readiness', async (testContext) => {
+  const child = spawn(process.execPath, ['-e', 'process.stdin.resume()']);
+  testContext.after(() => child.kill('SIGKILL'));
+  const childExit = once(child, 'exit');
+  await once(child, 'spawn');
+  await reclaimPtyChild({ ptyProcess: { pid: child.pid } });
+  const [exitCode, signal] = await childExit;
+  assert.ok(signal === 'SIGKILL' || (Number.isInteger(exitCode) && exitCode !== 0));
+  assert.throws(() => process.kill(child.pid, 0), { code: 'ESRCH' });
+});
 
 for (const cleanupCase of ['natural', 'running']) {
   test(`Windows ConPTY ${cleanupCase} cleanup closes real workers and sockets`, { skip: process.platform !== 'win32' }, () => {

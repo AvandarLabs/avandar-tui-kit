@@ -190,7 +190,10 @@ one live termination in separate child processes. It subscribes to each actual
 worker-exit and input-close event before disposal, requires the owned handles
 to close, and rejects `AttachConsole failed` in captured natural-exit stderr.
 This runtime check runs on Windows CI; portable fakes alone do not establish
-Windows handle release. The earlier
+Windows handle release. Fixture phases have labeled bounds within the outer
+subprocess deadline. On failure it independently attempts session, worker, input-socket, and captured
+child cleanup, preserving the initiating error; forced
+teardown never satisfies the successful-closure assertions. The earlier
 180-second aggregate timeout remains distinct from the confirmed post-exit
 helper defect.
 
