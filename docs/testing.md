@@ -173,6 +173,27 @@ mouse aggregate deadline remains unchanged. Windows timeout diagnosis still
 requires an instrumented CI run; a final entered phase identifies the next
 component to inspect, rather than proving a particular dependency defect.
 
+PTY disposal kills only a child whose exit event has not been observed. On
+Windows, an already-exited session instead releases the pinned node-pty 1.1.0
+conout worker through its existing drain-and-dispose method, then destroys the
+input socket. A running session retains public kill and its worker cleanup;
+if kill throws, the harness still attempts worker and input release
+independently. Disposal stays synchronous and idempotent: it initiates the
+dependency's worker drain without awaiting worker exit or changing the existing
+output-flush and exit-wait behavior. A child may exit between the running-state
+check and kill, so the running path still tolerates termination errors.
+
+Focused unit cases cover natural exit, live termination, independent cleanup
+failures, repeated disposal, and unchanged Unix behavior. A Windows-only
+subprocess regression also exercises two naturally exiting real Node PTYs and
+one live termination in separate child processes. It subscribes to each actual
+worker-exit and input-close event before disposal, requires the owned handles
+to close, and rejects `AttachConsole failed` in captured natural-exit stderr.
+This runtime check runs on Windows CI; portable fakes alone do not establish
+Windows handle release. The earlier
+180-second aggregate timeout remains distinct from the confirmed post-exit
+helper defect.
+
 Both direct and tmux harnesses keep Cargo build diagnostics on stderr. When
 stderr is redirected, `NO_COLOR` is nonempty, or `TERM=dumb`, the Cargo child
 uses plain output even if the parent sets `CARGO_TERM_COLOR=always`. Diagnostic

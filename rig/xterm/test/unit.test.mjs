@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { once } from 'node:events';
+import { spawnSync } from 'node:child_process';
+import { Worker } from 'node:worker_threads';
+import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -261,37 +265,166 @@ test('buildSanitizedPtyEnv strips outer terminal and tmux vars while preserving 
   assert.equal(sanitized.CUSTOM_HARNESS_FLAG, 'enabled');
 });
 
-test('startPtySession refuses unready bridges and disposes Windows ConPTY handles idempotently', async () => {
+function createCleanupPtyFixture(testContext, options = {}) {
+  const events = [];
+  const worker = new Worker(`
+    const { parentPort } = require('node:worker_threads');
+    parentPort.once('message', () => parentPort.close());
+  `, { eval: true });
+  const workerExit = once(worker, 'exit');
+  testContext.after(() => worker.terminate());
+  let triggerExit;
+  const conoutWorker = {
+    dispose() {
+      events.push('worker-dispose');
+      if (options.workerError) throw new Error('worker disposal failed');
+      worker.postMessage('dispose');
+    },
+  };
+  const ptyProcess = {
+    pid: 4242,
+    _agent: {
+      _conoutSocketWorker: conoutWorker,
+      _inSocket: { destroy() {
+        events.push('input-destroy');
+        if (options.socketError) throw new Error('input destruction failed');
+      } },
+    },
+    onData() {},
+    onExit(handler) { triggerExit = handler; },
+    write() { events.push('input-write'); },
+    kill() {
+      events.push('kill');
+      if (options.killError) throw new Error('AttachConsole failed');
+      conoutWorker.dispose();
+      triggerExit({ exitCode: 0, signal: 0 });
+    },
+  };
+  return { events, ptyProcess, workerExit, triggerExit: () => triggerExit({ exitCode: 0, signal: 0 }) };
+}
+
+function createCleanupSession(fixture, platform = 'win32') {
+  const inputListeners = new Set();
+  const bridge = {
+    isTerminalReady: true,
+    isOpen: true,
+    onTerminalInput(handler) {
+      inputListeners.add(handler);
+      return () => inputListeners.delete(handler);
+    },
+    async flushTerminalWrites() { fixture.events.push('write-flush'); },
+  };
+  const session = startPtySession({
+    command: 'test-child', bridge, platform, ptySpawner: () => fixture.ptyProcess,
+  });
+  return { session, inputListeners };
+}
+
+test('startPtySession refuses unready bridges before spawning', () => {
   assert.throws(
     () => startPtySession({ command: process.execPath, bridge: { isTerminalReady: false } }),
     /Rule 5 violation: cannot spawn child process before browser terminal is listening/,
   );
-
-  let killCallCount = 0;
-  let hasDestroyedInSocket = false;
-  let triggerExit = null;
-  const fakePtySpawner = () => ({
-    pid: 4242,
-    _agent: { _inSocket: { destroy: () => { hasDestroyedInSocket = true; } } },
-    onData: () => {},
-    onExit: (handler) => { triggerExit = handler; },
-    write: () => {},
-    kill: () => { killCallCount += 1; },
-  });
-  const fakeBridge = { isTerminalReady: true, isOpen: false, onTerminalInput: () => () => {} };
-  const winSession = startPtySession({
-    command: 'cmd.exe',
-    bridge: fakeBridge,
-    platform: 'win32',
-    ptySpawner: fakePtySpawner,
-  });
-  triggerExit({ exitCode: 0, signal: 0 });
-  await winSession.waitForExit(1000);
-  winSession.dispose();
-  winSession.dispose();
-  assert.equal(killCallCount, 1);
-  assert.equal(hasDestroyedInSocket, true);
 });
+
+test('startPtySession releases exited Windows resources without killing the dead process', { timeout: 5000 }, async (testContext) => {
+  const fixture = createCleanupPtyFixture(testContext, { killError: true });
+  const { session, inputListeners } = createCleanupSession(fixture);
+  fixture.triggerExit();
+  await session.waitForExit(1000);
+  session.dispose();
+  session.dispose();
+  assert.deepEqual(fixture.events, ['write-flush', 'worker-dispose', 'input-destroy']);
+  assert.equal(inputListeners.size, 0);
+  assert.deepEqual(await fixture.workerExit, [0]);
+});
+
+test('startPtySession kills running Windows PTYs once and preserves worker/socket cleanup order', { timeout: 5000 }, async (testContext) => {
+  const fixture = createCleanupPtyFixture(testContext);
+  const { session, inputListeners } = createCleanupSession(fixture);
+  session.dispose();
+  session.dispose();
+  assert.deepEqual(fixture.events, ['kill', 'worker-dispose', 'input-destroy']);
+  assert.equal(inputListeners.size, 0);
+  await session.waitForExit(1000);
+  assert.deepEqual(await fixture.workerExit, [0]);
+});
+
+test('startPtySession still releases Windows worker and input when running kill throws', { timeout: 5000 }, async (testContext) => {
+  const fixture = createCleanupPtyFixture(testContext, { killError: true });
+  const { session, inputListeners } = createCleanupSession(fixture);
+  session.dispose();
+  session.dispose();
+  assert.deepEqual(fixture.events, ['kill', 'worker-dispose', 'input-destroy']);
+  assert.equal(inputListeners.size, 0);
+  assert.deepEqual(await fixture.workerExit, [0]);
+});
+
+test('startPtySession releases input when both Windows kill and worker cleanup throw', async (testContext) => {
+  const fixture = createCleanupPtyFixture(testContext, { killError: true, workerError: true });
+  const { session, inputListeners } = createCleanupSession(fixture);
+  assert.doesNotThrow(() => session.dispose());
+  session.dispose();
+  assert.deepEqual(fixture.events, ['kill', 'worker-dispose', 'input-destroy']);
+  assert.equal(inputListeners.size, 0);
+});
+
+for (const options of [{ workerError: true }, { socketError: true }]) {
+  test(`startPtySession attempts each exited Windows release despite ${Object.keys(options)[0]}`, async (testContext) => {
+    const fixture = createCleanupPtyFixture(testContext, options);
+    const { session, inputListeners } = createCleanupSession(fixture);
+    fixture.triggerExit();
+    await session.waitForExit(1000);
+    assert.doesNotThrow(() => session.dispose());
+    session.dispose();
+    assert.deepEqual(fixture.events, ['write-flush', 'worker-dispose', 'input-destroy']);
+    assert.equal(inputListeners.size, 0);
+    if (!options.workerError) assert.deepEqual(await fixture.workerExit, [0]);
+  });
+}
+
+for (const isRunning of [false, true]) {
+  test(`startPtySession preserves Unix cleanup for ${isRunning ? 'running' : 'exited'} PTYs`, async (testContext) => {
+    const fixture = createCleanupPtyFixture(testContext);
+    // Unix kill does not own the Windows-only resources in the test double.
+    fixture.ptyProcess.kill = () => {
+      fixture.events.push('kill');
+      fixture.triggerExit();
+    };
+    const { session, inputListeners } = createCleanupSession(fixture, 'linux');
+    if (!isRunning) {
+      fixture.triggerExit();
+      await session.waitForExit(1000);
+    }
+    session.dispose();
+    session.dispose();
+    assert.deepEqual(fixture.events, isRunning ? ['kill'] : ['write-flush']);
+    assert.equal(inputListeners.size, 0);
+  });
+}
+
+for (const cleanupCase of ['natural', 'running']) {
+  test(`Windows ConPTY ${cleanupCase} cleanup closes real workers and sockets`, { skip: process.platform !== 'win32' }, () => {
+    const fixturePath = fileURLToPath(new URL('./fixtures/windows_pty_cleanup.mjs', import.meta.url));
+    const outcome = spawnSync(process.execPath, [fixturePath, cleanupCase], {
+      encoding: 'utf8', timeout: 20000,
+    });
+    assert.equal(outcome.error, undefined, outcome.error?.message);
+    assert.equal(outcome.status, 0, outcome.stderr);
+    const outcomes = JSON.parse(outcome.stdout);
+    if (cleanupCase === 'natural') {
+      assert.doesNotMatch(outcome.stderr, /AttachConsole failed/);
+      assert.deepEqual(outcomes, [
+        { isNaturalExit: true, killCount: 0, workerDisposeCount: 1, closed: true },
+        { isNaturalExit: true, killCount: 0, workerDisposeCount: 1, closed: true },
+      ]);
+    } else {
+      assert.deepEqual(outcomes, [
+        { isNaturalExit: false, killCount: 1, workerDisposeCount: 1, closed: true },
+      ]);
+    }
+  });
+}
 
 test('startBridgeAndPtySession rejects an unready caller-supplied bridge before spawning', async () => {
   const unreadyServer = await createBridgeServer({ cols: 100, rows: 30 });

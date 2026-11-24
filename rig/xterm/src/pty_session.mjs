@@ -139,14 +139,25 @@ function wirePtyStreams(ptyProcess, bridge, diagnostics) {
 }
 
 function disposePtyHandles(ptyProcess, isRunning, platform) {
-  if (isRunning || platform === 'win32') {
+  let needsWorkerDisposal = !isRunning;
+  if (isRunning) {
     try {
       ptyProcess.kill();
     } catch {
-      // Process may have exited concurrently.
+      // Process may have exited concurrently, before kill released its worker.
+      needsWorkerDisposal = true;
     }
   }
   if (platform === 'win32') {
+    if (needsWorkerDisposal) {
+      try {
+        // node-pty 1.1.0 natural exit leaves this worker alive. Its dispose
+        // preserves the dependency's drain interval without a dead-PID kill.
+        ptyProcess._agent?._conoutSocketWorker?.dispose?.();
+      } catch {
+        // Worker cleanup must not prevent releasing the input socket.
+      }
+    }
     try {
       ptyProcess._agent?._inSocket?.destroy?.();
     } catch {
