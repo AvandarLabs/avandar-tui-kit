@@ -799,7 +799,8 @@ PowerShell rather than requiring Bash, with explicit nonzero exit propagation.
   `./scripts/ci/check-features.sh`, `just linux cargo test --workspace --all-features`,
   `just linux cargo clippy --workspace --all-targets --all-features -- -D warnings`,
   `npm --prefix rig/xterm test`, and the Python VM-driver tests.
-- [x] Execute the complete matrix below. Reuse fresh evidence from Tasks
+- [ ] Execute the complete matrix below. Objective layers 1..7 are complete;
+  the human judgments remain pending. Reuse fresh evidence from Tasks
   12..16 only if the tested code and scenario logic have not changed since;
   rerun every affected layer after a fix. Do not rewrite expected capability
   baselines just to turn a failing mouse scenario green.
