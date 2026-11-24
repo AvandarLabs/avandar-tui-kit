@@ -148,6 +148,11 @@ readiness and exit terminal states, and gesture evidence. The browser helper
 reads encoding from the pinned xterm.js mouse service because its public mode
 state exposes tracking but not SGR encoding.
 
+Both direct and tmux harnesses keep Cargo build diagnostics on stderr. When
+stderr is redirected, `NO_COLOR` is nonempty, or `TERM=dumb`, the Cargo child
+uses plain output even if the parent sets `CARGO_TERM_COLOR=always`. Diagnostic
+text and build failures are preserved; stdout remains the JSON report.
+
 It uses the browser build of xterm.js, not the headless one: the code that
 turns a click or a key press into bytes exists only in the browser build, and
 that code is what has to be tested. On Windows the pseudo-terminal is ConPTY,

@@ -348,13 +348,28 @@ test('run.sh rejects invalid CLI arguments with exit code 2, empty stdout, and r
   }
 });
 
+test('run.sh preserves plain Cargo diagnostics when a generic example build fails despite forced color', () => {
+  const failedResult = runHarnessCli(['rig_missing_color_example'], {
+    envOverrides: { NO_COLOR: '1', CARGO_TERM_COLOR: 'always', RIG_XTERM_PROGRAM_BIN: '' },
+  });
+  assert.equal(failedResult.status, 1, failedResult.stderr);
+  assert.equal(failedResult.stdout, '');
+  assert.match(failedResult.stderr, /Building workspace example 'rig_missing_color_example'/);
+  assert.match(failedResult.stderr, /error: no example target named `rig_missing_color_example`/);
+  assert.match(failedResult.stderr, /Cargo failed to build example/);
+  assert.match(failedResult.stderr, /\n {2}\u26a0\ufe0f /);
+  assert.doesNotMatch(failedResult.stderr, /\x1b\[/);
+});
+
 test('run.sh executes capability_probe all scenario with clean JSON stdout and verified teardown', () => {
   const probeResult = runHarnessCli(['capability_probe', '--', '--push-kitty'], {
     timeoutMs: 60000,
+    envOverrides: { NO_COLOR: '1', CARGO_TERM_COLOR: 'always', RIG_XTERM_PROGRAM_BIN: '' },
   });
   assert.equal(probeResult.status, 0, `stderr:\n${probeResult.stderr}`);
   assert.match(probeResult.stderr, /==>/);
   assert.match(probeResult.stderr, /\u2705/);
+  assert.doesNotMatch(probeResult.stderr, /\x1b\[/);
 
   const stdoutLines = probeResult.stdout.trim().split('\n');
   assert.equal(stdoutLines.length, 1);

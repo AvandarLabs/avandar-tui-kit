@@ -134,7 +134,8 @@ test('terminal state observes actual outer SGR encoding independently of mode re
 
 test('live mouse lab covers X1 through X14 with independent modifier sessions and keys-only copy', () => {
   const outcome = spawnSync(process.execPath, [harnessPath, 'mouse_lab'], {
-    encoding: 'utf8', timeout: 180000, env: { ...process.env, NO_COLOR: '1' },
+    encoding: 'utf8', timeout: 180000,
+    env: { ...process.env, NO_COLOR: '1', CARGO_TERM_COLOR: 'always', RIG_XTERM_PROGRAM_BIN: '' },
   });
   assert.equal(outcome.status, 0, outcome.stderr);
   const report = JSON.parse(outcome.stdout);

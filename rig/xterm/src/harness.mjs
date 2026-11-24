@@ -178,7 +178,11 @@ function invokeCargoExampleBuild(programName, stderrTheme) {
   const buildOutcome = spawnSync(
     'cargo',
     buildCargoExampleArgs(programName, manifestPath),
-    { stdio: ['ignore', 'ignore', 'inherit'] },
+    {
+      stdio: ['ignore', 'ignore', 'inherit'],
+      // Apply the stderr plain-output policy even when CI forces Cargo color.
+      env: stderrTheme.reset ? process.env : { ...process.env, CARGO_TERM_COLOR: 'never' },
+    },
   );
   if (buildOutcome.error) {
     const cargoMissing = new Error(`Failed to invoke cargo: ${buildOutcome.error.message}`);
