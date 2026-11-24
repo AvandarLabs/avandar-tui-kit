@@ -783,31 +783,31 @@ and keeps the capability probe comparisons. Linux/macOS add both tmux modes;
 Windows keeps ConPTY event artifacts on every run. Use Node entrypoints in
 PowerShell rather than requiring Bash, with explicit nonzero exit propagation.
 
-- [ ] Add the lab suite to all three jobs and preserve stable + Rust 1.88
+- [x] Add the lab suite to all three jobs and preserve stable + Rust 1.88
   checks. Run feature rows for the mouse crate and umbrella: empty, each
   declared feature, and all. The existing metadata-driven script should need
   no change. Required-feature examples must not break empty-feature all-targets.
-- [ ] Document keyboard equivalents, event-loop integration, all known terminal
+- [x] Document keyboard equivalents, event-loop integration, all known terminal
   limits, surface rules, example commands, dependency/features, and the M0
   distinction between native selection and in-app selection. Correct obsolete
   stock-tmux/no-Alt statements in the listed docs with no unrelated rewrites.
-- [ ] Put the release judgments in `docs/testing.md`: edge interval 50 ms,
+- [x] Put the release judgments in `docs/testing.md`: edge interval 50 ms,
   maximum 10 rows, wheel 3, highlight legibility on dark/light/NO_COLOR.
   Record reviewer/date/default changes when a person performs them. Agents
   run correctness tests; a person supplies only these subjective judgments.
-- [ ] Run `just check`, `just lint-targets`,
+- [x] Run `just check`, `just lint-targets`,
   `./scripts/ci/check-features.sh`, `just linux cargo test --workspace --all-features`,
   `just linux cargo clippy --workspace --all-targets --all-features -- -D warnings`,
   `npm --prefix rig/xterm test`, and the Python VM-driver tests.
-- [ ] Execute the complete matrix below. Reuse fresh evidence from Tasks
+- [x] Execute the complete matrix below. Reuse fresh evidence from Tasks
   12..16 only if the tested code and scenario logic have not changed since;
   rerun every affected layer after a fix. Do not rewrite expected capability
   baselines just to turn a failing mouse scenario green.
-- [ ] Request explicit push authorization if absent before starting remote
+- [x] Request explicit push authorization if absent before starting remote
   Windows CI. After an authorized push, run `just windows --wait`, inspect
   that run's three-platform checks and downloaded Windows logs, and resolve
   failures. A local cross-target lint is not a Windows execution substitute.
-- [ ] Verify no personal paths/internal app names enter published entrypoints,
+- [x] Verify no personal paths/internal app names enter published entrypoints,
   and record remaining subjective judgments without claiming release readiness.
   Commit as `docs(mouse): document verified behavior and release checklist`.
 

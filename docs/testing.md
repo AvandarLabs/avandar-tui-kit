@@ -169,9 +169,8 @@ an aggregate timeout from a normal nonzero exit. On failure, the parent
 retains partial stdout in a separate `*-child-outcome.json` artifact. All
 phase records stay out of app JSONL, machine stdout, and diagnostic stderr.
 With logging unset, no lifecycle file is created. The existing 180-second
-mouse aggregate deadline remains unchanged. Windows timeout diagnosis still
-requires an instrumented CI run; a final entered phase identifies the next
-component to inspect, rather than proving a particular dependency defect.
+mouse aggregate deadline remains unchanged. The original Windows timeout cause remains unproven; an entered phase identifies
+the next component to inspect, rather than proving a particular dependency defect.
 
 PTY disposal kills only a child whose exit event has not been observed. On
 Windows, an already-exited session instead releases the pinned node-pty 1.1.0
@@ -456,11 +455,13 @@ separate and unchanged. Windows artifacts upload on every outcome and retain
 native mouse events, scenario evidence, any-motion/SGR setup, ignored hover,
 and clean/panic restoration observations.
 
-**Current M1 gate (2026-11-22): pending Windows execution.** The new workflow
-has not run on a pushed branch. Before the first push, obtain explicit push
-authorization; then run `just windows --wait`, inspect all three jobs of that
-run and its downloaded Windows logs, and fix failures. Cross-target Clippy and
-M0's historical ConPTY measurements do not replace this execution.
+**M1 Windows evidence (2026-11-24):** CI run [45425192968](https://github.com/AvandarLabs/avandar-tui-kit/actions/runs/45425192968)
+passed all three platform jobs at commit `937b055`. The Windows native report
+covers X1-X14, including both X11 sessions: any-motion and SGR at setup,
+ignored hover, and restored tracking after normal and intentional panic exits.
+Both real worker/socket cleanup fixtures passed, and the inspected logs contain
+no `AttachConsole failed` error. The original aggregate timeout cause remains
+unproven, separate from the corrected post-exit helper defect.
 
 `just windows` (`./rig/windows/run.sh`) inspects the current branch's latest
 `ci.yml` run via `gh`, optionally waits for completion (`--wait`), and
@@ -475,7 +476,7 @@ paid license to be used properly, and CI runners come already licensed.
 
 Agents run every correctness check above. A person supplies only the following
 subjective judgments with the mouse laboratory; these are separate from the
-pending Windows runtime gate. No agent substitutes a passing assertion for
+completed Windows runtime verification. No agent substitutes a passing assertion for
 scroll feel or visual legibility.
 
 | Judgment | Current default | Reviewer | Date | Result / adjustment |
@@ -509,6 +510,6 @@ reviewed and required runtime layers pass, the branch is not release-ready.
 | `rig/expected` (all 13 normalized capability baselines) | Built and verified in workspace tests and live CI checks |
 | Cross-target lint (`just lint-targets`) | Built and verified for `x86_64-pc-windows-msvc` and `x86_64-unknown-linux-gnu` |
 | `rig/windows` (`just windows`) and GitHub Actions CI (`.github/workflows/ci.yml`) | Built and verified across Linux, macOS, and Windows (`windows-2025`) |
-| M1 mouse library/laboratory | Local macOS/Linux, xterm.js, stock/full tmux, live Orca X1/X13, and iTerm2 VM matrices verified; new Windows lab runtime remains pending |
-| M1 CI feature and mouse matrix additions | Configured for all three platforms; remote execution pending authorization and push |
+| M1 mouse library/laboratory | Local macOS/Linux, xterm.js, stock/full tmux, live Orca X1/X13, iTerm2 VM matrices, and Windows ConPTY lab runtime verified |
+| M1 CI feature and mouse matrix additions | Verified in all three platform jobs in CI run 45425192968 |
 | M1 human release judgments | Pending named reviewer/date for all six rows above |

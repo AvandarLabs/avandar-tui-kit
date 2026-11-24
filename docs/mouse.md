@@ -97,9 +97,9 @@ program's tracking, encoding, alternate-screen, and application-cursor modes.
 The modes integration tests exercise exact bytes, short writes, write and
 flush error sources, cleanup after partial enable, and the guard's drop and
 explicit-cleanup paths on stream-based platforms. Cross-target lint checks
-the Windows console implementation. Live terminal behavior and Windows
-console-state restoration require the M1 Windows CI execution, still pending
-on this branch. A redirected writer on macOS is not a Windows console.
+the Windows console implementation. M1 Windows CI exercised live ConPTY
+behavior and observed tracking restored after normal and intentional panic
+exits. A redirected writer on macOS is not a Windows console.
 
 ## Frame geometry and content coordinates
 
@@ -552,7 +552,7 @@ old probe success alone does not verify the library.
 | iTerm2 | Option-drag selects natively, Option+Command selects a native rectangle, Shift selects in-app, and direct Command-drag arrives as Alt and selects in-app. Default right/Control clicks open menus without app events. |
 | tmux 3.8, stock/full | Pane mouse input is forwarded, but Alt/Command drag motion is filtered. Select mode supplies the complete selection path. |
 | tmux 3.3a, stock/full | Alt motion is forwarded, but rapid right/Control presses can be absorbed while their releases arrive. Orphan releases never create a click or Copy. Mode queries are unanswered. |
-| Windows ConPTY | Console setup enables outer any-motion plus SGR and delivers bare moves, which are ignored. Queries are absent and cannot prove reset. M1 runtime verification must run on Windows CI. |
+| Windows ConPTY | Console setup enables outer any-motion plus SGR and delivers bare moves, which are ignored. Queries are absent and cannot prove reset. Windows CI observes tracking restored after exit. |
 | Any-motion pane requests | Receive button motion only on every platform. Unix never enables host hover. Windows host hover can be affected by ConPTY until cleanup. |
 | Wheel | Direction is received from the host without inversion. macOS natural scrolling changes iTerm2's reports; Orca's own setting remains unmeasured. |
 
