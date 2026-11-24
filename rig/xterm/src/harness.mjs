@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { CliUsageError, parseHarnessArgs } from './args.mjs';
-import { archiveHarnessError, archiveHarnessReport } from './log_archive.mjs';
+import { archiveHarnessError, archiveHarnessReport, createLifecycleDiagnostics } from './log_archive.mjs';
 import { runScenario } from './scenarios.mjs';
 
 const MODULE_FILE_PATH = fileURLToPath(import.meta.url);
@@ -249,9 +249,10 @@ async function executeAndArchiveScenario({
   programPath,
   createSession,
   readTmuxBuffer,
+  diagnostics,
 }) {
   try {
-    const report = await runScenario(parsedArgs.scenario, {
+    const report = await diagnostics.run('scenario-loop', () => runScenario(parsedArgs.scenario, {
       program: parsedArgs.program,
       programPath,
       extraArgs: parsedArgs.extraArgs,
@@ -259,8 +260,9 @@ async function executeAndArchiveScenario({
       tmuxMode: parsedArgs.tmuxConfig,
       createSession,
       readTmuxBuffer,
-    });
-    archiveHarnessReport({ report, parsedArgs });
+      diagnostics,
+    }));
+    diagnostics.runSync('report-archive', () => archiveHarnessReport({ report, parsedArgs }));
     return report;
   } catch (scenarioError) {
     try {
@@ -272,6 +274,17 @@ async function executeAndArchiveScenario({
   }
 }
 
+function createHarnessDiagnostics(parsedArgs, observeProcessLifecycle) {
+  const diagnostics = createLifecycleDiagnostics({ labels: {
+    program: parsedArgs.program, scenario: parsedArgs.scenario, tmuxMode: parsedArgs.tmuxConfig,
+  } });
+  if (observeProcessLifecycle && diagnostics.filePath !== null) {
+    process.once('beforeExit', (code) => diagnostics.record('process-before-exit', 'return', { code }));
+    process.once('exit', (code) => diagnostics.record('process-exit', 'return', { code }));
+  }
+  return diagnostics;
+}
+
 /**
  * Parses CLI flags, builds `<program>`, executes the requested scenario, writes
  * the JSON report to `stdout`, and returns the numeric CLI exit status.
@@ -280,6 +293,7 @@ export async function runHarnessCliMain({
   argv = process.argv.slice(2),
   scriptName = 'run.sh',
   requireTmuxConfig = false,
+  observeProcessLifecycle = false,
   createSession,
   readTmuxBuffer,
 } = {}) {
@@ -292,7 +306,8 @@ export async function runHarnessCliMain({
       return 0;
     }
     validateProgramAndExtraArgs(parsedArgs);
-    const programPath = ensureCompiledProgramBinary(parsedArgs.program, stderrTheme);
+    const diagnostics = createHarnessDiagnostics(parsedArgs, observeProcessLifecycle);
+    const programPath = diagnostics.runSync('build', () => ensureCompiledProgramBinary(parsedArgs.program, stderrTheme));
     const layerNumber = parsedArgs.tmuxConfig === null ? 3 : 4;
     const modeSuffix = parsedArgs.tmuxConfig ? ` [tmux=${parsedArgs.tmuxConfig}]` : '';
     logProgress(
@@ -304,8 +319,9 @@ export async function runHarnessCliMain({
       programPath,
       createSession,
       readTmuxBuffer,
+      diagnostics,
     });
-    process.stdout.write(`${JSON.stringify(report)}\n`);
+    diagnostics.runSync('report-stdout', () => process.stdout.write(`${JSON.stringify(report)}\n`));
     logSuccess(
       stderrTheme,
       `Completed '${parsedArgs.program}' (${parsedArgs.scenario})${modeSuffix} in headless xterm.js.`,
@@ -341,6 +357,6 @@ export function isDirectCliExecution(moduleFilePath, entryPath = process.argv[1]
 }
 
 if (isDirectCliExecution(MODULE_FILE_PATH)) {
-  const exitStatus = await runHarnessCliMain();
+  const exitStatus = await runHarnessCliMain({ observeProcessLifecycle: true });
   process.exitCode = exitStatus;
 }

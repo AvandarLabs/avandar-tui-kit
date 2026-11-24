@@ -175,3 +175,91 @@ export function archiveHarnessError({ error, parsedArgs, env = process.env } = {
     errorPayload,
   );
 }
+
+
+function serializeDiagnosticError(error) {
+  return error == null ? null : {
+    name: error.name ?? 'Error', message: error.message ?? String(error),
+    ...(error.code === undefined ? {} : { code: error.code }),
+    ...(error.syscall === undefined ? {} : { syscall: error.syscall }),
+  };
+}
+
+function createLifecycleRecorder(filePath, clock, startedAt, labels) {
+  const record = (boundary, phase, details = {}) => {
+    if (filePath !== null) {
+      fs.appendFileSync(filePath, `${JSON.stringify({
+        ...labels, ...details, harnessPid: process.pid,
+        elapsedMs: clock() - startedAt, boundary, phase,
+      })}\n`, 'utf8');
+    }
+  };
+  return {
+    filePath, record,
+    withLabels: (extraLabels) => createLifecycleRecorder(filePath, clock, startedAt, { ...labels, ...extraLabels }),
+    runSync(boundary, operation) {
+      record(boundary, 'enter');
+      try {
+        const result = operation();
+        record(boundary, 'return');
+        return result;
+      } catch (error) {
+        record(boundary, 'error', { error: serializeDiagnosticError(error) });
+        throw error;
+      }
+    },
+    async run(boundary, operation) {
+      record(boundary, 'enter');
+      try {
+        const result = await operation();
+        record(boundary, 'return');
+        return result;
+      } catch (error) {
+        record(boundary, 'error', { error: serializeDiagnosticError(error) });
+        throw error;
+      }
+    },
+  };
+}
+
+/**
+ * Creates an optional synchronous lifecycle artifact before startup. Records
+ * remain on disk during unresolved operations or a parent timeout, separate
+ * from app logs and command streams. Child recorders share one monotonic clock.
+ */
+export function createLifecycleDiagnostics({ env = process.env, clock = () => performance.now(), labels = {} } = {}) {
+  const directory = buildArchiveDirectoryPath(env);
+  let filePath = null;
+  if (directory !== null) {
+    fs.mkdirSync(directory, { recursive: true });
+    for (let sequence = 1; ; sequence += 1) {
+      const candidate = path.join(directory, `lifecycle-pid${process.pid}-${sequence}.jsonl`);
+      try {
+        fs.writeFileSync(candidate, '', { flag: 'wx' });
+        filePath = candidate;
+        break;
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+      }
+    }
+  }
+  return createLifecycleRecorder(filePath, clock, clock(), labels);
+}
+
+/**
+ * Describes actual child status, signal and spawn error on assertion failure,
+ * retaining partial machine stdout in a separate optional CI artifact.
+ */
+export function describeChildOutcome(outcome, { label = 'child', env = process.env } = {}) {
+  if (outcome.status === 0 && !outcome.error && !outcome.signal) return outcome.stderr ?? '';
+  const payload = {
+    status: outcome.status ?? null, signal: outcome.signal ?? null,
+    error: serializeDiagnosticError(outcome.error), stdout: outcome.stdout ?? '',
+  };
+  const directory = buildArchiveDirectoryPath(env);
+  if (directory !== null) {
+    writeUniqueFormattedJsonFile(directory, `${buildArchiveToken(label)}-pid${process.pid}`, 'child-outcome', payload);
+  }
+  const { stdout, ...fields } = payload;
+  return `Child outcome: ${JSON.stringify(fields)}\n${outcome.stderr ?? ''}`;
+}

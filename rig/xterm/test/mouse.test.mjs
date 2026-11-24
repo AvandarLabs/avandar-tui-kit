@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import { CliUsageError, parseHarnessArgs } from '../src/args.mjs';
 import * as harness from '../src/harness.mjs';
+import { describeChildOutcome } from '../src/log_archive.mjs';
 
 const harnessPath = fileURLToPath(new URL('../src/harness.mjs', import.meta.url));
 
@@ -137,7 +138,7 @@ test('live mouse lab covers X1 through X14 with independent modifier sessions an
     encoding: 'utf8', timeout: 180000,
     env: { ...process.env, NO_COLOR: '1', CARGO_TERM_COLOR: 'always', RIG_XTERM_PROGRAM_BIN: '' },
   });
-  assert.equal(outcome.status, 0, outcome.stderr);
+  assert.equal(outcome.status, 0, describeChildOutcome(outcome, { label: 'mouse-direct' }));
   const report = JSON.parse(outcome.stdout);
   assert.equal(report.program, 'mouse_lab');
   assert.equal(report.scenario, 'mouse');
@@ -297,7 +298,7 @@ for (const config of ['stock', 'full']) {
       const outcome = spawnSync(process.execPath, [tmuxHarnessPath, config, 'mouse_lab', 'mouse'], {
         encoding: 'utf8', timeout: 180000, env: { ...process.env, NO_COLOR: '1' },
       });
-      assert.equal(outcome.status, 0, outcome.stderr);
+      assert.equal(outcome.status, 0, describeChildOutcome(outcome, { label: `mouse-tmux-${config}` }));
       const report = JSON.parse(outcome.stdout);
       assert.equal(report.layer, 4);
       assert.equal(report.tmuxConfig, config);

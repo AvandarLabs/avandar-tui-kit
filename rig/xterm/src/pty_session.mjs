@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import pty from 'node-pty';
 
 import { startBrowserBridge } from './bridge_server.mjs';
+import { createLifecycleDiagnostics } from './log_archive.mjs';
 
 const MODULE_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const NODE_PTY_ROOT = path.resolve(MODULE_DIRECTORY, '..', 'node_modules', 'node-pty');
@@ -108,7 +109,7 @@ function raceExitWithTimeout(exitPromise, timeoutMs) {
   });
 }
 
-function wirePtyStreams(ptyProcess, bridge) {
+function wirePtyStreams(ptyProcess, bridge, diagnostics) {
   let hasExited = false;
   let resolveExitPromise = null;
   const exitPromise = new Promise((resolve) => {
@@ -125,6 +126,7 @@ function wirePtyStreams(ptyProcess, bridge) {
     }
   });
   ptyProcess.onExit(({ exitCode, signal }) => {
+    diagnostics.record('pty-exit', 'return', { ptyPid: ptyProcess.pid, exitCode, signal: signal ?? 0 });
     hasExited = true;
     unsubscribeInput();
     resolveExitPromise({ exitCode, signal: signal ?? 0 });
@@ -155,6 +157,7 @@ function disposePtyHandles(ptyProcess, isRunning, platform) {
 
 function normalizeSessionOptions(options) {
   return {
+    diagnostics: options?.diagnostics ?? createLifecycleDiagnostics({ env: {} }),
     command: options?.command,
     args: options?.args ?? [],
     cwd: options?.cwd ?? process.cwd(),
@@ -186,16 +189,17 @@ export function startPtySession(options) {
     cwd: config.cwd,
     env: buildSanitizedPtyEnv(config.env, config.envOverrides),
   });
-  const wired = wirePtyStreams(ptyProcess, config.bridge);
+  const diagnostics = config.diagnostics.withLabels({ ptyPid: ptyProcess.pid });
+  const wired = wirePtyStreams(ptyProcess, config.bridge, diagnostics);
   let hasDisposed = false;
 
   return {
     pid: ptyProcess.pid,
     exitPromise: wired.exitPromise,
     async waitForExit(timeoutMs = 10000) {
-      const exitOutcome = await raceExitWithTimeout(wired.exitPromise, timeoutMs);
+      const exitOutcome = await diagnostics.run('pty-exit-wait', () => raceExitWithTimeout(wired.exitPromise, timeoutMs));
       if (config.bridge.isOpen) {
-        await config.bridge.flushTerminalWrites(timeoutMs);
+        await diagnostics.run('write-flush', () => config.bridge.flushTerminalWrites(timeoutMs));
       }
       return exitOutcome;
     },

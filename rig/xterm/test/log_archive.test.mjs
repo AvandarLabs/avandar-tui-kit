@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import * as diagnosticsModule from '../src/log_archive.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,7 +13,7 @@ import {
   archiveSessionProbeLog,
   resetArchiveSessionSequence,
 } from '../src/log_archive.mjs';
-import { runScenario } from '../src/scenarios.mjs';
+import { runScenario, withManagedSession } from '../src/scenarios.mjs';
 
 function withTempDirectory(prefix, callback) {
   const directoryPath = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -139,7 +141,7 @@ test('runScenario preserves partial probe.jsonl in RIG_XTERM_LOG_DIR when a sess
         /passthrough program exited with 9/,
       );
       assert.equal(fs.existsSync(capturedScratchLogPath), false);
-      const archivedFiles = fs.readdirSync(archiveDir);
+      const archivedFiles = fs.readdirSync(archiveDir).filter((name) => name.startsWith('xterm-'));
       assert.deepEqual(archivedFiles, ['xterm-01-custom_probe-passthrough.jsonl']);
       const archivedContent = fs.readFileSync(path.join(archiveDir, archivedFiles[0]), 'utf8');
       assert.match(archivedContent, /captured-before-crash/);
@@ -244,5 +246,155 @@ test('log_archive advances past existing and racing sequences without overwritin
     assert.notEqual(firstError, secondError);
     assert.equal(JSON.parse(fs.readFileSync(firstError, 'utf8')).error, 'first');
     assert.equal(JSON.parse(fs.readFileSync(secondError, 'utf8')).error, 'second');
+  });
+});
+
+
+function readLifecycle(diagnostics) {
+  return fs.readFileSync(diagnostics.filePath, 'utf8').trim().split('\n').map(JSON.parse);
+}
+
+test('lifecycle writes enter before unresolved operations and preserves thrown error identity', async () => {
+  assert.equal(typeof diagnosticsModule.createLifecycleDiagnostics, 'function');
+  await withTempDirectory('tuikit-lifecycle-', async (directory) => {
+    let time = 100;
+    const diagnostics = diagnosticsModule.createLifecycleDiagnostics({
+      env: { RIG_XTERM_LOG_DIR: directory }, clock: () => time,
+      labels: { session: 'mouse_lab-x11-alt' },
+    });
+    let resolveCleanup;
+    const heldCleanup = new Promise((resolve) => { resolveCleanup = resolve; });
+    const pending = diagnostics.run('session-dispose', () => {
+      const records = readLifecycle(diagnostics);
+      assert.deepEqual(records.map(({ boundary, phase }) => [boundary, phase]), [['session-dispose', 'enter']]);
+      return heldCleanup;
+    });
+    assert.equal(readLifecycle(diagnostics).length, 1);
+    time = 125;
+    resolveCleanup('disposed');
+    assert.equal(await pending, 'disposed');
+    const failure = Object.assign(new Error('native spawn failed'), { code: 'EIO', syscall: 'spawn' });
+    assert.throws(() => diagnostics.runSync('pty-spawn', () => { throw failure; }), (error) => error === failure);
+    const records = readLifecycle(diagnostics);
+    assert.deepEqual(records.map(({ phase, elapsedMs }) => [phase, elapsedMs]),
+      [['enter', 0], ['return', 25], ['enter', 25], ['error', 25]]);
+    assert.ok(records.every((record) => record.session === 'mouse_lab-x11-alt' && record.harnessPid === process.pid));
+    assert.deepEqual(records.at(-1).error, { name: 'Error', message: 'native spawn failed', code: 'EIO', syscall: 'spawn' });
+    const other = diagnosticsModule.createLifecycleDiagnostics({ env: { RIG_XTERM_LOG_DIR: directory } });
+    assert.notEqual(other.filePath, diagnostics.filePath);
+  });
+});
+
+test('lifecycle managed session survives blocked X11 startup without an app archive', async () => {
+  assert.equal(typeof diagnosticsModule.createLifecycleDiagnostics, 'function');
+  await withTempDirectory('tuikit-lifecycle-start-', async (directory) => {
+    const diagnostics = diagnosticsModule.createLifecycleDiagnostics({ env: { RIG_XTERM_LOG_DIR: directory } });
+    let rejectBridge;
+    const heldBridge = new Promise((resolve, reject) => { rejectBridge = reject; });
+    const failure = new Error('bridge failed');
+    const pending = withManagedSession({ program: 'mouse_lab', diagnostics, timeoutMs: 50,
+      createBridge: () => heldBridge }, [], () => assert.fail('callback must not run'), 'x11-shift');
+    const records = readLifecycle(diagnostics);
+    assert.deepEqual(records.map(({ boundary, phase, session }) => [boundary, phase, session]), [
+      ['scenario', 'enter', 'mouse_lab-x11-shift'], ['bridge-start', 'enter', 'mouse_lab-x11-shift'],
+    ]);
+    assert.equal(fs.readdirSync(directory).length, 1);
+    rejectBridge(failure);
+    await assert.rejects(pending, (error) => error === failure);
+    assert.ok(readLifecycle(diagnostics).some((record) => record.boundary === 'bridge-start' && record.phase === 'error'));
+    assert.equal(readLifecycle(diagnostics).at(-1).phase, 'error');
+  });
+});
+
+test('lifecycle managed cleanup is on disk while disposal remains unresolved', async () => {
+  assert.equal(typeof diagnosticsModule.createLifecycleDiagnostics, 'function');
+  await withTempDirectory('tuikit-lifecycle-cleanup-', async (directory) => {
+    const diagnostics = diagnosticsModule.createLifecycleDiagnostics({ env: { RIG_XTERM_LOG_DIR: directory } });
+    const entered = Promise.withResolvers();
+    const heldCleanup = Promise.withResolvers();
+    const pending = withManagedSession({ program: 'mouse_lab', diagnostics,
+      createBridge: async () => ({ close: async () => {} }),
+      createSession: () => ({ pid: 234, dispose: () => { entered.resolve(); return heldCleanup.promise; } }),
+    }, [], () => 'result', 'x10');
+    await entered.promise;
+    const records = readLifecycle(diagnostics);
+    assert.equal(records.at(-1).boundary, 'session-dispose');
+    assert.equal(records.at(-1).phase, 'enter');
+    assert.ok(records.some((record) => record.boundary === 'archive' && record.phase === 'return'));
+    assert.ok(records.some((record) => record.ptyPid === 234));
+    assert.ok(!records.some((record) => record.boundary === 'scenario' && record.phase === 'return'));
+    heldCleanup.resolve();
+    assert.equal(await pending, 'result');
+    assert.equal(readLifecycle(diagnostics).at(-1).boundary, 'scenario');
+    assert.equal(readLifecycle(diagnostics).at(-1).phase, 'return');
+  });
+});
+
+test('lifecycle artifact never leaks into machine stdout or plain stderr and is disabled without log directory', async () => {
+  assert.equal(typeof diagnosticsModule.createLifecycleDiagnostics, 'function');
+  await withTempDirectory('tuikit-lifecycle-streams-', async (directory) => {
+    const moduleUrl = new URL('../src/log_archive.mjs', import.meta.url).href;
+    const source = `import { createLifecycleDiagnostics } from ${JSON.stringify(moduleUrl)};
+      const diagnostics = createLifecycleDiagnostics();
+      await diagnostics.run('bridge-start', async () => {});
+      process.stdout.write(JSON.stringify({scenario:'mouse',passed:true})+'\\n');
+      process.stderr.write('expected plain diagnostic\\n');`;
+    for (const logDirectory of [directory, '']) {
+      const outcome = spawnSync(process.execPath, ['--input-type=module', '-e', source], {
+        encoding: 'utf8', env: { ...process.env, RIG_XTERM_LOG_DIR: logDirectory },
+      });
+      assert.equal(outcome.status, 0, outcome.stderr);
+      assert.deepEqual(JSON.parse(outcome.stdout), { scenario: 'mouse', passed: true });
+      assert.equal(outcome.stderr, 'expected plain diagnostic\n');
+      assert.doesNotMatch(outcome.stdout + outcome.stderr, /\x1b|elapsedMs|bridge-start/);
+    }
+    assert.equal(fs.readdirSync(directory).length, 1);
+    const disabled = diagnosticsModule.createLifecycleDiagnostics({ env: {} });
+    assert.equal(disabled.filePath, null);
+    assert.equal(await disabled.run('cleanup', () => 12), 12);
+  });
+});
+
+test('child outcome diagnostics preserve timeout and signal fields plus partial machine stdout', async () => {
+  assert.equal(typeof diagnosticsModule.describeChildOutcome, 'function');
+  await withTempDirectory('tuikit-child-outcome-', async (directory) => {
+    const error = Object.assign(new Error('spawnSync node ETIMEDOUT'), { code: 'ETIMEDOUT', syscall: 'spawnSync node' });
+    const diagnostic = diagnosticsModule.describeChildOutcome({ status: null, signal: 'SIGTERM', error,
+      stdout: '{"scenario":', stderr: 'child stderr\n' }, {
+      label: 'mouse-direct', env: { RIG_XTERM_LOG_DIR: directory },
+    });
+    assert.match(diagnostic, /"status":null/);
+    assert.match(diagnostic, /"signal":"SIGTERM"/);
+    assert.match(diagnostic, /"code":"ETIMEDOUT"/);
+    assert.match(diagnostic, /"syscall":"spawnSync node"/);
+    assert.match(diagnostic, /spawnSync node ETIMEDOUT/);
+    assert.match(diagnostic, /child stderr/);
+    assert.doesNotMatch(diagnostic, /\x1b/);
+    const artifact = JSON.parse(fs.readFileSync(path.join(directory, fs.readdirSync(directory)[0]), 'utf8'));
+    assert.equal(artifact.stdout, '{"scenario":');
+    assert.equal(artifact.status, null);
+    const signalDiagnostic = diagnosticsModule.describeChildOutcome({ status: null, signal: 'SIGKILL', error: undefined, stderr: '' }, { env: {} });
+    assert.match(signalDiagnostic, /"error":null/);
+    assert.match(signalDiagnostic, /SIGKILL/);
+    assert.equal(diagnosticsModule.describeChildOutcome({status: 0, signal: null, stderr: ''}, {env: { RIG_XTERM_LOG_DIR: directory }}), '');
+    assert.equal(fs.readdirSync(directory).length, 1);
+  });
+});
+
+
+test('lifecycle imported runner does not retain process hooks after its artifact directory is removed', async () => {
+  await withTempDirectory('tuikit-lifecycle-import-', async (directory) => {
+    const moduleUrl = new URL('../src/harness.mjs', import.meta.url).href;
+    const source = `import fs from 'node:fs';
+      import { runHarnessCliMain } from ${JSON.stringify(moduleUrl)};
+      const status = await runHarnessCliMain({argv:['mouse_lab','x1']});
+      fs.rmSync(process.env.RIG_XTERM_LOG_DIR,{recursive:true,force:true});
+      process.stdout.write(JSON.stringify({status}));`;
+    const outcome = spawnSync(process.execPath, ['--input-type=module', '-e', source], {
+      encoding: 'utf8', env: { ...process.env, RIG_XTERM_LOG_DIR: path.join(directory, 'logs'), RIG_XTERM_PROGRAM_BIN: path.join(directory, 'missing') },
+    });
+    assert.equal(outcome.status, 0, outcome.stderr);
+    assert.deepEqual(JSON.parse(outcome.stdout), { status: 1 });
+    assert.doesNotMatch(outcome.stderr, /ENOENT|\x1b/);
   });
 });

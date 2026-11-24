@@ -57,14 +57,16 @@ function assertLifecycleSequences(records) {
 async function executeMouseScenario(runtime, scenario, modifier = null) {
   const managedArgs = scenario === 'x1' && !runtime.extraArgs.includes('--query-modes') ? ['--query-modes'] : [];
   return withManagedSession(runtime, managedArgs, async (context) => {
-    const terminalStateAtReady = await waitForMouseReady(context);
+    const terminalStateAtReady = await context.diagnostics.run('app-ready', () => waitForMouseReady(context));
     let pointerSteps = null;
-    if (scenario === 'x3') pointerSteps = await runHoverSteps(context, terminalStateAtReady);
-    else if (Number(scenario.slice(1)) >= 4) {
-      pointerSteps = await runMouseGesture(context, terminalStateAtReady, scenario, modifier);
-      assertMouseGesture(scenario, pointerSteps, process.platform, context.session.tmuxServerInfo);
-    }
-    await context.bridge.page.keyboard.press(scenario === 'x2' ? '!' : 'q');
+    await context.diagnostics.run('gesture', async () => {
+      if (scenario === 'x3') pointerSteps = await runHoverSteps(context, terminalStateAtReady);
+      else if (Number(scenario.slice(1)) >= 4) {
+        pointerSteps = await runMouseGesture(context, terminalStateAtReady, scenario, modifier);
+        assertMouseGesture(scenario, pointerSteps, process.platform, context.session.tmuxServerInfo);
+      }
+    });
+    await context.diagnostics.run('terminating-key', () => context.bridge.page.keyboard.press(scenario === 'x2' ? '!' : 'q'));
     const exitOutcome = await context.session.waitForExit(context.timeoutMs);
     if (scenario === 'x2') {
       assert.ok(exitOutcome.exitCode !== 0 || exitOutcome.signal !== 0, 'panic must exit unsuccessfully');
@@ -78,6 +80,7 @@ async function executeMouseScenario(runtime, scenario, modifier = null) {
     if (scenario === 'x1') {
       assertMouseModeReplies(records, process.platform, context.session.tmuxServerInfo);
     }
+    context.diagnostics.record('state-assertions', 'return');
     return { scenario, ...exitOutcome, tmuxServerInfo: context.session.tmuxServerInfo ?? null, terminalStateAtReady, terminalStateAfterExit, pointerSteps, records,
       assertion: { id: scenario.toUpperCase(), passed: true, platform: process.platform, modifier } };
   }, modifier ? `${scenario}-${modifier.toLowerCase()}` : scenario);

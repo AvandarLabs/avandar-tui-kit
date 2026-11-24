@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { WebSocketServer } from 'ws';
+import { createLifecycleDiagnostics } from './log_archive.mjs';
 
 const MODULE_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = path.resolve(MODULE_DIRECTORY, '..');
@@ -233,10 +234,10 @@ async function teardownBridgeResources(bridgeState, httpServer, socketServer) {
   socketServer.clients.forEach((clientSocket) => clientSocket.terminate());
   socketServer.close();
   if (bridgeState.browser) {
-    await bridgeState.browser.close();
+    await bridgeState.diagnostics.run('browser-close', () => bridgeState.browser.close());
     bridgeState.browser = null;
   }
-  await closeHttpServer(httpServer);
+  await bridgeState.diagnostics.run('http-close', () => closeHttpServer(httpServer));
 }
 
 function createBridgeController(bridgeState, httpServer, socketServer, port, cols, rows) {
@@ -285,10 +286,11 @@ function createBridgeController(bridgeState, httpServer, socketServer, port, col
  * Starts the local HTTP and WebSocket bridge server on `127.0.0.1:0` without
  * launching Chromium, returning a bridge controller for tests and `startBrowserBridge`.
  */
-export async function createBridgeServer({ cols = 100, rows = 30 } = {}) {
+export async function createBridgeServer({ cols = 100, rows = 30, diagnostics = createLifecycleDiagnostics({ env: {} }) } = {}) {
   const httpServer = http.createServer(serveStaticAsset);
   const socketServer = new WebSocketServer({ server: httpServer, path: '/bridge' });
   const bridgeState = {
+    diagnostics,
     isOpen: true,
     isTerminalReady: false,
     initialTerminalState: null,
@@ -331,8 +333,9 @@ export async function startBrowserBridge({
   headless = true,
   timeoutMs = 15000,
   executablePath,
+  diagnostics,
 } = {}) {
-  const bridge = await createBridgeServer({ cols, rows });
+  const bridge = await createBridgeServer({ cols, rows, diagnostics });
   try {
     await bridge.openBrowser({ headless, timeoutMs, executablePath });
     return bridge;

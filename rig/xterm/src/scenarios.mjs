@@ -16,7 +16,7 @@ import {
   shouldExpectOuterMouseEvents,
   waitForReadyOuterTerminalModes,
 } from './interactive_scenario.mjs';
-import { archiveSessionProbeLog, buildSessionArchiveLabel } from './log_archive.mjs';
+import { archiveSessionProbeLog, buildSessionArchiveLabel, createLifecycleDiagnostics } from './log_archive.mjs';
 import { startPtySession } from './pty_session.mjs';
 import { readJsonLines, waitForProbeReady } from './ready_waiter.mjs';
 
@@ -74,18 +74,21 @@ export function mergeProbeArgs(managedArgs = [], extraArgs = []) {
   return reduced.mergedArgs;
 }
 
-function createDefaultPtySession({ programPath, programArgs, cols, rows, bridge }) {
+function createDefaultPtySession({ programPath, programArgs, cols, rows, bridge, diagnostics }) {
   return startPtySession({
     command: programPath,
     args: programArgs,
     cols,
     rows,
     bridge,
+    diagnostics,
   });
 }
 
 function normalizeScenarioRuntime(runtime) {
   return {
+    diagnostics: runtime.diagnostics,
+    createBridge: runtime.createBridge,
     program: runtime.program ?? path.basename(runtime.programPath),
     programPath: runtime.programPath,
     extraArgs: runtime.extraArgs ?? [],
@@ -115,21 +118,21 @@ function waitBrieflyForSessionExit(exitPromise, maxWaitMs = 1500) {
  * Disposes `session`, closes `bridge`, and removes `scratchDir` across scenario
  * teardown, rethrowing the first cleanup error if any step fails.
  */
-export async function cleanupManagedSession(session, bridge, scratchDir) {
+export async function cleanupManagedSession(session, bridge, scratchDir, diagnostics = createLifecycleDiagnostics({ env: {} })) {
   let firstCleanupError = null;
   try {
-    await session?.dispose?.();
-    await waitBrieflyForSessionExit(session?.exitPromise);
+    await diagnostics.run('session-dispose', () => session?.dispose?.());
+    await diagnostics.run('cleanup-exit-wait', () => waitBrieflyForSessionExit(session?.exitPromise));
   } catch (sessionError) {
     firstCleanupError ??= sessionError;
   }
   try {
-    await bridge?.close?.();
+    await diagnostics.run('bridge-close', () => bridge?.close?.());
   } catch (bridgeError) {
     firstCleanupError ??= bridgeError;
   }
   try {
-    fs.rmSync(scratchDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    diagnostics.runSync('scratch-remove', () => fs.rmSync(scratchDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
   } catch (removeError) {
     firstCleanupError ??= removeError;
   }
@@ -144,20 +147,27 @@ async function finalizeManagedSession(
   scratchDir,
   archiveOptions,
   hasPrimaryError,
+  diagnostics,
 ) {
   try {
-    archiveSessionProbeLog(archiveOptions);
+    diagnostics.runSync('archive', () => archiveSessionProbeLog(archiveOptions));
   } catch (archiveError) {
     if (!hasPrimaryError) {
       throw archiveError;
     }
   } finally {
-    await cleanupManagedSession(session, bridge, scratchDir);
+    await cleanupManagedSession(session, bridge, scratchDir, diagnostics);
   }
 }
 
 /** Runs one example using the shared bridge, readiness log, archive, and cleanup lifecycle. */
 export async function withManagedSession(runtime, managedArgs, runWithContext, sessionLabel = null) {
+  const session = buildSessionArchiveLabel(runtime, managedArgs, sessionLabel);
+  const diagnostics = (runtime.diagnostics ?? createLifecycleDiagnostics()).withLabels({ session });
+  return diagnostics.run('scenario', () => executeManagedSession(runtime, managedArgs, runWithContext, sessionLabel, diagnostics));
+}
+
+async function executeManagedSession(runtime, managedArgs, runWithContext, sessionLabel, diagnostics) {
   const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tuikit-xterm-'));
   const logPath = path.join(scratchDir, 'probe.jsonl');
   const label = buildSessionArchiveLabel(runtime, managedArgs, sessionLabel);
@@ -165,13 +175,14 @@ export async function withManagedSession(runtime, managedArgs, runWithContext, s
   let session = null;
   let hasPrimaryError = false;
   try {
-    bridge = await startBrowserBridge({
+    bridge = await diagnostics.run('bridge-start', () => (runtime.createBridge ?? startBrowserBridge)({
       cols: DEFAULT_TERMINAL_COLS,
       rows: DEFAULT_TERMINAL_ROWS,
       headless: true,
       timeoutMs: runtime.timeoutMs,
-    });
-    session = await runtime.createSession({
+      diagnostics,
+    }));
+    session = await diagnostics.run('pty-spawn', () => runtime.createSession({
       programPath: runtime.programPath,
       programArgs: mergeProbeArgs(['--log', logPath, ...managedArgs], runtime.extraArgs),
       cols: DEFAULT_TERMINAL_COLS,
@@ -180,20 +191,24 @@ export async function withManagedSession(runtime, managedArgs, runWithContext, s
       tmuxMode: runtime.tmuxMode,
       timeoutMs: runtime.timeoutMs,
       scratchDir,
-    });
-    return await runWithContext({
+      diagnostics,
+    }));
+    diagnostics = diagnostics.withLabels({ ptyPid: session.pid ?? null });
+    diagnostics.record('pty-created', 'return');
+    return await diagnostics.run('scenario-callback', () => runWithContext({
       bridge,
       session,
       logPath,
       timeoutMs: runtime.timeoutMs,
       tmuxMode: runtime.tmuxMode,
-    });
+      diagnostics,
+    }));
   } catch (caughtError) {
     hasPrimaryError = true;
     throw caughtError;
   } finally {
     const archiveOptions = { logPath, label, tmuxMode: runtime.tmuxMode };
-    await finalizeManagedSession(session, bridge, scratchDir, archiveOptions, hasPrimaryError);
+    await finalizeManagedSession(session, bridge, scratchDir, archiveOptions, hasPrimaryError, diagnostics);
   }
 }
 

@@ -309,6 +309,7 @@ async function attachGatedTmuxClient({
     env: options.env ?? process.env,
     envOverrides: options.envOverrides ?? {},
     bridge: options.bridge,
+    diagnostics: options.diagnostics,
     timeoutMs,
   });
   const expectedPrefix = isTmux33Version(tmuxServerInfo.version) ? '\x1b[>' : '\x1b]11;rgb:';
@@ -362,6 +363,7 @@ if (isDirectCliExecution(MODULE_FILE_PATH)) {
   const exitStatus = await runHarnessCliMain({
     scriptName: 'run-tmux.sh',
     requireTmuxConfig: true,
+    observeProcessLifecycle: true,
     createSession: createTmuxSession,
   });
   process.exitCode = exitStatus;

@@ -148,6 +148,29 @@ readiness and exit terminal states, and gesture evidence. The browser helper
 reads encoding from the pinned xterm.js mouse service because its public mode
 state exposes tracking but not SGR encoding.
 
+When `RIG_XTERM_LOG_DIR` is set, the harness also creates a dedicated
+`lifecycle-pid<PID>-<sequence>.jsonl` artifact before building or starting a
+bridge. Each boundary appends an `enter`, `return`, or `error` record
+synchronously, with monotonic `elapsedMs`, `harnessPid`, the session label
+(including X11 Shift or Alt), and `ptyPid` once available. The diagnostic file
+uses its own collision-safe names and does not consume app archive numbers.
+It contains build/scenario/report phases, bridge startup, app readiness,
+gestures, termination, PTY exit/write flush, archive, session disposal,
+browser/HTTP close, and scratch removal. Direct CLI processes also record
+`beforeExit` and `exit` when those events occur. These events are observational;
+logging does not change disposal, terminal assertions, or deadlines.
+
+The last entered boundary is already on disk while its operation is blocked,
+even before an app log exists or an archive is copied. Pair it with the
+parent test's child `status`, `signal`, and spawn-error fields to distinguish
+an aggregate timeout from a normal nonzero exit. On failure, the parent
+retains partial stdout in a separate `*-child-outcome.json` artifact. All
+phase records stay out of app JSONL, machine stdout, and diagnostic stderr.
+With logging unset, no lifecycle file is created. The existing 180-second
+mouse aggregate deadline remains unchanged. Windows timeout diagnosis still
+requires an instrumented CI run; a final entered phase identifies the next
+component to inspect, rather than proving a particular dependency defect.
+
 Both direct and tmux harnesses keep Cargo build diagnostics on stderr. When
 stderr is redirected, `NO_COLOR` is nonempty, or `TERM=dumb`, the Cargo child
 uses plain output even if the parent sets `CARGO_TERM_COLOR=always`. Diagnostic
