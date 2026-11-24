@@ -188,10 +188,14 @@ function serializeDiagnosticError(error) {
 function createLifecycleRecorder(filePath, clock, startedAt, labels) {
   const record = (boundary, phase, details = {}) => {
     if (filePath !== null) {
-      fs.appendFileSync(filePath, `${JSON.stringify({
-        ...labels, ...details, harnessPid: process.pid,
-        elapsedMs: clock() - startedAt, boundary, phase,
-      })}\n`, 'utf8');
+      try {
+        fs.appendFileSync(filePath, `${JSON.stringify({
+          ...labels, ...details, harnessPid: process.pid,
+          elapsedMs: clock() - startedAt, boundary, phase,
+        })}\n`, 'utf8');
+      } catch {
+        // Optional evidence must not interrupt cleanup or replace its original error.
+      }
     }
   };
   return {

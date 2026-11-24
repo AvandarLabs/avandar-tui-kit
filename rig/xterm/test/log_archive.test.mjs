@@ -13,7 +13,8 @@ import {
   archiveSessionProbeLog,
   resetArchiveSessionSequence,
 } from '../src/log_archive.mjs';
-import { runScenario, withManagedSession } from '../src/scenarios.mjs';
+import { cleanupManagedSession, runScenario, withManagedSession } from '../src/scenarios.mjs';
+import { startPtySession } from '../src/pty_session.mjs';
 
 function withTempDirectory(prefix, callback) {
   const directoryPath = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -396,5 +397,62 @@ test('lifecycle imported runner does not retain process hooks after its artifact
     assert.equal(outcome.status, 0, outcome.stderr);
     assert.deepEqual(JSON.parse(outcome.stdout), { status: 1 });
     assert.doesNotMatch(outcome.stderr, /ENOENT|\x1b/);
+  });
+});
+
+
+function makeLifecycleArtifactUnwritable(diagnostics) {
+  fs.rmSync(diagnostics.filePath);
+  fs.mkdirSync(diagnostics.filePath);
+}
+
+test('lifecycle append failure before cleanup cannot skip disposal, bridge closure or scratch removal', async () => {
+  await withTempDirectory('tuikit-lifecycle-cleanup-write-error-', async (directory) => {
+    const diagnostics = diagnosticsModule.createLifecycleDiagnostics({ env: { RIG_XTERM_LOG_DIR: directory } });
+    const scratch = path.join(directory, 'scratch');
+    fs.mkdirSync(scratch);
+    fs.writeFileSync(path.join(scratch, 'owned-resource'), 'pending');
+    let isSessionDisposed = false;
+    let isBridgeClosed = false;
+    makeLifecycleArtifactUnwritable(diagnostics);
+    await cleanupManagedSession(
+      { dispose() { isSessionDisposed = true; } },
+      { close() { isBridgeClosed = true; } }, scratch, diagnostics,
+    );
+    assert.equal(isSessionDisposed, true);
+    assert.equal(isBridgeClosed, true);
+    assert.equal(fs.existsSync(scratch), false);
+  });
+});
+
+test('lifecycle append failure while recording operation errors preserves synchronous and async error identity', async () => {
+  await withTempDirectory('tuikit-lifecycle-operation-write-error-', async (directory) => {
+    for (const method of ['runSync', 'run']) {
+      const diagnostics = diagnosticsModule.createLifecycleDiagnostics({ env: { RIG_XTERM_LOG_DIR: directory } });
+      const originalError = new Error(`original ${method} failure`);
+      await assert.rejects(async () => diagnostics[method]('operation', () => {
+        assert.equal(readLifecycle(diagnostics).at(-1).phase, 'enter');
+        makeLifecycleArtifactUnwritable(diagnostics);
+        throw originalError;
+      }), (error) => error === originalError);
+    }
+  });
+});
+
+test('lifecycle append failure in PTY exit callback cannot prevent exit bookkeeping or promise resolution', async () => {
+  await withTempDirectory('tuikit-lifecycle-exit-write-error-', async (directory) => {
+    const diagnostics = diagnosticsModule.createLifecycleDiagnostics({ env: { RIG_XTERM_LOG_DIR: directory } });
+    let notifyExit;
+    let isInputUnsubscribed = false;
+    const session = startPtySession({
+      command: 'unused', diagnostics,
+      bridge: { isTerminalReady: true, isOpen: false,
+        onTerminalInput: () => () => { isInputUnsubscribed = true; } },
+      ptySpawner: () => ({ pid: 456, onData() {}, onExit(callback) { notifyExit = callback; } }),
+    });
+    makeLifecycleArtifactUnwritable(diagnostics);
+    assert.doesNotThrow(() => notifyExit({ exitCode: 17, signal: 0 }));
+    assert.equal(isInputUnsubscribed, true);
+    assert.deepEqual(await session.waitForExit(100), { exitCode: 17, signal: 0 });
   });
 });

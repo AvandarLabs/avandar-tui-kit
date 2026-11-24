@@ -158,7 +158,9 @@ It contains build/scenario/report phases, bridge startup, app readiness,
 gestures, termination, PTY exit/write flush, archive, session disposal,
 browser/HTTP close, and scratch removal. Direct CLI processes also record
 `beforeExit` and `exit` when those events occur. These events are observational;
-logging does not change disposal, terminal assertions, or deadlines.
+logging does not change disposal, terminal assertions, or deadlines. Failed
+lifecycle appends are ignored so artifact loss cannot skip cleanup, interrupt
+PTY exit bookkeeping, or replace an operation's original error.
 
 The last entered boundary is already on disk while its operation is blocked,
 even before an app log exists or an archive is copied. Pair it with the
